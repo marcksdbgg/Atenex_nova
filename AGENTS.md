@@ -2,7 +2,7 @@
 
 > **Última actualización:** 2026-04-06
 > **Estado del proyecto:** Fase 3 ✅ — Memoria Textual Base completa.
-> *Actual:* Componentes base y pipeline RAG hasta indexación en Qdrant finalizados y acoplados con modelo 4B y Ollama embeddings. Listo para iniciar Fase 4 (Memoria enriquecida).
+> *Actual:* Componentes base y pipeline RAG hasta indexación en Qdrant finalizados y acoplados con modelo 4B de LLM, y **EmbeddingGemma a 384d estables** para embeddings. Listo para iniciar Fase 4 (Memoria enriquecida).
 
 ---
 

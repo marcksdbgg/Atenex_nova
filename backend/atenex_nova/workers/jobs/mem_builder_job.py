@@ -9,7 +9,7 @@ from atenex_nova.infrastructure.db.repositories.sql_chunk_repo import SqlChunkRe
 from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocumentRepository
 from atenex_nova.infrastructure.db.repositories.sql_job_repo import SqlJobRepository
 from atenex_nova.infrastructure.db.repositories.sql_node_repo import SqlDocumentNodeRepository
-from atenex_nova.infrastructure.embeddings.embedding_adapter import OllamaEmbeddingAdapter
+from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
 from atenex_nova.infrastructure.qdrant.qdrant_adapter import QdrantAdapter, QdrantDocument
 from atenex_nova.workers.runner import BaseJobHandler
 
@@ -107,7 +107,7 @@ class EmbedDocumentJobHandler(BaseJobHandler):
             chunks_to_embed = [c for c in chunks if not c.embedding_ref]
 
             if chunks_to_embed:
-                embedder = OllamaEmbeddingAdapter()
+                embedder = EmbeddingGemmaAdapter(dim=384)
                 texts = [c.text for c in chunks_to_embed]
                 vectors = await embedder.embed(texts)
 
@@ -128,7 +128,7 @@ class EmbedDocumentJobHandler(BaseJobHandler):
 
                 # Init collection just in case
                 collection_name = f"collection_{doc.collection_id}"
-                await qdrant.init_collection(collection_name, 1024) # mxbai-embed-large dimension=1024
+                await qdrant.init_collection(collection_name, 384) # Stable dimension=384 for EmbeddingGemma
 
                 vector_docs = []
                 for chunk, vector in zip(chunks_to_embed, vectors, strict=False):
