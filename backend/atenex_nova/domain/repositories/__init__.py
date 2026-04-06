@@ -1,0 +1,12 @@
+"""Repository interfaces exports."""
+
+from atenex_nova.domain.repositories.answer_repository import AnswerRepository
+from atenex_nova.domain.repositories.collection_repository import CollectionRepository
+from atenex_nova.domain.repositories.chunk_repository import ChunkRepository
+from atenex_nova.domain.repositories.citation_repository import CitationRepository
+from atenex_nova.domain.repositories.document_repository import DocumentRepository
+from atenex_nova.domain.repositories.job_repository import JobRepository
+from atenex_nova.domain.repositories.proposition_repository import PropositionRepository
+from atenex_nova.domain.repositories.query_repository import QueryRepository
+from atenex_nova.domain.repositories.relation_repository import RelationRepository
+from atenex_nova.domain.repositories.summary_repository import SummaryRepository

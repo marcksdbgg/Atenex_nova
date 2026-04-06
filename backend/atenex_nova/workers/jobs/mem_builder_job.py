@@ -154,5 +154,12 @@ class EmbedDocumentJobHandler(BaseJobHandler):
             doc.mark_ready() # End of Phase 3 pipeline
             await doc_repo.update(doc)
 
+            # Phase 4 starts once the textual memory is ready.
+            from atenex_nova.domain.value_objects.identifiers import JobType as NextJobType, new_id as next_new_id
+            from atenex_nova.infrastructure.db.repositories.sql_job_repo import SqlJobRepository as NextJobRepo
+
+            next_job = Job(id=next_new_id(), job_type=NextJobType.EXTRACT_PROPOSITIONS, target_id=document_id)
+            await NextJobRepo(session).create(next_job)
+
             await session.commit()
             return {"embedded_and_indexed": len(chunks_to_embed)}

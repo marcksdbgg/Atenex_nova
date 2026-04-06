@@ -43,7 +43,7 @@ class DoclingParserAdapter:
         for idx, chunk in enumerate(chunks):
             # chunk is a Chunk object from docling_core
             # We map it to our internal DocumentNode
-            node_type = NodeType.TEXT
+            node_type = NodeType.PARAGRAPH
 
             # Simple heuristic for tables based on text content since Chunk loses some exact types,
             # though chunk.meta might have it.

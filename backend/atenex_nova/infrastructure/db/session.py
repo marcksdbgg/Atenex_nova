@@ -10,6 +10,9 @@ from atenex_nova.shared.config.settings import get_settings
 _engine = None
 _session_factory = None
 
+# Backward-compatible alias used by older worker wiring.
+async_session_factory = None
+
 
 def get_engine():
     """Get or create the async database engine."""
@@ -26,13 +29,14 @@ def get_engine():
 
 def get_session_factory() -> async_sessionmaker[AsyncSession]:
     """Get or create the async session factory."""
-    global _session_factory
+    global _session_factory, async_session_factory
     if _session_factory is None:
         _session_factory = async_sessionmaker(
             get_engine(),
             class_=AsyncSession,
             expire_on_commit=False,
         )
+        async_session_factory = _session_factory
     return _session_factory
 
 
@@ -57,8 +61,9 @@ async def create_all_tables() -> None:
 
 async def dispose_engine() -> None:
     """Dispose the engine (cleanup on shutdown)."""
-    global _engine, _session_factory
+    global _engine, _session_factory, async_session_factory
     if _engine is not None:
         await _engine.dispose()
         _engine = None
         _session_factory = None
+        async_session_factory = None

@@ -1,7 +1,11 @@
-"""LLM gateway protocol and stub adapters."""
+"""LLM gateway protocol and HTTP adapters."""
+
+from __future__ import annotations
 
 import logging
 from typing import Protocol
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -19,12 +23,12 @@ class LLMGateway(Protocol):
 
 
 class OllamaAdapter:
-    """Stub adapter for Ollama API. Implemented in Fase 6."""
+    """HTTP adapter for Ollama."""
 
     def __init__(self, url: str = "http://localhost:11434", model: str = "gemma4:e4b") -> None:
-        self._url = url
+        self._url = url.rstrip("/")
         self._model = model
-        logger.info("OllamaAdapter initialized (stub) → %s model=%s", url, model)
+        logger.info("OllamaAdapter initialized → %s model=%s", self._url, model)
 
     async def generate(
         self,
@@ -33,16 +37,34 @@ class OllamaAdapter:
         temperature: float = 0.3,
         stop: list[str] | None = None,
     ) -> str:
-        logger.info("Stub: Ollama generate (len=%d)", len(prompt))
-        return "[Stub response — Ollama not connected]"
+        payload = {
+            "model": self._model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "num_predict": max_tokens,
+                "temperature": temperature,
+            },
+        }
+        if stop:
+            payload["options"]["stop"] = stop
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                response = await client.post(f"{self._url}/api/generate", json=payload)
+                response.raise_for_status()
+                data = response.json()
+                return str(data.get("response", "")).strip()
+        except Exception as exc:
+            logger.warning("Ollama generation unavailable: %s", exc)
+            return ""
 
 
 class LlamaCppAdapter:
-    """Stub adapter for llama.cpp server. Implemented in Fase 6."""
+    """HTTP adapter for llama.cpp server."""
 
     def __init__(self, url: str = "http://localhost:8080") -> None:
-        self._url = url
-        logger.info("LlamaCppAdapter initialized (stub) → %s", url)
+        self._url = url.rstrip("/")
+        logger.info("LlamaCppAdapter initialized → %s", self._url)
 
     async def generate(
         self,
@@ -51,5 +73,24 @@ class LlamaCppAdapter:
         temperature: float = 0.3,
         stop: list[str] | None = None,
     ) -> str:
-        logger.info("Stub: llama.cpp generate (len=%d)", len(prompt))
-        return "[Stub response — llama.cpp not connected]"
+        payload = {
+            "prompt": prompt,
+            "n_predict": max_tokens,
+            "temperature": temperature,
+        }
+        if stop:
+            payload["stop"] = stop
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                response = await client.post(f"{self._url}/completion", json=payload)
+                response.raise_for_status()
+                data = response.json()
+                if isinstance(data, dict):
+                    if "content" in data:
+                        return str(data["content"]).strip()
+                    if "choices" in data and data["choices"]:
+                        return str(data["choices"][0].get("text", "")).strip()
+                return ""
+        except Exception as exc:
+            logger.warning("llama.cpp generation unavailable: %s", exc)
+            return ""

@@ -1,0 +1,62 @@
+"""Job handler for visual page indexing."""
+
+from __future__ import annotations
+
+from collections import defaultdict
+
+from atenex_nova.domain.entities.job import Job
+from atenex_nova.domain.value_objects.identifiers import JobType, NodeType, new_id
+from atenex_nova.infrastructure.db.repositories.sql_node_repo import SqlDocumentNodeRepository
+from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocumentRepository
+from atenex_nova.infrastructure.visual.colpali_adapter import ColPaliAdapter
+from atenex_nova.workers.runner import BaseJobHandler
+
+
+class IndexVisualPagesJobHandler(BaseJobHandler):
+    def __init__(self, session_factory) -> None:
+        self.session_factory = session_factory
+
+    async def execute(self, job: Job) -> dict | None:
+        document_id = job.target_id
+        async with self.session_factory() as session:
+            doc_repo = SqlDocumentRepository(session)
+            node_repo = SqlDocumentNodeRepository(session)
+            document = await doc_repo.get_by_id(document_id)
+            if document is None:
+                raise ValueError(f"Document {document_id} not found")
+
+            nodes = await node_repo.get_by_document(document_id)
+            if not nodes:
+                return {"visual_pages_indexed": 0}
+
+            pages: dict[int, list] = defaultdict(list)
+            for node in nodes:
+                pages[int(node.page_number or 1)].append(node)
+
+            payloads: list[dict] = []
+            for page_number, page_nodes in sorted(pages.items()):
+                text = " ".join(node.normalized_text or node.raw_text for node in page_nodes).strip()
+                node_types = {node.node_type for node in page_nodes}
+                is_complex = any(
+                    node_type in {NodeType.TABLE, NodeType.IMAGE, NodeType.CAPTION, NodeType.CODE}
+                    for node_type in node_types
+                ) or len(page_nodes) > 4 or len(text) > 500
+                payloads.append(
+                    {
+                        "id": f"{document.id}:{page_number}",
+                        "document_id": document.id,
+                        "collection_id": document.collection_id,
+                        "page_number": page_number,
+                        "title": document.title,
+                        "text": text or document.title,
+                        "is_complex": is_complex,
+                        "metadata": {
+                            "node_ids": [node.id for node in page_nodes],
+                            "node_types": [node.node_type.value for node in page_nodes],
+                        },
+                    }
+                )
+
+            adapter = ColPaliAdapter()
+            indexed = await adapter.upsert_pages(document.collection_id, payloads)
+            return {"visual_pages_indexed": len(indexed)}

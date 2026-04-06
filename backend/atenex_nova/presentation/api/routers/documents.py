@@ -1,5 +1,7 @@
 """Documents router."""
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -51,7 +53,7 @@ async def get_document_nodes(
             parent_id=n.parent_id,
             page_number=n.page_number,
             order_index=n.order_index,
-            metadata_json=next(iter(["{}" if not n.metadata else str(n.metadata)]), None)
+            metadata_json=json.dumps(n.metadata) if n.metadata else None,
         )
         for n in nodes
     ]

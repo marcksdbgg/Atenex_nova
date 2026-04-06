@@ -1,7 +1,10 @@
-"""EmbeddingGemma adapter using SentenceTransformers."""
+"""EmbeddingGemma adapter using SentenceTransformers or a deterministic fallback."""
 
+from __future__ import annotations
+
+import hashlib
 import logging
-import asyncio
+from math import sqrt
 
 from atenex_nova.domain.repositories.embedder import Embedder
 
@@ -24,29 +27,39 @@ class EmbeddingGemmaAdapter(Embedder):
             from sentence_transformers import SentenceTransformer
             # truncate_dim uses Matryoshka learning to cut to the required dimension
             self.model = SentenceTransformer(self._model_name, truncate_dim=dim)
+            self._fallback_only = False
             logger.info("EmbeddingGemmaAdapter initialized model=%s dim=%d", self._model_name, dim)
         except Exception as e:
             logger.error("Failed to load SentenceTransformer: %s", str(e))
             self.model = None
+            self._fallback_only = True
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         """Generate vectors for a list of strings."""
-        if not self.model:
-            raise RuntimeError("SentenceTransformer model not loaded.")
-        
-        # SentenceTransformers encode is synchronous and CPU/GPU heavy
-        # Should be run in a separate thread.
-        import asyncio
-        loop = asyncio.get_running_loop()
-        
-        # Ensure texts are strings
         clean_texts = [str(t) for t in texts]
-        
-        # Run encode in executor
+        if self.model is None:
+            return [self._fallback_embed(text) for text in clean_texts]
+
+        # SentenceTransformers encode is synchronous and CPU/GPU heavy.
+        import asyncio
+
+        loop = asyncio.get_running_loop()
         vectors = await loop.run_in_executor(
-            None, 
-            lambda: self.model.encode(clean_texts, convert_to_numpy=True)
+            None,
+            lambda: self.model.encode(clean_texts, convert_to_numpy=True),
         )
-        
-        # Convert numpy arrays to list of lists of floats
         return vectors.tolist()
+
+    def _fallback_embed(self, text: str) -> list[float]:
+        """Deterministic hash embedding used when the real model is unavailable."""
+        vector = [0.0] * self._dim
+        tokens = text.lower().split()
+        if not tokens:
+            return vector
+        for token in tokens:
+            digest = hashlib.sha256(token.encode("utf-8")).digest()
+            index = digest[0] % self._dim
+            sign = 1.0 if digest[1] % 2 == 0 else -1.0
+            vector[index] += sign
+        norm = sqrt(sum(value * value for value in vector)) or 1.0
+        return [value / norm for value in vector]

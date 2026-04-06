@@ -1,0 +1,40 @@
+[
+  {
+    "id": "6a1e0d78-b80b-40d4-b811-45b49287d0b3:1",
+    "collection_id": "c81c2823-f4ef-4f90-a9f9-45e2741478a6",
+    "document_id": "6a1e0d78-b80b-40d4-b811-45b49287d0b3",
+    "page_number": 1,
+    "title": "Visual Source",
+    "text": "Visual Tables Table 1 shows local retrieval performance and page counts.",
+    "is_complex": true,
+    "image_path": "storage\\visual_pages\\c81c2823-f4ef-4f90-a9f9-45e2741478a6\\6a1e0d78-b80b-40d4-b811-45b49287d0b3:1.txt",
+    "metadata": {
+      "node_ids": [
+        "6281584e-2f0d-46b5-b346-83358b6e1bbc",
+        "4100c288-823f-4086-99a9-a951f5b3843a"
+      ],
+      "node_types": [
+        "heading",
+        "table"
+      ]
+    }
+  },
+  {
+    "id": "6a1e0d78-b80b-40d4-b811-45b49287d0b3:2",
+    "collection_id": "c81c2823-f4ef-4f90-a9f9-45e2741478a6",
+    "document_id": "6a1e0d78-b80b-40d4-b811-45b49287d0b3",
+    "page_number": 2,
+    "title": "Visual Source",
+    "text": "The second page contains a figure about visual grounding.",
+    "is_complex": false,
+    "image_path": "storage\\visual_pages\\c81c2823-f4ef-4f90-a9f9-45e2741478a6\\6a1e0d78-b80b-40d4-b811-45b49287d0b3:2.txt",
+    "metadata": {
+      "node_ids": [
+        "50d32f41-4c31-4ba7-af3e-b66cb391ce38"
+      ],
+      "node_types": [
+        "paragraph"
+      ]
+    }
+  }
+]

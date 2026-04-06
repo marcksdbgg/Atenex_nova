@@ -54,6 +54,72 @@ export interface Job {
   completed_at?: string;
 }
 
+export interface QuerySearchRequest {
+  collection_id: string;
+  query: string;
+  mode?: string;
+}
+
+export interface QueryHit {
+  id: string;
+  source_type: string;
+  source_id: string;
+  document_id?: string | null;
+  title: string;
+  snippet: string;
+  score: number;
+  rank: number;
+  page_number?: number | null;
+  metadata?: Record<string, string> | null;
+}
+
+export interface Citation {
+  id: string;
+  answer_id: string;
+  document_id: string;
+  page_number?: number | null;
+  node_id?: string | null;
+  char_start?: number | null;
+  char_end?: number | null;
+  snippet: string;
+}
+
+export interface AnswerRequest {
+  collection_id: string;
+  query: string;
+  mode?: string;
+  generation_profile?: string;
+}
+
+export interface AnswerResponse {
+  answer_id: string;
+  query_id: string;
+  collection_id: string;
+  query: string;
+  normalized_query: string;
+  language: string;
+  intent: string;
+  route_mode: string;
+  plan_type: string;
+  answer: string;
+  verdict: string;
+  grounding_score: number;
+  citations: Citation[];
+  evidence: QueryHit[];
+}
+
+export interface QuerySearchResponse {
+  query_id: string;
+  collection_id: string;
+  query: string;
+  normalized_query: string;
+  language: string;
+  intent: string;
+  route_mode: string;
+  total_hits: number;
+  hits: QueryHit[];
+}
+
 export interface HealthStatus {
   status: string;
   version: string;

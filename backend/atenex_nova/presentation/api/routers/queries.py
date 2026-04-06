@@ -1,0 +1,124 @@
+"""Query intelligence router."""
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from atenex_nova.application.services.answer_service import AnswerService
+from atenex_nova.application.services.query_service import QueryService
+from atenex_nova.dependencies import get_answer_service, get_query_service
+from atenex_nova.infrastructure.db.repositories.sql_collection_repo import SqlCollectionRepository
+from atenex_nova.infrastructure.db.session import get_session
+from atenex_nova.presentation.api.dto.schemas import (
+    AnswerResponse,
+    AskRequest,
+    CitationResponse,
+    QueryHitResponse,
+    QuerySearchResponse,
+    SearchRequest,
+)
+
+router = APIRouter(prefix="/queries", tags=["queries"])
+
+
+@router.post("/search", response_model=QuerySearchResponse)
+async def search_queries(
+    body: SearchRequest,
+    session: AsyncSession = Depends(get_session),
+    query_service: QueryService = Depends(get_query_service),
+) -> QuerySearchResponse:
+    collection_repo = SqlCollectionRepository(session)
+    collection = await collection_repo.get_by_id(body.collection_id)
+    if collection is None:
+        raise HTTPException(status_code=404, detail="Collection not found")
+
+    result = await query_service.search_only(
+        collection_id=body.collection_id,
+        query=body.query,
+        mode=body.mode,
+    )
+    return QuerySearchResponse(
+        query_id=result.query.id,
+        collection_id=result.query.collection_id,
+        query=result.query.text,
+        normalized_query=result.query.normalized_text,
+        language=result.query.language,
+        intent=result.query.intent,
+        route_mode=result.query.route_mode,
+        total_hits=len(result.hits),
+        hits=[
+            QueryHitResponse(
+                id=hit.id,
+                source_type=hit.source_type,
+                source_id=hit.source_id,
+                document_id=hit.document_id,
+                title=hit.title,
+                snippet=hit.snippet,
+                score=hit.score,
+                rank=hit.rank,
+                page_number=hit.page_number,
+                metadata=hit.metadata,
+            )
+            for hit in result.hits
+        ],
+    )
+
+
+@router.post("/answer", response_model=AnswerResponse)
+async def answer_query(
+    body: AskRequest,
+    session: AsyncSession = Depends(get_session),
+    answer_service: AnswerService = Depends(get_answer_service),
+) -> AnswerResponse:
+    collection_repo = SqlCollectionRepository(session)
+    collection = await collection_repo.get_by_id(body.collection_id)
+    if collection is None:
+        raise HTTPException(status_code=404, detail="Collection not found")
+
+    result = await answer_service.answer(
+        collection_id=body.collection_id,
+        query=body.query,
+        mode=body.mode,
+        generation_profile=body.generation_profile,
+    )
+    return AnswerResponse(
+        answer_id=result.answer.id,
+        query_id=result.query_id,
+        collection_id=result.collection_id,
+        query=result.query_text,
+        normalized_query=result.normalized_query,
+        language=result.query_language,
+        intent=result.query_intent,
+        route_mode=result.route_mode,
+        plan_type=result.plan_type,
+        answer=result.answer.text,
+        verdict=result.answer.verdict,
+        grounding_score=result.answer.grounding_score,
+        citations=[
+            CitationResponse(
+                id=citation.id,
+                answer_id=citation.answer_id,
+                document_id=citation.document_id,
+                page_number=citation.page_number,
+                node_id=citation.node_id,
+                char_start=citation.char_start,
+                char_end=citation.char_end,
+                snippet=citation.snippet,
+            )
+            for citation in result.citations
+        ],
+        evidence=[
+            QueryHitResponse(
+                id=item.id,
+                source_type=item.source_type,
+                source_id=item.source_id,
+                document_id=item.document_id,
+                title=item.title,
+                snippet=item.snippet,
+                score=item.score,
+                rank=item.rank,
+                page_number=item.page_number,
+                metadata=item.metadata,
+            )
+            for item in result.evidence_items
+        ],
+    )

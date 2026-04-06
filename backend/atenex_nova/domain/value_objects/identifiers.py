@@ -71,6 +71,8 @@ class JobType(StrEnum):
     NORMALIZE_DOCUMENT = "normalize_document"
     SEGMENT_DOCUMENT = "segment_document"
     EXTRACT_PROPOSITIONS = "extract_propositions"
+    GENERATE_SUMMARIES = "generate_summaries"
+    EMBED_DOCUMENT = "embed_document"
     EMBED_CHUNKS = "embed_chunks"
     EMBED_PROPOSITIONS = "embed_propositions"
     EMBED_SUMMARIES = "embed_summaries"

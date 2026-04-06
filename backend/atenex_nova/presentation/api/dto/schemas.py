@@ -82,6 +82,59 @@ class AskRequest(BaseModel):
     generation_profile: str = "standard"
 
 
+class QueryHitResponse(BaseModel):
+    id: str
+    source_type: str
+    source_id: str
+    document_id: str | None = None
+    title: str
+    snippet: str
+    score: float
+    rank: int
+    page_number: int | None = None
+    metadata: dict[str, str] | None = None
+
+
+class QuerySearchResponse(BaseModel):
+    query_id: str
+    collection_id: str
+    query: str
+    normalized_query: str
+    language: str
+    intent: str
+    route_mode: str
+    total_hits: int
+    hits: list[QueryHitResponse]
+
+
+class CitationResponse(BaseModel):
+    id: str
+    answer_id: str
+    document_id: str
+    page_number: int | None = None
+    node_id: str | None = None
+    char_start: int | None = None
+    char_end: int | None = None
+    snippet: str
+
+
+class AnswerResponse(BaseModel):
+    answer_id: str
+    query_id: str
+    collection_id: str
+    query: str
+    normalized_query: str
+    language: str
+    intent: str
+    route_mode: str
+    plan_type: str
+    answer: str
+    verdict: str
+    grounding_score: float
+    citations: list[CitationResponse]
+    evidence: list[QueryHitResponse]
+
+
 # --- Common ---
 class PaginatedResponse(BaseModel):
     items: list

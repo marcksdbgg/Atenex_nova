@@ -4,8 +4,10 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from atenex_nova.application.services.collection_service import CollectionService
+from atenex_nova.application.services.answer_service import AnswerService
 from atenex_nova.application.services.document_service import DocumentService
 from atenex_nova.application.services.job_service import JobService
+from atenex_nova.application.services.query_service import QueryService
 from atenex_nova.infrastructure.db.repositories.sql_collection_repo import SqlCollectionRepository
 from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocumentRepository
 from atenex_nova.infrastructure.db.repositories.sql_job_repo import SqlJobRepository
@@ -36,3 +38,15 @@ async def get_job_service(
     session: AsyncSession = Depends(get_session),
 ) -> JobService:
     return JobService(SqlJobRepository(session))
+
+
+async def get_query_service(
+    session: AsyncSession = Depends(get_session),
+) -> QueryService:
+    return QueryService(session)
+
+
+async def get_answer_service(
+    session: AsyncSession = Depends(get_session),
+) -> AnswerService:
+    return AnswerService(session)

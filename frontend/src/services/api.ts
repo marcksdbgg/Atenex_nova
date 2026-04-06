@@ -1,5 +1,16 @@
 /* API client for Atenex Nova backend */
-import type { Collection, CreateCollectionRequest, Document, DocumentNode, Job, HealthStatus } from '../types/api';
+import type {
+  AnswerRequest,
+  AnswerResponse,
+  Collection,
+  CreateCollectionRequest,
+  Document,
+  DocumentNode,
+  HealthStatus,
+  Job,
+  QuerySearchRequest,
+  QuerySearchResponse,
+} from '../types/api';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -51,6 +62,19 @@ class ApiClient {
   /* Jobs */
   listJobs = () => this.request<Job[]>('/jobs');
   getJob = (id: string) => this.request<Job>(`/jobs/${id}`);
+
+  /* Queries */
+  searchQuery = (data: QuerySearchRequest) =>
+    this.request<QuerySearchResponse>('/queries/search', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+
+  answerQuery = (data: AnswerRequest) =>
+    this.request<AnswerResponse>('/queries/answer', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
 }
 
 export const api = new ApiClient(API_BASE);

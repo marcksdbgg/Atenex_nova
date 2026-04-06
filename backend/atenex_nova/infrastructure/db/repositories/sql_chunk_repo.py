@@ -6,6 +6,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from atenex_nova.domain.entities.chunk import Chunk
+from atenex_nova.infrastructure.db.models.tables import DocumentModel
 from atenex_nova.infrastructure.db.models.tables import ChunkModel
 
 
@@ -47,6 +48,15 @@ class SqlChunkRepository:
 
     async def get_by_document(self, document_id: str) -> list[Chunk]:
         stmt = select(ChunkModel).where(ChunkModel.document_id == document_id)
+        result = await self.session.execute(stmt)
+        return [self._to_entity(m) for m in result.scalars().all()]
+
+    async def list_by_collection(self, collection_id: str) -> list[Chunk]:
+        stmt = (
+            select(ChunkModel)
+            .join(DocumentModel, DocumentModel.id == ChunkModel.document_id)
+            .where(DocumentModel.collection_id == collection_id)
+        )
         result = await self.session.execute(stmt)
         return [self._to_entity(m) for m in result.scalars().all()]
 
