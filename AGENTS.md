@@ -1,7 +1,7 @@
 # AGENTS.md — Atenex Nova
 
 > **Última actualización:** 2026-04-06
-> **Estado del proyecto:** Fase 0 — Planificación y estructura
+> **Estado del proyecto:** Fase 1 ✅ — Fundación completa
 
 ---
 
@@ -127,18 +127,18 @@ atenex_nova/
 
 ## 6. Fases de Desarrollo
 
-| Fase | Nombre                        | Estado         |
-| ---- | ----------------------------- | -------------- |
-| 0    | Planificación y estructura    | ✅ En progreso |
-| 1    | Fundación del repositorio     | 🔲 Pendiente   |
-| 2    | Ingesta estructural           | 🔲 Pendiente   |
-| 3    | Memoria textual base          | 🔲 Pendiente   |
-| 4    | Memoria enriquecida           | 🔲 Pendiente   |
-| 5    | Query Intelligence            | 🔲 Pendiente   |
-| 6    | Generación y verificación     | 🔲 Pendiente   |
-| 7    | Ruta visual                   | 🔲 Pendiente   |
-| 8    | Evaluación formal             | 🔲 Pendiente   |
-| 9    | Hardening funcional           | 🔲 Pendiente   |
+| Fase | Nombre                        | Estado           |
+| ---- | ----------------------------- | ---------------- |
+| 0    | Planificación y estructura    | ✅ Completada    |
+| 1    | Fundación del repositorio     | ✅ Completada    |
+| 2    | Ingesta estructural           | 🔲 Pendiente     |
+| 3    | Memoria textual base          | 🔲 Pendiente     |
+| 4    | Memoria enriquecida           | 🔲 Pendiente     |
+| 5    | Query Intelligence            | 🔲 Pendiente     |
+| 6    | Generación y verificación     | 🔲 Pendiente     |
+| 7    | Ruta visual                   | 🔲 Pendiente     |
+| 8    | Evaluación formal             | 🔲 Pendiente     |
+| 9    | Hardening funcional           | 🔲 Pendiente     |
 
 ---
 
