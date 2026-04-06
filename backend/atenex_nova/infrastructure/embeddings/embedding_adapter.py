@@ -1,18 +1,28 @@
-"""Stub: Embedding adapter. Implemented in Fase 3."""
+"""Ollama embedding adapter."""
 
 import logging
+
+import ollama
+
+from atenex_nova.domain.repositories.embedder import Embedder
 
 logger = logging.getLogger(__name__)
 
 
-class EmbeddingAdapter:
-    """Stub adapter for EmbeddingGemma."""
+class OllamaEmbeddingAdapter(Embedder):
+    """Generates embeddings using a local Ollama model."""
 
-    def __init__(self, model_name: str = "google/embeddinggemma-300m", dim: int = 384) -> None:
+    def __init__(self, model_name: str = "mxbai-embed-large", dim: int = 1024) -> None:
         self._model_name = model_name
         self._dim = dim
-        logger.info("EmbeddingAdapter initialized (stub) → %s dim=%d", model_name, dim)
+        logger.info("OllamaEmbeddingAdapter initialized model=%s dim=%d", model_name, dim)
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
-        logger.info("Stub: embed %d texts", len(texts))
-        return [[0.0] * self._dim for _ in texts]
+        """Generate vectors for a list of strings using Ollama async client."""
+        client = ollama.AsyncClient()
+        vectors = []
+        for text in texts:
+            # We embed sequentially here, could be batched if ollama supports it
+            response = await client.embeddings(model=self._model_name, prompt=text)
+            vectors.append(response.embedding)
+        return vectors

@@ -11,6 +11,10 @@ from atenex_nova.workers.jobs.ingestion_job import (
     NormalizeDocumentJobHandler,
     ParseDocumentJobHandler,
 )
+from atenex_nova.workers.jobs.mem_builder_job import (
+    EmbedDocumentJobHandler,
+    SegmentDocumentJobHandler,
+)
 from atenex_nova.workers.runner import JobRunner
 
 logger = logging.getLogger(__name__)
@@ -33,6 +37,14 @@ async def main() -> None:
     runner.register_handler(
         JobType.NORMALIZE_DOCUMENT.value,
         NormalizeDocumentJobHandler(async_session_factory)
+    )
+    runner.register_handler(
+        JobType.SEGMENT_DOCUMENT.value,
+        SegmentDocumentJobHandler(async_session_factory)
+    )
+    runner.register_handler(
+        JobType.EMBED_DOCUMENT.value,
+        EmbedDocumentJobHandler(async_session_factory)
     )
 
     try:

@@ -1,8 +1,8 @@
 # AGENTS.md — Atenex Nova
 
 > **Última actualización:** 2026-04-06
-> **Estado del proyecto:** Fase 1 ✅ — Fundación completada. 
-> *Actual:* Backend funcional (FastAPI, 11 tablas SQL, routers básicos, DI container, test suite pasando). Frontend funcional (Vite + React 19, UI components base, conexión a backend). Listo para Fase 2 (Ingesta).
+> **Estado del proyecto:** Fase 3 ✅ — Memoria Textual Base completa.
+> *Actual:* Componentes base y pipeline RAG hasta indexación en Qdrant finalizados y acoplados con modelo 4B y Ollama embeddings. Listo para iniciar Fase 4 (Memoria enriquecida).
 
 ---
 
@@ -143,9 +143,9 @@ atenex_nova/
 | ---- | ----------------------------- | ---------------- |
 | 0    | Planificación y estructura    | ✅ Completada    |
 | 1    | Fundación del repositorio     | ✅ Completada    |
-| 2    | Ingesta estructural           | 🔲 Pendiente     |
-| 3    | Memoria textual base          | 🔲 Pendiente     |
-| 4    | Memoria enriquecida           | 🔲 Pendiente     |
+| 2    | Ingesta estructural           | ✅ Completada    |
+| 3    | Memoria textual base          | ✅ Completada    |
+| 4    | Memoria enriquecida           | 🔲 En progreso   |
 | 5    | Query Intelligence            | 🔲 Pendiente     |
 | 6    | Generación y verificación     | 🔲 Pendiente     |
 | 7    | Ruta visual                   | 🔲 Pendiente     |

@@ -3,12 +3,19 @@ import { api } from '../services/api';
 import type { Document, DocumentNode } from '../types/api';
 
 export function DocumentTree({ documentId }: { documentId: string }) {
+  const [doc, setDoc] = useState<Document | null>(null);
   const [nodes, setNodes] = useState<DocumentNode[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.getDocumentNodes(documentId)
-      .then(setNodes)
+    Promise.all([
+      api.getDocument(documentId),
+      api.getDocumentNodes(documentId)
+    ])
+      .then(([docRes, nodesRes]) => {
+        setDoc(docRes);
+        setNodes(nodesRes);
+      })
       .finally(() => setLoading(false));
   }, [documentId]);
 
@@ -17,7 +24,14 @@ export function DocumentTree({ documentId }: { documentId: string }) {
 
   return (
     <div className="document-tree mt-6 border border-[color:var(--color-border)] rounded-[var(--radius-lg)] p-4 bg-[color:var(--color-bg-secondary)]">
-      <h3 className="text-lg font-bold mb-4">Document Nodes Tree</h3>
+      <div className="flex justify-between items-center mb-4">
+        <h3 className="text-lg font-bold">Document Nodes Tree</h3>
+        {doc && (
+          <span className={`badge ${doc.status === 'ready' ? 'badge--accent' : 'badge--outline'}`}>
+            Status: {doc.status.toUpperCase()}
+          </span>
+        )}
+      </div>
       <div className="flex flex-col gap-3">
         {nodes.map(node => (
           <div key={node.id} className="node-card p-3 bg-[color:var(--color-bg-primary)] rounded-[var(--radius-md)] border border-[color:var(--color-border)] hover:border-blue-500 transition-colors">
