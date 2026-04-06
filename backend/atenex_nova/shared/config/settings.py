@@ -3,7 +3,7 @@
 Uses pydantic-settings for environment variable loading and profile support.
 """
 
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
@@ -11,7 +11,7 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Profile(str, Enum):
+class Profile(StrEnum):
     """Deployment profile."""
 
     DEV = "dev"
@@ -19,18 +19,18 @@ class Profile(str, Enum):
     PROD = "prod"
 
 
-class EmbeddingProfile(str, Enum):
+class EmbeddingProfile(StrEnum):
     """Embedding dimension profile."""
 
-    LITE = "lite"       # 256d
+    LITE = "lite"  # 256d
     STANDARD = "standard"  # 384d
-    MAX = "max"         # 768d
+    MAX = "max"  # 768d
 
 
-class GenerationProfile(str, Enum):
+class GenerationProfile(StrEnum):
     """LLM generation profile."""
 
-    LITE = "lite"       # Gemma 4 E2B
+    LITE = "lite"  # Gemma 4 E2B
     STANDARD = "standard"  # Gemma 4 E4B
     ADVANCED = "advanced"  # Gemma 4 26B/31B
 

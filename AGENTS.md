@@ -1,7 +1,8 @@
 # AGENTS.md — Atenex Nova
 
 > **Última actualización:** 2026-04-06
-> **Estado del proyecto:** Fase 1 ✅ — Fundación completa
+> **Estado del proyecto:** Fase 1 ✅ — Fundación completada. 
+> *Actual:* Backend funcional (FastAPI, 11 tablas SQL, routers básicos, DI container, test suite pasando). Frontend funcional (Vite + React 19, UI components base, conexión a backend). Listo para Fase 2 (Ingesta).
 
 ---
 
@@ -79,6 +80,17 @@ documentos complejos — todo sin dependencia obligatoria de nube.
 | DB para desarrollo  | **SQLite** (perfil inicial)         |
 | DB para producción  | **PostgreSQL** (Docker)             |
 | Qdrant              | **qdrant/qdrant** (Docker, puerto 6333) |
+
+### 3.5 Pipeline Modularity
+
+El pipeline RAG de Atenex Nova se sustenta en un diseño **estrictamente modular**, donde los componentes clave son conectables/desconectables mediante interfaces (Protocols en Python):
+- **Modelos Generativos (LLM):** Pueden cambiarse en caliente implementando la interfaz `LLMGateway` (Llama.cpp, Ollama, vLLM, etc.).
+- **Motores Vectoriales (VDB):** La interfaz `HybridIndex` aísla a Qdrant, permitiendo remplazos futuros si fuera necesario.
+- **Modelos de Embedding:** Implementando `Embedder`, el sistema puede pasar de EmbeddingGemma a otros modelos sin afectar la lógica de negocio.
+- **Reranking & Retrieval:** Los pipelines permiten enchufar distintos "Scorers" y "Rerankers" para optimizar la búsqueda.
+- **Parsers:** Docling es el orquestador principal de parsing, pero actúa sobre la interfaz `Parser`, permitiendo añadir OCRs o parsers alternativos fácilmente.
+
+Esta estructura "Plug & Play" está garantizada obligando a que la Capa de Aplicación nunca importe dependencias directas de la Capa de Infraestructura.
 
 ---
 

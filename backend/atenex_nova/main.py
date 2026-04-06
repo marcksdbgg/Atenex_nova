@@ -1,14 +1,15 @@
 """Atenex Nova — FastAPI application factory."""
-from contextlib import asynccontextmanager
+
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from atenex_nova.infrastructure.db.session import create_all_tables, dispose_engine
+from atenex_nova.presentation.api.routers import collections, documents, health, jobs
 from atenex_nova.shared.config.settings import get_settings
 from atenex_nova.shared.logging.logger import setup_logging
-from atenex_nova.infrastructure.db.session import create_all_tables, dispose_engine
-from atenex_nova.presentation.api.routers import health, collections, documents, jobs
 
 
 @asynccontextmanager

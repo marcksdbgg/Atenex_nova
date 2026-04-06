@@ -1,4 +1,5 @@
 """Application service: Document management."""
+
 from atenex_nova.domain.entities.document import Document
 from atenex_nova.domain.entities.job import Job
 from atenex_nova.domain.value_objects.identifiers import DocumentStatus, JobType, new_id
@@ -10,11 +11,16 @@ class DocumentService:
         self._doc_repo = doc_repo
         self._job_repo = job_repo
 
-    async def register(self, collection_id: str, title: str, source_path: str,
-                       mime_type: str, checksum: str) -> Document:
+    async def register(
+        self, collection_id: str, title: str, source_path: str, mime_type: str, checksum: str, doc_id: str | None = None
+    ) -> Document:
         doc = Document(
-            id=new_id(), collection_id=collection_id, title=title,
-            source_path=source_path, mime_type=mime_type, checksum=checksum,
+            id=doc_id or new_id(),
+            collection_id=collection_id,
+            title=title,
+            source_path=source_path,
+            mime_type=mime_type,
+            checksum=checksum,
         )
         await self._doc_repo.create(doc)
         job = Job(id=new_id(), job_type=JobType.PARSE_DOCUMENT, target_id=doc.id)
@@ -27,8 +33,13 @@ class DocumentService:
             raise EntityNotFoundError("Document", document_id)
         return doc
 
-    async def list_by_collection(self, collection_id: str, offset: int = 0,
-                                  limit: int = 50, status: DocumentStatus | None = None) -> list[Document]:
+    async def list_by_collection(
+        self,
+        collection_id: str,
+        offset: int = 0,
+        limit: int = 50,
+        status: DocumentStatus | None = None,
+    ) -> list[Document]:
         return await self._doc_repo.list_by_collection(collection_id, offset, limit, status)
 
     async def delete(self, document_id: str) -> bool:

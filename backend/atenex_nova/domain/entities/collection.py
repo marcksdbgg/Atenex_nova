@@ -1,7 +1,7 @@
 """Atenex Nova — Domain entity: Collection."""
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 @dataclass
@@ -18,15 +18,15 @@ class Collection:
     language_profile: str = "auto"
     default_generation_profile: str = "standard"
     default_retrieval_profile: str = "standard"
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def rename(self, new_name: str) -> None:
         """Rename the collection."""
         if not new_name.strip():
             raise ValueError("Collection name cannot be empty")
         self.name = new_name.strip()
-        self.updated_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.now(UTC)
 
     def update_profiles(
         self,
@@ -38,4 +38,4 @@ class Collection:
             self.default_generation_profile = generation_profile
         if retrieval_profile is not None:
             self.default_retrieval_profile = retrieval_profile
-        self.updated_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.now(UTC)

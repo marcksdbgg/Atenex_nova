@@ -1,9 +1,8 @@
 """Atenex Nova — Domain value objects: identifiers and enums."""
 
-from enum import Enum
+from enum import StrEnum
 from typing import NewType
 from uuid import uuid4
-
 
 # --- Typed identifiers ---
 CollectionId = NewType("CollectionId", str)
@@ -23,7 +22,7 @@ def new_id() -> str:
 
 
 # --- Document status state machine ---
-class DocumentStatus(str, Enum):
+class DocumentStatus(StrEnum):
     """Document lifecycle states.
 
     Transitions:
@@ -55,7 +54,7 @@ VALID_TRANSITIONS: dict[DocumentStatus, set[DocumentStatus]] = {
 
 
 # --- Job status ---
-class JobStatus(str, Enum):
+class JobStatus(StrEnum):
     """Job lifecycle states."""
 
     PENDING = "pending"
@@ -65,7 +64,7 @@ class JobStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
-class JobType(str, Enum):
+class JobType(StrEnum):
     """Types of background jobs."""
 
     PARSE_DOCUMENT = "parse_document"
@@ -83,7 +82,7 @@ class JobType(str, Enum):
 
 
 # --- Query modes ---
-class QueryMode(str, Enum):
+class QueryMode(StrEnum):
     """Query routing modes."""
 
     AUTO = "auto"
@@ -96,7 +95,7 @@ class QueryMode(str, Enum):
 
 
 # --- Query intent ---
-class QueryIntent(str, Enum):
+class QueryIntent(StrEnum):
     """Classified query intents."""
 
     EXACT = "exact"
@@ -109,7 +108,7 @@ class QueryIntent(str, Enum):
 
 
 # --- Answer plan types ---
-class AnswerPlanType(str, Enum):
+class AnswerPlanType(StrEnum):
     """Answer synthesis plan types."""
 
     DIRECT_ANSWER = "direct_answer"
@@ -120,7 +119,7 @@ class AnswerPlanType(str, Enum):
 
 
 # --- Answer verdict ---
-class AnswerVerdict(str, Enum):
+class AnswerVerdict(StrEnum):
     """Verification verdict for answers."""
 
     VERIFIED = "verified"
@@ -130,7 +129,7 @@ class AnswerVerdict(str, Enum):
 
 
 # --- Document node types ---
-class NodeType(str, Enum):
+class NodeType(StrEnum):
     """Types of document structural nodes."""
 
     HEADING = "heading"
@@ -149,7 +148,7 @@ class NodeType(str, Enum):
 
 
 # --- Proposition kinds ---
-class PropositionKind(str, Enum):
+class PropositionKind(StrEnum):
     """Types of extracted propositions."""
 
     FACT = "fact"
@@ -161,7 +160,7 @@ class PropositionKind(str, Enum):
 
 
 # --- Relation types ---
-class RelationType(str, Enum):
+class RelationType(StrEnum):
     """Types of semantic relations in the proposition graph."""
 
     MENTIONS = "mentions"

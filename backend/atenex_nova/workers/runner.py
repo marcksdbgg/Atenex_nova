@@ -1,7 +1,9 @@
 """Base job handler and job runner."""
+
 import asyncio
 import logging
 from abc import ABC, abstractmethod
+
 from atenex_nova.domain.entities.job import Job
 
 logger = logging.getLogger(__name__)
@@ -19,8 +21,12 @@ class BaseJobHandler(ABC):
 class JobRunner:
     """Polls for pending jobs and dispatches them to handlers."""
 
-    def __init__(self, session_factory, handlers: dict[str, BaseJobHandler] | None = None,
-                 poll_interval: float = 2.0) -> None:
+    def __init__(
+        self,
+        session_factory,
+        handlers: dict[str, BaseJobHandler] | None = None,
+        poll_interval: float = 2.0,
+    ) -> None:
         self._session_factory = session_factory
         self._handlers = handlers or {}
         self._poll_interval = poll_interval
@@ -32,6 +38,7 @@ class JobRunner:
     async def run(self) -> None:
         """Main loop — poll and execute pending jobs."""
         from atenex_nova.infrastructure.db.repositories.sql_job_repo import SqlJobRepository
+
         self._running = True
         logger.info("JobRunner started, polling every %.1fs", self._poll_interval)
 

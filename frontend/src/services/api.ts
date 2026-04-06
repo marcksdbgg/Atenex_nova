@@ -1,5 +1,5 @@
 /* API client for Atenex Nova backend */
-import type { Collection, CreateCollectionRequest, Document, Job, HealthStatus } from '../types/api';
+import type { Collection, CreateCollectionRequest, Document, DocumentNode, Job, HealthStatus } from '../types/api';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -35,7 +35,18 @@ class ApiClient {
     this.request<void>(`/collections/${id}`, { method: 'DELETE' });
 
   /* Documents */
+  uploadDocument = async (collectionId: string, file: File): Promise<Document> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await fetch(`${this.base}/collections/${collectionId}/documents`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    return res.json();
+  };
   getDocument = (id: string) => this.request<Document>(`/documents/${id}`);
+  getDocumentNodes = (id: string) => this.request<DocumentNode[]>(`/documents/${id}/nodes`);
 
   /* Jobs */
   listJobs = () => this.request<Job[]>('/jobs');

@@ -1,4 +1,5 @@
 """Blob store — file system storage for uploaded documents."""
+
 import hashlib
 import logging
 import shutil

@@ -1,4 +1,5 @@
 """Stub: Qdrant vector adapter. Implemented in Fase 3."""
+
 import logging
 from typing import Any
 
@@ -19,6 +20,8 @@ class QdrantAdapter:
     async def upsert(self, collection: str, points: list[dict[str, Any]]) -> None:
         logger.info("Stub: upsert %d points to %s", len(points), collection)
 
-    async def search(self, collection: str, vector: list[float], limit: int = 10) -> list[dict[str, Any]]:
+    async def search(
+        self, collection: str, vector: list[float], limit: int = 10
+    ) -> list[dict[str, Any]]:
         logger.info("Stub: search %s (limit=%d)", collection, limit)
         return []

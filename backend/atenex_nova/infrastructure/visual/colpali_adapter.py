@@ -1,10 +1,13 @@
 """Stub: ColPali visual retriever. Implemented in Fase 7."""
+
 import logging
+
 logger = logging.getLogger(__name__)
 
 
 class ColPaliAdapter:
     """Stub adapter for ColPali visual retrieval."""
+
     def __init__(self) -> None:
         logger.info("ColPaliAdapter initialized (stub)")
 

@@ -1,7 +1,7 @@
 """Atenex Nova — Domain entity: Job."""
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from atenex_nova.domain.value_objects.identifiers import JobStatus, JobType
@@ -24,20 +24,20 @@ class Job:
     error: str | None = None
     retries: int = 0
     max_retries: int = 3
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     started_at: datetime | None = None
     completed_at: datetime | None = None
 
     def start(self) -> None:
         """Mark job as running."""
         self.status = JobStatus.RUNNING
-        self.started_at = datetime.now(timezone.utc)
+        self.started_at = datetime.now(UTC)
 
     def succeed(self, result: dict[str, Any] | None = None) -> None:
         """Mark job as succeeded."""
         self.status = JobStatus.SUCCEEDED
         self.result = result
-        self.completed_at = datetime.now(timezone.utc)
+        self.completed_at = datetime.now(UTC)
 
     def fail(self, error: str) -> None:
         """Mark job as failed."""
@@ -47,12 +47,12 @@ class Job:
         else:
             self.status = JobStatus.PENDING  # will be retried
         self.error = error
-        self.completed_at = datetime.now(timezone.utc)
+        self.completed_at = datetime.now(UTC)
 
     def cancel(self) -> None:
         """Cancel the job."""
         self.status = JobStatus.CANCELLED
-        self.completed_at = datetime.now(timezone.utc)
+        self.completed_at = datetime.now(UTC)
 
     @property
     def is_terminal(self) -> bool:

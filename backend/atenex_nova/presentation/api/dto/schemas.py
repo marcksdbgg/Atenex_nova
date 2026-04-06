@@ -1,5 +1,7 @@
 """Presentation DTOs — Pydantic models for API request/response."""
+
 from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 
@@ -9,11 +11,13 @@ class CreateCollectionRequest(BaseModel):
     description: str = ""
     language_profile: str = "auto"
 
+
 class UpdateCollectionRequest(BaseModel):
     name: str | None = None
     description: str | None = None
     generation_profile: str | None = None
     retrieval_profile: str | None = None
+
 
 class CollectionResponse(BaseModel):
     id: str
@@ -40,6 +44,17 @@ class DocumentResponse(BaseModel):
     updated_at: datetime
 
 
+class DocumentNodeResponse(BaseModel):
+    id: str
+    document_id: str
+    node_type: str
+    raw_text: str
+    normalized_text: str
+    parent_id: str | None = None
+    page_number: int | None = None
+    order_index: int
+    metadata_json: str | None = None
+
 # --- Job ---
 class JobResponse(BaseModel):
     id: str
@@ -59,6 +74,7 @@ class SearchRequest(BaseModel):
     query: str = Field(min_length=1)
     mode: str = "auto"
 
+
 class AskRequest(BaseModel):
     collection_id: str
     query: str = Field(min_length=1)
@@ -73,9 +89,11 @@ class PaginatedResponse(BaseModel):
     offset: int
     limit: int
 
+
 class ErrorResponse(BaseModel):
     code: str
     message: str
+
 
 class HealthResponse(BaseModel):
     status: str = "ok"

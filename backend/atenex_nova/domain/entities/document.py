@@ -1,7 +1,7 @@
 """Atenex Nova — Domain entity: Document."""
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from atenex_nova.domain.value_objects.identifiers import (
     VALID_TRANSITIONS,
@@ -29,8 +29,8 @@ class Document:
     language: str = "auto"
     version: int = 1
     error_message: str | None = None
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def _transition_to(self, target: DocumentStatus) -> None:
         """Transition document to a new status with validation."""
@@ -42,7 +42,7 @@ class Document:
                 target=target.value,
             )
         self.status = target
-        self.updated_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.now(UTC)
         if target != DocumentStatus.FAILED:
             self.error_message = None
 
@@ -74,7 +74,7 @@ class Document:
         """Mark document as failed with an error reason."""
         self.status = DocumentStatus.FAILED
         self.error_message = reason
-        self.updated_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.now(UTC)
 
     @property
     def is_queryable(self) -> bool:

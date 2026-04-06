@@ -1,4 +1,5 @@
 """Application service: Job management."""
+
 from atenex_nova.domain.entities.job import Job
 from atenex_nova.domain.value_objects.identifiers import JobStatus, JobType
 from atenex_nova.shared.exceptions.base import EntityNotFoundError
@@ -14,8 +15,13 @@ class JobService:
             raise EntityNotFoundError("Job", job_id)
         return job
 
-    async def list_all(self, offset: int = 0, limit: int = 50,
-                       status: JobStatus | None = None, job_type: JobType | None = None) -> list[Job]:
+    async def list_all(
+        self,
+        offset: int = 0,
+        limit: int = 50,
+        status: JobStatus | None = None,
+        job_type: JobType | None = None,
+    ) -> list[Job]:
         return await self._repo.list_all(offset, limit, status, job_type)
 
     async def get_stats(self) -> dict[JobStatus, int]:

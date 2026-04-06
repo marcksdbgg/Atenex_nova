@@ -30,6 +30,18 @@ export interface Document {
   updated_at: string;
 }
 
+export interface DocumentNode {
+  id: string;
+  document_id: string;
+  node_type: string;
+  raw_text: string;
+  normalized_text: string;
+  parent_id?: string;
+  page_number?: number;
+  order_index: number;
+  metadata_json?: string;
+}
+
 export interface Job {
   id: string;
   job_type: string;
