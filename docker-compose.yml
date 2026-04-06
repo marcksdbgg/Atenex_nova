@@ -1,0 +1,57 @@
+# ===========================================================================
+# Atenex Nova — Docker Compose (servicios locales)
+# ===========================================================================
+# Uso: docker compose up -d
+# ===========================================================================
+
+services:
+  # -------------------------------------------------------------------------
+  # Qdrant — Motor vectorial (dense + sparse + reranking)
+  # -------------------------------------------------------------------------
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: atenex-qdrant
+    ports:
+      - "6333:6333"   # REST API
+      - "6334:6334"   # gRPC
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    restart: unless-stopped
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # -------------------------------------------------------------------------
+  # PostgreSQL — Base relacional (perfil producción)
+  # -------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: atenex-postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: atenex_nova
+      POSTGRES_USER: atenex
+      POSTGRES_PASSWORD: atenex_dev_password
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atenex -d atenex_nova"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    profiles:
+      - prod       # Solo se levanta con: docker compose --profile prod up
+
+volumes:
+  qdrant_storage:
+    driver: local
+  postgres_data:
+    driver: local
