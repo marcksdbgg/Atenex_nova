@@ -39,3 +39,18 @@ class SqlAnswerRepository:
             verdict=model.verdict,
             created_at=model.created_at,
         )
+
+    async def get_by_query_id(self, query_id: str) -> Answer | None:
+        result = await self._session.execute(select(AnswerModel).where(AnswerModel.query_id == query_id))
+        model = result.scalar_one_or_none()
+        if model is None:
+            return None
+        return Answer(
+            id=model.id,
+            query_id=model.query_id,
+            plan_type=model.plan_type,
+            text=model.text,
+            grounding_score=model.grounding_score,
+            verdict=model.verdict,
+            created_at=model.created_at,
+        )

@@ -37,6 +37,16 @@ class SqlQueryRepository:
         )
         return [self._to_entity(model) for model in result.scalars().all()]
 
+    async def list_by_collection(self, collection_id: str, offset: int = 0, limit: int = 50) -> list[Query]:
+        result = await self._session.execute(
+            select(QueryModel)
+            .where(QueryModel.collection_id == collection_id)
+            .order_by(QueryModel.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        return [self._to_entity(model) for model in result.scalars().all()]
+
     @staticmethod
     def _to_entity(model: QueryModel) -> Query:
         return Query(

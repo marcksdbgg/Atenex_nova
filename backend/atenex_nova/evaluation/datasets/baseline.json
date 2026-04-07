@@ -1,0 +1,34 @@
+{
+  "name": "baseline",
+  "description": "Built-in baseline dataset for Atenex Nova evaluation",
+  "cases": [
+    {
+      "category": "exact",
+      "question": "What does EmbeddingGemma support?",
+      "expected_answer": "384d embeddings",
+      "expected_keywords": ["EmbeddingGemma", "384d"],
+      "route_mode": "factual_local"
+    },
+    {
+      "category": "global",
+      "question": "Summarize the corpus",
+      "expected_answer": "local retrieval and proposition graphs",
+      "expected_keywords": ["summary", "corpus"],
+      "route_mode": "global"
+    },
+    {
+      "category": "visual",
+      "question": "What does the table on page 1 show?",
+      "expected_answer": "table",
+      "expected_keywords": ["table", "page 1"],
+      "route_mode": "visual"
+    },
+    {
+      "category": "argumentative",
+      "question": "Does the document mention proposition graphs?",
+      "expected_answer": "proposition graphs",
+      "expected_keywords": ["proposition", "graph"],
+      "route_mode": "multi_hop"
+    }
+  ]
+}

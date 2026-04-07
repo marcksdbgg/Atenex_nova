@@ -12,20 +12,14 @@ logger = logging.getLogger(__name__)
 
 
 class EmbeddingGemmaAdapter(Embedder):
-    """Generates embeddings using Google's EmbeddingGemma locally via SentenceTransformers.
-    Supports Matryoshka Representation Learning for flexible dimensions."""
+    """Genera embeddings con EmbeddingGemma localmente vía SentenceTransformers."""
 
-    def __init__(self, model_name: str = "google/gemma-2-2b-it", dim: int = 384) -> None:
-        # Note: the exact HuggingFace model ID for EmbeddingGemma is usually something like
-        # "google/gemma-308m". If the user has a specific path, it can be passed here.
-        # We use a placeholder default if the exact ID isn't 'google/embeddinggemma-308m'.
-        # Assuming sentence-transformers will handle it automatically.
-        self._model_name = "google/embeddinggemma-308m" if "gemma" not in model_name else model_name
+    def __init__(self, model_name: str = "google/embeddinggemma-300m", dim: int = 384) -> None:
+        self._model_name = model_name or "google/embeddinggemma-300m"
         self._dim = dim
-        
+
         try:
             from sentence_transformers import SentenceTransformer
-            # truncate_dim uses Matryoshka learning to cut to the required dimension
             self.model = SentenceTransformer(self._model_name, truncate_dim=dim)
             self._fallback_only = False
             logger.info("EmbeddingGemmaAdapter initialized model=%s dim=%d", self._model_name, dim)

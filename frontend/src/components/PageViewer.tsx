@@ -13,7 +13,7 @@ export function PageViewer({ evidence }: PageViewerProps) {
 
   return (
     <section className="card" style={{ display: 'grid', gap: 'var(--space-4)' }}>
-      <div className="card__title">Page Viewer</div>
+      <div className="card__title">Visor de páginas</div>
       <div style={{ display: 'grid', gap: 'var(--space-4)' }}>
         {pages.map(page => (
           <article
@@ -27,7 +27,7 @@ export function PageViewer({ evidence }: PageViewerProps) {
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
-              <span className="badge badge--info">Page {page.page_number}</span>
+              <span className="badge badge--info">Página {page.page_number}</span>
               <span style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-xs)' }}>{page.title}</span>
             </div>
             <div

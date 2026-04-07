@@ -29,6 +29,9 @@ dependencies = [
     # --- HTTP Client ---
     "httpx>=0.27.0",
 
+    # --- Export / Reporting ---
+    "reportlab>=4.2.0",
+
     # --- Vector DB ---
     "qdrant-client>=1.10.0",
 ]

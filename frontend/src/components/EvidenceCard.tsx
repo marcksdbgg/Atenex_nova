@@ -11,17 +11,17 @@ export function EvidenceCard({ evidence }: EvidenceCardProps) {
         <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap' }}>
           <span className="badge badge--accent">#{evidence.rank}</span>
           <span className="badge badge--info">{evidence.source_type}</span>
-          <span style={{ color: 'var(--color-text-secondary)' }}>{evidence.title || 'Untitled source'}</span>
+          <span style={{ color: 'var(--color-text-secondary)' }}>{evidence.title || 'Fuente sin título'}</span>
         </div>
-        <span style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-sm)' }}>Score {evidence.score.toFixed(3)}</span>
+        <span style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-sm)' }}>Puntuación {evidence.score.toFixed(3)}</span>
       </div>
       <p style={{ color: 'var(--color-text-primary)', lineHeight: 'var(--line-height-relaxed)', marginTop: 'var(--space-3)' }}>
         {evidence.snippet}
       </p>
       <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap', marginTop: 'var(--space-3)', fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)' }}>
-        {evidence.document_id ? <span>Document {evidence.document_id}</span> : null}
-        {evidence.page_number !== null && evidence.page_number !== undefined ? <span>Page {evidence.page_number}</span> : null}
-        <span>Source {evidence.source_id}</span>
+        {evidence.document_id ? <span>Documento {evidence.document_id}</span> : null}
+        {evidence.page_number !== null && evidence.page_number !== undefined ? <span>Página {evidence.page_number}</span> : null}
+        <span>Origen {evidence.source_id}</span>
       </div>
     </article>
   );

@@ -1,6 +1,9 @@
 """Answer retrieval router."""
 
+from io import BytesIO
+
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from atenex_nova.application.services.answer_service import AnswerService
@@ -57,3 +60,27 @@ async def get_answer(answer_id: str, service: AnswerService = Depends(get_answer
             for item in detail.evidence_items
         ],
     )
+
+
+@router.get("/{answer_id}/export/markdown")
+async def export_answer_markdown(
+    answer_id: str,
+    service: AnswerService = Depends(get_answer_service),
+) -> Response:
+    detail = await service.get_answer(answer_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Answer not found")
+    content = service.export_markdown(detail)
+    return Response(content=content, media_type="text/markdown; charset=utf-8")
+
+
+@router.get("/{answer_id}/export/pdf")
+async def export_answer_pdf(
+    answer_id: str,
+    service: AnswerService = Depends(get_answer_service),
+) -> Response:
+    detail = await service.get_answer(answer_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Answer not found")
+    pdf_bytes = service.export_pdf(detail)
+    return Response(content=pdf_bytes, media_type="application/pdf")

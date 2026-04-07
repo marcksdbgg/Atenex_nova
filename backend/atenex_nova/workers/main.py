@@ -13,6 +13,7 @@ from atenex_nova.workers.jobs.ingestion_job import (
 )
 from atenex_nova.workers.jobs.mem_builder_job import (
     EmbedDocumentJobHandler,
+    RebuildCollectionJobHandler,
     SegmentDocumentJobHandler,
 )
 from atenex_nova.workers.jobs.memory_enrichment_job import (
@@ -59,6 +60,10 @@ async def main() -> None:
     runner.register_handler(
         JobType.EMBED_DOCUMENT.value,
         EmbedDocumentJobHandler(session_factory),
+    )
+    runner.register_handler(
+        JobType.REBUILD_COLLECTION.value,
+        RebuildCollectionJobHandler(session_factory),
     )
     runner.register_handler(
         JobType.EXTRACT_PROPOSITIONS.value,

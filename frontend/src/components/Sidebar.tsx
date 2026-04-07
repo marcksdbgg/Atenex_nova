@@ -2,10 +2,11 @@
 import { NavLink } from 'react-router-dom';
 
 const NAV_ITEMS = [
-  { path: '/', label: 'Dashboard', icon: '◈' },
-  { path: '/collections', label: 'Collections', icon: '▦' },
-  { path: '/query', label: 'Query', icon: '⌕' },
-  { path: '/jobs', label: 'Jobs', icon: '⟳' },
+  { path: '/', label: 'Panel', icon: '◈' },
+  { path: '/collections', label: 'Colecciones', icon: '▦' },
+  { path: '/query', label: 'Consulta', icon: '⌕' },
+  { path: '/evaluation', label: 'Evaluación', icon: '◌' },
+  { path: '/jobs', label: 'Tareas', icon: '⟳' },
 ];
 
 export function Sidebar() {

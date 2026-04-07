@@ -2,13 +2,14 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
-import { DashboardPage, CollectionsPage, QueryPage, JobsPage } from './pages/Pages';
+import { DashboardPage, CollectionsPage, QueryPage, JobsPage, EvaluationPage } from './pages/Pages';
 
 const ROUTES = [
-  { path: '/', element: <DashboardPage />, title: 'Dashboard' },
-  { path: '/collections', element: <CollectionsPage />, title: 'Collections' },
-  { path: '/query', element: <QueryPage />, title: 'Query Workspace' },
-  { path: '/jobs', element: <JobsPage />, title: 'Jobs' },
+  { path: '/', element: <DashboardPage />, title: 'Panel' },
+  { path: '/collections', element: <CollectionsPage />, title: 'Colecciones' },
+  { path: '/query', element: <QueryPage />, title: 'Espacio de consulta' },
+  { path: '/evaluation', element: <EvaluationPage />, title: 'Evaluación' },
+  { path: '/jobs', element: <JobsPage />, title: 'Tareas' },
 ];
 
 function AppShell() {

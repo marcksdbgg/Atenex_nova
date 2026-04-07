@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from io import BytesIO
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -85,3 +86,65 @@ class AnswerService:
             intent=query.intent,
             route_mode=query.route_mode,
         )
+
+    def export_markdown(self, detail: AnswerDetail) -> str:
+        lines = [
+            f"# Answer {detail.answer.id}",
+            "",
+            f"**Question:** {detail.query_text}",
+            f"**Plan:** {detail.answer.plan_type}",
+            f"**Verdict:** {detail.answer.verdict}",
+            f"**Grounding score:** {detail.answer.grounding_score:.3f}",
+            "",
+            detail.answer.text,
+            "",
+            "## Citations",
+        ]
+        if detail.citations:
+            for index, citation in enumerate(detail.citations, start=1):
+                location = f"page {citation.page_number}" if citation.page_number is not None else "document citation"
+                lines.append(f"{index}. {location}: {citation.snippet}")
+        else:
+            lines.append("No citations available.")
+        return "\n".join(lines)
+
+    def export_pdf(self, detail: AnswerDetail) -> bytes:
+        try:
+            from reportlab.lib.pagesizes import A4
+            from reportlab.pdfgen import canvas
+        except Exception:
+            return self.export_markdown(detail).encode("utf-8")
+
+        buffer = BytesIO()
+        pdf = canvas.Canvas(buffer, pagesize=A4)
+        width, height = A4
+        y = height - 48
+        pdf.setTitle(f"Answer {detail.answer.id}")
+
+        def write_line(text: str, indent: int = 0) -> None:
+            nonlocal y
+            pdf.drawString(48 + indent, y, text[:120])
+            y -= 16
+            if y < 64:
+                pdf.showPage()
+                y = height - 48
+
+        write_line(f"Answer {detail.answer.id}")
+        write_line(f"Question: {detail.query_text}")
+        write_line(f"Plan: {detail.answer.plan_type}")
+        write_line(f"Verdict: {detail.answer.verdict}")
+        write_line(f"Grounding score: {detail.answer.grounding_score:.3f}")
+        write_line("")
+        for paragraph in detail.answer.text.splitlines() or [detail.answer.text]:
+            write_line(paragraph)
+        write_line("")
+        write_line("Citations:")
+        if detail.citations:
+            for index, citation in enumerate(detail.citations, start=1):
+                location = f"page {citation.page_number}" if citation.page_number is not None else "citation"
+                write_line(f"{index}. {location} - {citation.snippet}", indent=16)
+        else:
+            write_line("No citations available.", indent=16)
+
+        pdf.save()
+        return buffer.getvalue()

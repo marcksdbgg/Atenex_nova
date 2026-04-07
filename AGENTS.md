@@ -1,232 +1,506 @@
 # AGENTS.md — Atenex Nova
 
-> **Última actualización:** 2026-04-06
-> **Estado del proyecto:** Fase 3 ✅ — Memoria Textual Base completa.
-> *Actual:* Componentes base y pipeline RAG hasta indexación en Qdrant finalizados y acoplados con modelo 4B de LLM, y **EmbeddingGemma a 384d estables** para embeddings. Listo para iniciar Fase 4 (Memoria enriquecida).
+> **Ultima actualizacion:** 2026-04-06
+> **Estado actual:** Fases 0-9 implementadas en el repo y validadas con tests/build.
+> **Fuente de verdad del producto:** `docs/baseline.md` + `docs/plan.md` + codigo actual.
 
 ---
 
-## 1. Descripción del Proyecto
+## 1. Que es Atenex Nova
 
-**Atenex Nova** es una plataforma local de memoria documental y RAG de nueva generación.
-No es un chatbot con vectores; es un **sistema de memoria con varios motores de acceso**
-que permite a una organización cargar documentos locales, construir una memoria documental
-estructurada y responder preguntas con grounding real, citas a spans concretos,
-distintos modos de recuperación según el tipo de pregunta y soporte fuerte para
-documentos complejos — todo sin dependencia obligatoria de nube.
+Atenex Nova es una plataforma local de memoria documental y RAG. No es un chatbot con vectores; es un sistema de memoria con varios motores de acceso que ingiere documentos locales, construye memoria estructurada y responde con grounding, citas a spans concretos, routing por tipo de pregunta y soporte para documentos complejos.
 
----
+El diseno real del repo sigue el estilo **Modular Monolith + Local Engines** con arquitectura hexagonal y capas claras:
 
-## 2. Entorno de Desarrollo
-
-| Aspecto               | Detalle                                          |
-| ---------------------- | ------------------------------------------------ |
-| **SO**                 | Windows 11 (local)                               |
-| **Shell**              | PowerShell                                       |
-| **Ruta del proyecto**  | `G:\Atenex\Atenex_nova`                          |
-| **Asistente IA**       | Antigravity (Google DeepMind)                    |
-| **Control de versión** | Git (repositorio local inicializado)             |
-| **Python**             | ≥ 3.11 (recomendado 3.12)                       |
-| **Node.js**            | ≥ 20 LTS                                        |
-| **Docker**             | Docker Desktop for Windows (requerido para Qdrant) |
+- `presentation`
+- `application`
+- `domain`
+- `infrastructure`
+- `workers`
+- `evaluation`
+- `shared`
 
 ---
 
-## 3. Stack Tecnológico
+## 2. Entorno y arranque
 
-### 3.1 Backend (Python)
+| Elemento | Valor |
+| --- | --- |
+| SO objetivo | Windows 11 |
+| Shell | PowerShell |
+| Ruta del repo | `G:\Atenex\Atenex_nova` |
+| Python | 3.11+ (recomendado 3.12) |
+| Node.js | 20 LTS+ |
+| Docker | Docker Desktop para Qdrant y PostgreSQL |
 
-| Componente          | Tecnología                          | Rol                                         |
-| ------------------- | ----------------------------------- | -------------------------------------------- |
-| Framework API       | **FastAPI**                         | API REST async con tipado Pydantic           |
-| ORM / Modelos       | **SQLAlchemy 2 + SQLModel**         | Persistencia relacional con DTOs limpios     |
-| Base de datos       | **PostgreSQL** / SQLite (perfil min)| Metadata, jobs, citas, historial             |
-| Migraciones         | **Alembic**                         | Control de esquema                           |
-| Tasks/Jobs          | Job table + dispatcher interno      | Orquestación local sin cola externa          |
-| Validación          | **Pydantic v2**                     | DTOs, configs, schemas                       |
-| Testing             | **pytest** + pytest-asyncio         | Unit, integration, e2e                       |
-| Linting/Format      | **Ruff**                            | Linter + formatter unificado                 |
-| Type checking       | **mypy** (strict)                   | Verificación estática                        |
+### Procesos que componen Atenex
 
-### 3.2 Frontend (React + TypeScript)
+- `atenex-api` -> FastAPI
+- `atenex-worker` -> runner de jobs
+- `atenex-ui` -> Vite + React
+- `qdrant` -> vector DB local/self-hosted
+- `postgres` -> base relacional de produccion
+- `llm-runtime` -> llama.cpp o Ollama
 
-| Componente          | Tecnología                          | Rol                                         |
-| ------------------- | ----------------------------------- | -------------------------------------------- |
-| Framework           | **Vite + React 19 + TypeScript**    | SPA con HMR rápido                           |
-| Gestión de estado   | **Zustand** o **TanStack Query**    | Estado global + server state                 |
-| Estilos             | **Vanilla CSS** (design system)     | Máximo control, sin dependencia de utility fw|
-| Routing             | **React Router v7**                 | Navegación SPA                               |
-| HTTP Client         | **fetch** nativo / Axios            | Comunicación con API                         |
-| Testing             | **Vitest + Testing Library**        | Unit + component tests                       |
+### Como levantar todo
 
-### 3.3 IA / ML (Local-first)
+1. Levantar servicios locales.
 
-| Componente              | Tecnología                   | Rol                                          |
-| ------------------------ | ---------------------------- | -------------------------------------------- |
-| Modelo generativo        | **Gemma 4 E4B** (GGUF)      | Síntesis, razonamiento, verificación         |
-| Modelo generativo lite   | **Gemma 4 E2B** (GGUF)      | Perfil liviano                               |
-| Runtime LLM              | **llama.cpp server**         | Inferencia local con control fino            |
-| Runtime LLM alt          | **Ollama**                   | Rampa rápida de desarrollo                   |
-| Embeddings               | **EmbeddingGemma** (308M)   | Embedding multilingüe con MRL truncable      |
-| Vector DB                | **Qdrant** (Docker)          | Dense + sparse + RRF + reranking             |
-| Parser documental        | **Docling**                  | Parsing estructural de PDF/DOCX/HTML/PPTX    |
-| Retrieval visual         | **ColPali** (opcional)       | Recuperación de páginas como imágenes         |
-
-### 3.4 Infraestructura local
-
-| Componente          | Tecnología                          |
-| ------------------- | ----------------------------------- |
-| Contenedores        | **Docker + Docker Compose**         |
-| DB para desarrollo  | **SQLite** (perfil inicial)         |
-| DB para producción  | **PostgreSQL** (Docker)             |
-| Qdrant              | **qdrant/qdrant** (Docker, puerto 6333) |
-
-### 3.5 Pipeline Modularity
-
-El pipeline RAG de Atenex Nova se sustenta en un diseño **estrictamente modular**, donde los componentes clave son conectables/desconectables mediante interfaces (Protocols en Python):
-- **Modelos Generativos (LLM):** Pueden cambiarse en caliente implementando la interfaz `LLMGateway` (Llama.cpp, Ollama, vLLM, etc.).
-- **Motores Vectoriales (VDB):** La interfaz `HybridIndex` aísla a Qdrant, permitiendo remplazos futuros si fuera necesario.
-- **Modelos de Embedding:** Implementando `Embedder`, el sistema puede pasar de EmbeddingGemma a otros modelos sin afectar la lógica de negocio.
-- **Reranking & Retrieval:** Los pipelines permiten enchufar distintos "Scorers" y "Rerankers" para optimizar la búsqueda.
-- **Parsers:** Docling es el orquestador principal de parsing, pero actúa sobre la interfaz `Parser`, permitiendo añadir OCRs o parsers alternativos fácilmente.
-
-Esta estructura "Plug & Play" está garantizada obligando a que la Capa de Aplicación nunca importe dependencias directas de la Capa de Infraestructura.
-
----
-
-## 4. Arquitectura
-
-**Estilo:** Modular Monolith + Local Engines
-**Patrón:** Hexagonal Architecture + DDD liviano + SOLID
-
-### Capas del backend
-
-```
-atenex_nova/
-├── presentation/    → Routers FastAPI, DTOs, mappers
-├── application/     → Use cases, commands, queries, orchestrators, policies
-├── domain/          → Entidades, value objects, agregados, eventos, repositorios (interfaces)
-├── infrastructure/  → Adaptadores concretos (DB, Qdrant, LLM, embeddings, Docling, ColPali)
-├── workers/         → Consumidores de jobs (ingesta, embedding, indexación, grafos)
-├── evaluation/      → Datasets, scorers, regresión
-└── shared/          → Config, logging, excepciones, utils
+```powershell
+Set-Location G:\Atenex\Atenex_nova
+docker compose up -d qdrant
+docker compose --profile prod up -d postgres
 ```
 
-### Procesos físicos
+2. Levantar backend.
 
-1. `atenex-api` — FastAPI server
-2. `atenex-worker` — Worker de jobs
-3. `atenex-ui` — React dev server / build estático
-4. `qdrant` — Motor vectorial (Docker)
-5. `postgres` / `sqlite` — Base relacional
-6. `llm-runtime` — llama.cpp server o Ollama
-
----
-
-## 5. Subsistemas Principales
-
-| ID | Subsistema              | Descripción                                           |
-| -- | ----------------------- | ----------------------------------------------------- |
-| A  | Corpus Management       | Colecciones, documentos, ciclo de vida                |
-| B  | Document Understanding  | Parsing, normalización, segmentación, proposiciones   |
-| C  | Memory Construction     | Índices densos, sparse, proposicionales, visuales     |
-| D  | Query Intelligence      | Preprocesamiento, clasificación, routing              |
-| E  | Retrieval Engine        | Recuperación híbrida, fusión, reranking, pruning       |
-| F  | Reasoning & Answering   | Planificación, síntesis, verificación, citas          |
-| G  | Evaluation              | Golden sets, scoring, regresión                       |
-
----
-
-## 6. Fases de Desarrollo
-
-| Fase | Nombre                        | Estado           |
-| ---- | ----------------------------- | ---------------- |
-| 0    | Planificación y estructura    | ✅ Completada    |
-| 1    | Fundación del repositorio     | ✅ Completada    |
-| 2    | Ingesta estructural           | ✅ Completada    |
-| 3    | Memoria textual base          | ✅ Completada    |
-| 4    | Memoria enriquecida           | 🔲 En progreso   |
-| 5    | Query Intelligence            | 🔲 Pendiente     |
-| 6    | Generación y verificación     | 🔲 Pendiente     |
-| 7    | Ruta visual                   | 🔲 Pendiente     |
-| 8    | Evaluación formal             | 🔲 Pendiente     |
-| 9    | Hardening funcional           | 🔲 Pendiente     |
-
----
-
-## 7. Convenciones de Código
-
-### Python
-
-- **Formatter/Linter:** Ruff (line-length=100)
-- **Type hints:** obligatorios en interfaces públicas
-- **Docstrings:** Google style
-- **Imports:** absolutos desde `atenex_nova.*`
-- **Nombres:** clases en singular, services orientados a verbo, repos a aggregate
-- **Configs:** separadas por perfil (`dev`, `test`, `prod`)
-- **Prompts:** versionados en archivos separados
-
-### TypeScript / React
-
-- **Strict mode** habilitado
-- **Componentes:** funcionales con hooks
-- **Estilos:** CSS Modules o archivos `.css` por componente
-- **Naming:** PascalCase para componentes, camelCase para funciones y variables
-
-### Git
-
-- **Branching:** `main` → `develop` → `feature/*`, `fix/*`
-- **Commits:** mensajes descriptivos en español o inglés, con prefijo de fase
-
----
-
-## 8. Reglas Arquitectónicas (para sub-agentes)
-
-1. **No mezclar dominio con infraestructura.** El dominio NO importa de infra.
-2. **No permitir que routers llamen directamente a adapters.** Siempre via Application Service.
-3. **Todo caso de uso pasa por Application Service.**
-4. **Todo acceso a almacenamiento pasa por Repository (interfaz en domain, impl en infra).**
-5. **Todo modelo externo pasa por Gateway/Adapter.**
-6. **Todo DTO se separa de entidades de dominio.**
-7. **Todo cambio de estado del documento debe ser explícito** (máquina de estados).
-8. **Las dependencias se inyectan**, no se instancian dentro de los servicios.
-9. **Los tests se organizan por capa** (unit/, integration/, e2e/, golden/).
-
----
-
-## 9. Documentación de Referencia
-
-| Documento                  | Ruta                                |
-| -------------------------- | ----------------------------------- |
-| Plan maestro de arquitectura | `docs/plan.md`                    |
-| Diseño baseline            | `docs/baseline.md`                 |
-| Plan de implementación     | Artefacto en Antigravity            |
-| Este archivo               | `AGENTS.md` (raíz del proyecto)    |
-
----
-
-## 10. Comandos Frecuentes
-
-```bash
-# Backend
-cd backend
+```powershell
+Set-Location G:\Atenex\Atenex_nova\backend
 python -m venv .venv
-.venv\Scripts\activate        # Windows
+.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
 uvicorn atenex_nova.main:app --reload --port 8000
-
-# Frontend
-cd frontend
-npm install
-npm run dev                    # Vite dev server en :5173
-
-# Qdrant
-docker run -p 6333:6333 -p 6334:6334 -v qdrant_storage:/qdrant/storage qdrant/qdrant
-
-# llama.cpp server (ejemplo)
-llama-server -m models/gemma-4-e4b.gguf --port 8080 --ctx-size 8192
-
-# Tests
-cd backend && pytest tests/ -v
-cd frontend && npm test
 ```
+
+3. Levantar worker.
+
+```powershell
+Set-Location G:\Atenex\Atenex_nova\backend
+.venv\Scripts\python.exe -m atenex_nova.workers.main
+```
+
+4. Levantar frontend.
+
+```powershell
+Set-Location G:\Atenex\Atenex_nova\frontend
+npm install
+npm run dev
+```
+
+Si `5173` ya esta ocupado, Vite puede caer a `5174`. El backend ya permite por defecto `5173` y `5174` en CORS para `localhost` y `127.0.0.1`.
+
+### Variables de entorno clave
+
+Las settings viven en `backend/atenex_nova/shared/config/settings.py` y usan prefijo `ATENEX_`.
+
+- `ATENEX_DATABASE_URL` -> por defecto SQLite local
+- `ATENEX_QDRANT_URL` -> por defecto `http://localhost:6333`
+- `ATENEX_LLM_BACKEND` -> `ollama` o `llamacpp`
+- `ATENEX_LLM_URL` -> por defecto `http://localhost:11434`
+- `ATENEX_LLM_MODEL` -> por defecto `gemma4:e4b`
+- `ATENEX_EMBEDDING_MODEL` -> por defecto `google/embeddinggemma-300m`
+- `ATENEX_EMBEDDING_PROFILE` -> `lite` / `standard` / `max`
+- `ATENEX_BLOB_STORE_PATH` -> por defecto `storage/uploads`
+
+---
+
+## 3. Estructura real del repo
+
+```text
+Atenex_nova/
+├── AGENTS.md
+├── README.md
+├── docker-compose.yml
+├── docs/
+│   ├── baseline.md
+│   └── plan.md
+├── backend/
+│   ├── pyproject.toml
+│   ├── atenex_nova/
+│   │   ├── main.py
+│   │   ├── dependencies.py
+│   │   ├── application/
+│   │   ├── domain/
+│   │   ├── infrastructure/
+│   │   ├── presentation/
+│   │   ├── evaluation/
+│   │   ├── shared/
+│   │   └── workers/
+│   └── tests/
+└── frontend/
+	├── package.json
+	├── src/
+	│   ├── App.tsx
+	│   ├── components/
+	│   ├── pages/
+	│   ├── services/
+	│   ├── styles/
+	│   └── types/
+	└── README.md
+```
+
+Nota: `frontend/README.md` es el template de Vite y no debe tomarse como documentacion operativa del producto.
+
+---
+
+## 4. Donde se almacena cada cosa
+
+### Documentos fuente / PDFs / uploads
+
+Los archivos subidos se guardan en el blob store local:
+
+- ruta base: `backend/storage/uploads`
+- estructura: `backend/storage/uploads/{collection_id}/{document_id}/{filename}`
+
+La clase que lo implementa es `backend/atenex_nova/infrastructure/files/blob_store.py` y el upload entra por `POST /collections/{collection_id}/documents`.
+
+### Chunks
+
+Los chunks viven en la base relacional, en la tabla `retrieval_chunks`.
+
+- campo de texto: `text`
+- resumen: `summary`
+- nodos origen: `node_ids_json`
+- referencia vectorial: `embedding_ref`
+- referencia sparse: `sparse_ref`
+
+### Propositions
+
+Las proposiciones viven en la tabla `propositions`.
+
+- texto atomico: `text`
+- origen: `source_chunk_id`
+- referencia vectorial: `embedding_ref`
+
+### Summaries
+
+Los resuenos jerarquicos viven en la tabla `summary_nodes`.
+
+- `scope_type`: `section`, `document`, `collection`
+- `scope_id`: id del alcance
+- `embedding_ref`: referencia vectorial
+
+### Citas y respuestas
+
+Las respuestas y sus citas se guardan en:
+
+- `answers`
+- `citations`
+
+### Jobs
+
+La cola interna de trabajos usa la tabla `jobs` con estados `pending`, `running`, `succeeded`, `failed`, `cancelled`.
+
+### Evaluaciones
+
+Los runs y casos de evaluacion viven en:
+
+- `evaluation_runs`
+- `evaluation_cases`
+
+### Visual pages
+
+La cache visual se guarda en disco, dentro de:
+
+- `backend/storage/visual_pages/{collection_id}.json`
+- `backend/storage/visual_pages/{collection_id}/{page_id}.png`
+
+Si no puede renderizar PNG, el adaptador cae a un `.txt` de respaldo.
+
+### Vectores en Qdrant
+
+Los vectores no se guardan en archivos locales como fuente primaria; se indexan en Qdrant y los ids quedan referenciados en SQL.
+
+Colecciones Qdrant usadas hoy:
+
+- `collection_{collection_id}` -> chunks
+- `collection_{collection_id}_propositions` -> proposiciones
+- `collection_{collection_id}_summaries` -> summaries
+- `pages_visual` -> paginas visuales
+
+Persistencia de Qdrant:
+
+- volumen Docker `qdrant_storage`
+- montado en `/qdrant/storage`
+
+---
+
+## 5. Como funciona la ingesta
+
+### Flujo principal
+
+1. `POST /collections/{collection_id}/documents`
+2. `BlobStore.store(...)` escribe el archivo en disco
+3. Se crea `Document` con `source_path` apuntando al archivo local
+4. Se encola `parse_document`
+5. El worker parsea, normaliza y segmenta
+6. Se crean chunks en `retrieval_chunks`
+7. Se embeben e indexan en Qdrant
+8. Se encolan fases de memoria enriquecida
+9. Se crean proposiciones, summaries y edges
+10. Se genera el cache visual si aplica
+
+### Jobs registrados en el worker
+
+El worker en `backend/atenex_nova/workers/main.py` registra:
+
+- `parse_document`
+- `normalize_document`
+- `segment_document`
+- `embed_chunks` / `embed_document`
+- `rebuild_collection`
+- `extract_propositions`
+- `generate_summaries`
+- `embed_propositions`
+- `embed_summaries`
+- `build_graph`
+- `index_visual_pages`
+
+### Document lifecycle
+
+Los estados del documento se van marcando de forma explicita en el pipeline:
+
+- `registered`
+- `parsed`
+- `normalized`
+- `segmented`
+- `embedded`
+- `indexed`
+- `ready`
+- `failed`
+
+---
+
+## 6. Busqueda hibrida y BM25
+
+La busqueda hibrida esta implementada en `backend/atenex_nova/application/orchestrators/retrieval_orchestrator.py`.
+
+### BM25 / sparse
+
+El encoder local esta en `backend/atenex_nova/infrastructure/embeddings/bm25_encoder.py`.
+
+- tokeniza con regex local
+- calcula BM25 sobre textos pequenos del corpus local
+- se usa para chunks, propositions, summaries y fallback visual
+
+### Dense
+
+Se usa `EmbeddingGemmaAdapter` con dimension 384 por defecto en el perfil standard.
+
+### Fusion real
+
+En la recuperacion actual:
+
+- chunks -> `0.6 dense + 0.4 BM25`
+- propositions -> `0.65 dense + 0.35 BM25`
+- summaries -> score lexical con sesgo fijo
+- visual -> Qdrant primero, fallback local dense + BM25
+
+### Routing y boosts
+
+El router clasifica la consulta en:
+
+- `exact`
+- `factual_local`
+- `multi_hop`
+- `global`
+- `argumentative`
+- `visual`
+
+El ranking aplica boosts por tipo de resultado y por modo.
+
+### Multi-hop
+
+Cuando el modo es `multi_hop`, se expanden edges desde `relation_edges` mediante `GraphStore`.
+
+---
+
+## 7. Query, answer y exports
+
+### Query intelligence
+
+Los endpoints reales estan en `backend/atenex_nova/presentation/api/routers/queries.py`:
+
+- `POST /queries/search`
+- `POST /queries/answer`
+
+### Answer service
+
+`backend/atenex_nova/application/services/answer_service.py` persiste respuestas y citas y expone exportaciones:
+
+- Markdown: `GET /answers/{id}/export/markdown`
+- PDF: `GET /answers/{id}/export/pdf`
+
+### Verificacion
+
+La respuesta final se persiste con:
+
+- plan de respuesta
+- grounding score
+- verdict
+- citas
+- evidence pack
+
+### UI
+
+La UI actual incluye:
+
+- Dashboard
+- Collections
+- Query Workspace
+- Evaluation
+- Jobs
+
+Las rutas estan en `frontend/src/App.tsx` y la navegacion en `frontend/src/components/Sidebar.tsx`.
+
+---
+
+## 8. Ruta visual
+
+La ruta visual vive en `backend/atenex_nova/infrastructure/visual/colpali_adapter.py`.
+
+### Que hace realmente
+
+- renderiza paginas visuales a `backend/storage/visual_pages`
+- indexa paginas en Qdrant en la coleccion `pages_visual`
+- usa BM25 local como fallback si Qdrant no responde
+- el worker `index_visual_pages` agrupa nodos por pagina y genera payloads
+
+### En consulta
+
+El orchestrator agrega hits visuales cuando el modo es `visual`.
+
+---
+
+## 9. Evaluacion y hardening
+
+### Evaluacion
+
+La evaluacion esta implementada en:
+
+- `backend/atenex_nova/evaluation/models.py`
+- `backend/atenex_nova/evaluation/datasets/manager.py`
+- `backend/atenex_nova/evaluation/scorers/retrieval_scorer.py`
+- `backend/atenex_nova/evaluation/scorers/answer_scorer.py`
+- `backend/atenex_nova/evaluation/regression/comparator.py`
+- `backend/atenex_nova/application/services/evaluation_service.py`
+- `backend/atenex_nova/presentation/api/routers/evaluation.py`
+
+### Dataset por defecto
+
+Existe el dataset `baseline` en `backend/atenex_nova/evaluation/datasets/baseline.json`.
+
+### Hardening operativo
+
+Existe el rebuild de coleccion:
+
+- `POST /collections/{collection_id}/rebuild`
+- servicio: `backend/atenex_nova/application/services/rebuild_service.py`
+- job handler: `RebuildCollectionJobHandler`
+
+Ese rebuild limpia chunks/propositions/summaries/edges, borra el cache visual y re-encola segmentacion para reconstruccion.
+
+---
+
+## 10. Configuracion y almacenamiento por defecto
+
+### Backend
+
+La app FastAPI arranca en `backend/atenex_nova/main.py` y en el lifespan crea tablas automaticamente con `create_all_tables()`.
+
+Por defecto usa SQLite local:
+
+- `backend/atenex_nova.db`
+
+### Produccion local
+
+Si se activa Postgres con Docker Compose, la base relacional usa:
+
+- DB: `atenex_nova`
+- usuario: `atenex`
+- password: `atenex_dev_password`
+
+### Qdrant
+
+Qdrant expone:
+
+- REST en `6333`
+- gRPC en `6334`
+
+### Frontend
+
+El frontend toma `VITE_API_URL` y, si no existe, apunta a `http://localhost:8000`.
+
+---
+
+## 11. Verificacion local
+
+Comandos que se usan para validar el repo:
+
+```powershell
+Set-Location G:\Atenex\Atenex_nova\backend
+.\.venv\Scripts\python.exe -m pytest tests -q
+
+Set-Location G:\Atenex\Atenex_nova\frontend
+npm run build
+```
+
+### Resultado de la ultima validacion ejecutada
+
+- Backend: 22 tests aprobados
+- Frontend: build de produccion exitoso
+
+---
+
+## 12. Estado frente a baseline.md y plan.md
+
+### Implementado y funcional en el repo
+
+- carga de documentos locales
+- blob store de uploads
+- segmentacion en chunks
+- BM25 local
+- retrieval hibrido dense+sparse
+- routing por modo de pregunta
+- proposiciones, summaries y grafo relacional
+- answer generation con citas
+- export Markdown/PDF
+- ruta visual con cache local y Qdrant
+- evaluation runs y reports
+- rebuild de coleccion
+- UI con Query, Collections, Evaluation y Jobs
+
+### Diferencias o piezas opcionales respecto al diseno teorico
+
+- no hay DesktopShell ni CLI dedicados
+- no hay un motor externo de graph database; el grafo vive en la capa relacional
+- ColPali se implementa como adaptador local con cache y fallback, no como stack pesado separado
+- el runtime generativo es externo (`llama.cpp` o `Ollama`) y debe estar levantado aparte si se quiere generar con LLM real
+- las migraciones formales existen como dependencia/idea del stack, pero el arranque actual usa creacion automatica de tablas en desarrollo
+
+---
+
+## 13. Reglas para trabajar en este repo
+
+1. No mezclar dominio con infraestructura.
+2. No llamar adapters directamente desde routers; usar servicios de aplicacion.
+3. Mantener las dependencias por inyeccion.
+4. Usar rutas absolutas desde `atenex_nova.*`.
+5. Mantener `storage/uploads` y `storage/visual_pages` como almacenamiento local de artefactos.
+6. Si se toca retrieval, revisar `retrieval_orchestrator.py`, `bm25_encoder.py`, `embedding_adapter.py` y `colpali_adapter.py` juntos.
+7. Si se toca jobs, revisar `workers/main.py` y `workers/runner.py`.
+8. Si se toca UI, revisar `frontend/src/App.tsx`, `frontend/src/pages/Pages.tsx` y `frontend/src/services/api.ts`.
+
+---
+
+## 14. Archivos de referencia que hay que leer primero
+
+- `docs/plan.md`
+- `docs/baseline.md`
+- `README.md`
+- `docker-compose.yml`
+- `backend/atenex_nova/main.py`
+- `backend/atenex_nova/workers/main.py`
+- `backend/atenex_nova/application/orchestrators/retrieval_orchestrator.py`
+- `backend/atenex_nova/infrastructure/embeddings/bm25_encoder.py`
+- `backend/atenex_nova/infrastructure/visual/colpali_adapter.py`
+- `frontend/src/pages/Pages.tsx`
+
+---
+
+## 15. Recordatorio de prompts y docs
+
+- Los prompts deben versionarse en `prompts/`.
+- La documentacion de arquitectura vive en `docs/plan.md`.
+- La propuesta baseline y rationale inicial viven en `docs/baseline.md`.
+- Este archivo es la referencia operativa para agentes y editores.

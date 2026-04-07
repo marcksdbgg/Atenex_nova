@@ -6,18 +6,65 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from atenex_nova.application.services.answer_service import AnswerService
 from atenex_nova.application.services.query_service import QueryService
 from atenex_nova.dependencies import get_answer_service, get_query_service
+from atenex_nova.infrastructure.db.repositories.sql_answer_repo import SqlAnswerRepository
 from atenex_nova.infrastructure.db.repositories.sql_collection_repo import SqlCollectionRepository
+from atenex_nova.infrastructure.db.repositories.sql_citation_repo import SqlCitationRepository
+from atenex_nova.infrastructure.db.repositories.sql_query_repo import SqlQueryRepository
 from atenex_nova.infrastructure.db.session import get_session
 from atenex_nova.presentation.api.dto.schemas import (
     AnswerResponse,
     AskRequest,
     CitationResponse,
+    QueryHistoryResponse,
     QueryHitResponse,
     QuerySearchResponse,
     SearchRequest,
 )
 
 router = APIRouter(prefix="/queries", tags=["queries"])
+
+
+@router.get("/history", response_model=list[QueryHistoryResponse])
+async def query_history(
+    collection_id: str,
+    limit: int = 20,
+    session: AsyncSession = Depends(get_session),
+) -> list[QueryHistoryResponse]:
+    query_repo = SqlQueryRepository(session)
+    answer_repo = SqlAnswerRepository(session)
+    citation_repo = SqlCitationRepository(session)
+    queries = await query_repo.list_by_collection(collection_id=collection_id, limit=limit)
+    history: list[QueryHistoryResponse] = []
+    for query in queries:
+        answer = await answer_repo.get_by_query_id(query.id)
+        citations_count = 0
+        answer_text = None
+        verdict = None
+        grounding_score = None
+        answer_id = None
+        if answer is not None:
+            answer_id = answer.id
+            answer_text = answer.text
+            verdict = answer.verdict
+            grounding_score = answer.grounding_score
+            citations_count = len(await citation_repo.list_by_answer(answer.id))
+        history.append(
+            QueryHistoryResponse(
+                query_id=query.id,
+                answer_id=answer_id,
+                collection_id=query.collection_id,
+                query=query.text,
+                answer=answer_text,
+                route_mode=query.route_mode,
+                intent=query.intent,
+                language=query.language,
+                verdict=verdict,
+                grounding_score=grounding_score,
+                created_at=query.created_at,
+                citations_count=citations_count,
+            )
+        )
+    return history
 
 
 @router.post("/search", response_model=QuerySearchResponse)
