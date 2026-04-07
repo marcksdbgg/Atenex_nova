@@ -11,6 +11,10 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
+STORAGE_ROOT = PROJECT_ROOT / "storage"
+
+
 class Profile(StrEnum):
     """Deployment profile."""
 
@@ -54,7 +58,14 @@ class Settings(BaseSettings):
     # --- API ---
     api_host: str = "0.0.0.0"
     api_port: int = 8000
-    cors_origins: list[str] = Field(default=["http://localhost:5173"])
+    cors_origins: list[str] = Field(
+        default=[
+            "http://localhost:5173",
+            "http://localhost:5174",
+            "http://127.0.0.1:5173",
+            "http://127.0.0.1:5174",
+        ]
+    )
 
     # --- Database ---
     database_url: str = "sqlite+aiosqlite:///./atenex_nova.db"
@@ -74,7 +85,8 @@ class Settings(BaseSettings):
     embedding_batch_size: int = 32
 
     # --- Storage ---
-    blob_store_path: Path = Path("storage/uploads")
+    blob_store_path: Path = STORAGE_ROOT / "uploads"
+    visual_pages_path: Path = STORAGE_ROOT / "visual_pages"
 
     # --- Worker ---
     worker_poll_interval: float = 2.0

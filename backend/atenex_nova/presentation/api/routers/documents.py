@@ -27,6 +27,7 @@ async def get_document(
         collection_id=doc.collection_id,
         title=doc.title,
         mime_type=doc.mime_type,
+        source_path=doc.source_path,
         status=doc.status.value,
         language=doc.language,
         version=doc.version,

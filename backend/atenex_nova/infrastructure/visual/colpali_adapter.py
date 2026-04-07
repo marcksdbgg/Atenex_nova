@@ -11,6 +11,7 @@ from textwrap import wrap
 from atenex_nova.infrastructure.embeddings.bm25_encoder import BM25SparseEncoder
 from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
 from atenex_nova.infrastructure.qdrant.qdrant_adapter import QdrantAdapter, QdrantDocument
+from atenex_nova.shared.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ class ColPaliAdapter:
     """Visual retriever for page-level evidence."""
 
     def __init__(self, storage_dir: Path | None = None) -> None:
-        self._storage_dir = storage_dir or Path("storage/visual_pages")
+        self._storage_dir = storage_dir or get_settings().visual_pages_path
         self._storage_dir.mkdir(parents=True, exist_ok=True)
         self._embedder = EmbeddingGemmaAdapter(dim=384)
         self._qdrant = QdrantAdapter(host="localhost", port=6333)
@@ -117,7 +118,7 @@ class ColPaliAdapter:
         page_dir.mkdir(parents=True, exist_ok=True)
         image_path = page_dir / f"{page_id}.png"
         try:
-            from PIL import Image, ImageDraw, ImageFont
+            from PIL import Image, ImageDraw, ImageFont  # type: ignore[import-not-found]
 
             image = Image.new("RGB", (1400, 1800), color="white")
             draw = ImageDraw.Draw(image)

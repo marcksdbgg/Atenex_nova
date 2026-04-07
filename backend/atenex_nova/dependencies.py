@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from atenex_nova.application.services.collection_service import CollectionService
 from atenex_nova.application.services.answer_service import AnswerService
+from atenex_nova.application.services.evaluation_service import EvaluationService
 from atenex_nova.application.services.document_service import DocumentService
 from atenex_nova.application.services.job_service import JobService
 from atenex_nova.application.services.query_service import QueryService
@@ -13,10 +14,12 @@ from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocu
 from atenex_nova.infrastructure.db.repositories.sql_job_repo import SqlJobRepository
 from atenex_nova.infrastructure.db.session import get_session
 from atenex_nova.infrastructure.files.blob_store import BlobStore
+from atenex_nova.shared.config.settings import get_settings
 
 
 def get_blob_store() -> BlobStore:
-    return BlobStore()
+    settings = get_settings()
+    return BlobStore(settings.blob_store_path)
 
 
 async def get_collection_service(
@@ -50,3 +53,9 @@ async def get_answer_service(
     session: AsyncSession = Depends(get_session),
 ) -> AnswerService:
     return AnswerService(session)
+
+
+async def get_evaluation_service(
+    session: AsyncSession = Depends(get_session),
+) -> EvaluationService:
+    return EvaluationService(session)

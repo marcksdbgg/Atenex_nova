@@ -22,12 +22,28 @@ export interface Document {
   collection_id: string;
   title: string;
   mime_type: string;
+  source_path?: string | null;
   status: string;
   language: string;
   version: number;
   error_message?: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface QueryHistoryItem {
+  query_id: string;
+  answer_id?: string | null;
+  collection_id: string;
+  query: string;
+  answer?: string | null;
+  route_mode: string;
+  intent: string;
+  language: string;
+  verdict?: string | null;
+  grounding_score?: number | null;
+  created_at: string;
+  citations_count: number;
 }
 
 export interface DocumentNode {
@@ -118,6 +134,47 @@ export interface QuerySearchResponse {
   route_mode: string;
   total_hits: number;
   hits: QueryHit[];
+}
+
+export interface QueryHistoryResponse extends QueryHistoryItem {}
+
+export interface CollectionRebuildResponse {
+  job_id: string;
+  status: string;
+}
+
+export interface EvaluationRunRequest {
+  collection_id: string;
+  dataset_name?: string;
+}
+
+export interface EvaluationCase {
+  id: string;
+  category: string;
+  question: string;
+  expected_answer: string;
+  expected_keywords: string[];
+  route_mode: string;
+  retrieval_metrics: Record<string, number>;
+  answer_metrics: Record<string, number>;
+  retrieved: Array<Record<string, string | number>>;
+  answer_id?: string | null;
+}
+
+export interface EvaluationRunResponse {
+  id: string;
+  dataset_name: string;
+  collection_id: string;
+  retrieval_recall_at_k: number;
+  retrieval_mrr: number;
+  retrieval_ndcg: number;
+  answer_grounding_score: number;
+  answer_relevance_score: number;
+  regression_delta: Record<string, number>;
+  summary: Record<string, string | number>;
+  created_at: string;
+  previous_run_id?: string | null;
+  cases?: EvaluationCase[];
 }
 
 export interface HealthStatus {

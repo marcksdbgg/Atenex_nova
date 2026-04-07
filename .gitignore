@@ -93,6 +93,9 @@ models/
 # ---------------------------------------------------------------------------
 blob_store/
 storage/uploads/
+storage/visual_pages/
+backend/storage/uploads/
+backend/storage/visual_pages/
 
 # ---------------------------------------------------------------------------
 # Database files

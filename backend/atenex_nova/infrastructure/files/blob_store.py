@@ -5,14 +5,16 @@ import logging
 import shutil
 from pathlib import Path
 
+from atenex_nova.shared.config.settings import get_settings
+
 logger = logging.getLogger(__name__)
 
 
 class BlobStore:
     """File-system based blob storage."""
 
-    def __init__(self, base_path: str | Path = "storage/uploads") -> None:
-        self._base = Path(base_path)
+    def __init__(self, base_path: str | Path | None = None) -> None:
+        self._base = Path(base_path or get_settings().blob_store_path)
         self._base.mkdir(parents=True, exist_ok=True)
         logger.info("BlobStore initialized → %s", self._base.resolve())
 

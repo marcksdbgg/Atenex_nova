@@ -5,12 +5,17 @@ import logging
 from atenex_nova.domain.entities.chunk import Chunk
 from atenex_nova.domain.entities.job import Job
 from atenex_nova.domain.value_objects.identifiers import JobType, new_id
+from atenex_nova.infrastructure.db.repositories.sql_collection_repo import SqlCollectionRepository
 from atenex_nova.infrastructure.db.repositories.sql_chunk_repo import SqlChunkRepository
 from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocumentRepository
 from atenex_nova.infrastructure.db.repositories.sql_job_repo import SqlJobRepository
+from atenex_nova.infrastructure.db.repositories.sql_proposition_repo import SqlPropositionRepository
+from atenex_nova.infrastructure.db.repositories.sql_relation_repo import SqlRelationRepository
 from atenex_nova.infrastructure.db.repositories.sql_node_repo import SqlDocumentNodeRepository
+from atenex_nova.infrastructure.db.repositories.sql_summary_repo import SqlSummaryRepository
 from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
 from atenex_nova.infrastructure.qdrant.qdrant_adapter import QdrantAdapter, QdrantDocument
+from atenex_nova.shared.config.settings import get_settings
 from atenex_nova.workers.runner import BaseJobHandler
 
 logger = logging.getLogger(__name__)
@@ -163,3 +168,45 @@ class EmbedDocumentJobHandler(BaseJobHandler):
 
             await session.commit()
             return {"embedded_and_indexed": len(chunks_to_embed)}
+
+
+class RebuildCollectionJobHandler(BaseJobHandler):
+    def __init__(self, session_factory) -> None:
+        self.session_factory = session_factory
+
+    async def execute(self, job: Job) -> dict | None:
+        collection_id = job.target_id
+        async with self.session_factory() as session:
+            collection_repo = SqlCollectionRepository(session)
+            doc_repo = SqlDocumentRepository(session)
+            chunk_repo = SqlChunkRepository(session)
+            node_repo = SqlDocumentNodeRepository(session)
+            proposition_repo = SqlPropositionRepository(session)
+            summary_repo = SqlSummaryRepository(session)
+            relation_repo = SqlRelationRepository(session)
+            job_repo = SqlJobRepository(session)
+
+            collection = await collection_repo.get_by_id(collection_id)
+            if collection is None:
+                raise ValueError(f"Collection {collection_id} not found")
+
+            documents = await doc_repo.list_by_collection(collection_id)
+            for document in documents:
+                chunks = await chunk_repo.get_by_document(document.id)
+                propositions = await proposition_repo.list_by_document(document.id)
+                await proposition_repo.delete_by_document(document.id)
+                await summary_repo.delete_by_scope("document", document.id)
+                await summary_repo.delete_by_scope("collection", collection_id)
+                for chunk in chunks:
+                    await summary_repo.delete_by_scope("section", chunk.id)
+                await relation_repo.delete_by_source_ids([prop.id for prop in propositions])
+                await chunk_repo.delete_by_document(document.id)
+                await node_repo.delete_by_document(document.id)
+                await job_repo.create(Job(id=new_id(), job_type=JobType.SEGMENT_DOCUMENT, target_id=document.id))
+
+            visual_cache = get_settings().visual_pages_path / f"{collection_id}.json"
+            if visual_cache.exists():
+                visual_cache.unlink()
+
+            await session.commit()
+            return {"documents_queued": len(documents)}

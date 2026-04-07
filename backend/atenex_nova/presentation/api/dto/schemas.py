@@ -36,12 +36,19 @@ class DocumentResponse(BaseModel):
     collection_id: str
     title: str
     mime_type: str
+    source_path: str | None = None
     status: str
     language: str
     version: int
     error_message: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class ImportLocalDocumentRequest(BaseModel):
+    source_path: str = Field(min_length=1, max_length=1000)
+    title: str | None = Field(default=None, max_length=255)
+    mime_type: str | None = Field(default=None, max_length=255)
 
 
 class DocumentNodeResponse(BaseModel):
@@ -107,6 +114,21 @@ class QuerySearchResponse(BaseModel):
     hits: list[QueryHitResponse]
 
 
+class QueryHistoryResponse(BaseModel):
+    query_id: str
+    answer_id: str | None = None
+    collection_id: str
+    query: str
+    answer: str | None = None
+    route_mode: str
+    intent: str
+    language: str
+    verdict: str | None = None
+    grounding_score: float | None = None
+    created_at: datetime
+    citations_count: int = 0
+
+
 class CitationResponse(BaseModel):
     id: str
     answer_id: str
@@ -133,6 +155,81 @@ class AnswerResponse(BaseModel):
     grounding_score: float
     citations: list[CitationResponse]
     evidence: list[QueryHitResponse]
+
+
+class EvaluationRunRequest(BaseModel):
+    collection_id: str
+    dataset_name: str = "baseline"
+
+
+class EvaluationCaseResponse(BaseModel):
+    id: str
+    category: str
+    question: str
+    expected_answer: str
+    expected_keywords: list[str]
+    route_mode: str
+    retrieval_metrics: dict[str, float]
+    answer_metrics: dict[str, float]
+    retrieved: list[dict[str, str | float]]
+    answer_id: str | None = None
+
+
+class EvaluationRunResponse(BaseModel):
+    id: str
+    dataset_name: str
+    collection_id: str
+    retrieval_recall_at_k: float
+    retrieval_mrr: float
+    retrieval_ndcg: float
+    answer_grounding_score: float
+    answer_relevance_score: float
+    regression_delta: dict[str, float]
+    summary: dict[str, float | int | str]
+    created_at: datetime
+
+    @classmethod
+    def from_run(cls, run) -> "EvaluationRunResponse":
+        return cls(
+            id=run.id,
+            dataset_name=run.dataset_name,
+            collection_id=run.collection_id,
+            retrieval_recall_at_k=run.retrieval_recall_at_k,
+            retrieval_mrr=run.retrieval_mrr,
+            retrieval_ndcg=run.retrieval_ndcg,
+            answer_grounding_score=run.answer_grounding_score,
+            answer_relevance_score=run.answer_relevance_score,
+            regression_delta=run.regression_delta,
+            summary=run.summary,
+            created_at=run.created_at,
+        )
+
+
+class EvaluationReportResponse(EvaluationRunResponse):
+    previous_run_id: str | None = None
+    cases: list[EvaluationCaseResponse]
+
+    @classmethod
+    def from_report(cls, report) -> "EvaluationReportResponse":
+        return cls(
+            **EvaluationRunResponse.from_run(report.run).model_dump(),
+            previous_run_id=report.previous_run_id,
+            cases=[
+                EvaluationCaseResponse(
+                    id=case.id,
+                    category=case.category,
+                    question=case.question,
+                    expected_answer=case.expected_answer,
+                    expected_keywords=case.expected_keywords,
+                    route_mode=case.route_mode,
+                    retrieval_metrics=case.retrieval_metrics,
+                    answer_metrics=case.answer_metrics,
+                    retrieved=case.retrieved,
+                    answer_id=case.answer_id,
+                )
+                for case in report.cases
+            ],
+        )
 
 
 # --- Common ---

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from atenex_nova.application.services.document_service import DocumentService
+from atenex_nova.application.services.rebuild_service import RebuildService
 from atenex_nova.dependencies import get_blob_store, get_document_service
 from atenex_nova.domain.entities.collection import Collection
 from atenex_nova.domain.value_objects.identifiers import new_id
@@ -14,6 +15,7 @@ from atenex_nova.presentation.api.dto.schemas import (
     CollectionResponse,
     CreateCollectionRequest,
     DocumentResponse,
+    ImportLocalDocumentRequest,
     UpdateCollectionRequest,
 )
 
@@ -89,6 +91,44 @@ async def delete_collection(
         raise HTTPException(status_code=404, detail="Collection not found")
 
 
+@router.get("/{collection_id}/documents", response_model=list[DocumentResponse])
+async def list_collection_documents(
+    collection_id: str,
+    doc_service: DocumentService = Depends(get_document_service),
+) -> list[DocumentResponse]:
+    items = await doc_service.list_by_collection(collection_id)
+    return [
+        DocumentResponse(
+            id=item.id,
+            collection_id=item.collection_id,
+            title=item.title,
+            mime_type=item.mime_type,
+            source_path=item.source_path,
+            status=item.status.value,
+            language=item.language,
+            version=item.version,
+            error_message=item.error_message,
+            created_at=item.created_at,
+            updated_at=item.updated_at,
+        )
+        for item in items
+    ]
+
+
+@router.post("/{collection_id}/rebuild")
+async def rebuild_collection(
+    collection_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, str]:
+    service = RebuildService(session)
+    try:
+        job_id = await service.enqueue(collection_id)
+        await session.commit()
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"job_id": job_id, "status": "queued"}
+
+
 @router.post("/{collection_id}/documents", response_model=DocumentResponse, status_code=201)
 async def upload_document(
     collection_id: str,
@@ -116,6 +156,34 @@ async def upload_document(
         collection_id=doc.collection_id,
         title=doc.title,
         mime_type=doc.mime_type,
+        source_path=doc.source_path,
+        status=doc.status.value,
+        language=doc.language,
+        version=doc.version,
+        error_message=doc.error_message,
+        created_at=doc.created_at,
+        updated_at=doc.updated_at,
+    )
+
+
+@router.post("/{collection_id}/documents/import", response_model=DocumentResponse, status_code=201)
+async def import_local_document(
+    collection_id: str,
+    body: ImportLocalDocumentRequest,
+    doc_service: DocumentService = Depends(get_document_service),
+) -> DocumentResponse:
+    doc = await doc_service.register_local(
+        collection_id=collection_id,
+        source_path=body.source_path,
+        title=body.title,
+        mime_type=body.mime_type,
+    )
+    return DocumentResponse(
+        id=doc.id,
+        collection_id=doc.collection_id,
+        title=doc.title,
+        mime_type=doc.mime_type,
+        source_path=doc.source_path,
         status=doc.status.value,
         language=doc.language,
         version=doc.version,

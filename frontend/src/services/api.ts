@@ -2,17 +2,21 @@
 import type {
   AnswerRequest,
   AnswerResponse,
+  CollectionRebuildResponse,
   Collection,
   CreateCollectionRequest,
   Document,
   DocumentNode,
+  EvaluationRunRequest,
+  EvaluationRunResponse,
   HealthStatus,
   Job,
+  QueryHistoryResponse,
   QuerySearchRequest,
   QuerySearchResponse,
 } from '../types/api';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+export const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 class ApiClient {
   private base: string;
@@ -56,6 +60,17 @@ class ApiClient {
     if (!res.ok) throw new Error(`API error: ${res.status}`);
     return res.json();
   };
+  listCollectionDocuments = (collectionId: string) =>
+    this.request<Document[]>(`/collections/${collectionId}/documents`);
+  importLocalDocument = (collectionId: string, sourcePath: string, title?: string, mimeType?: string) =>
+    this.request<Document>(`/collections/${collectionId}/documents/import`, {
+      method: 'POST',
+      body: JSON.stringify({
+        source_path: sourcePath,
+        title,
+        mime_type: mimeType,
+      }),
+    });
   getDocument = (id: string) => this.request<Document>(`/documents/${id}`);
   getDocumentNodes = (id: string) => this.request<DocumentNode[]>(`/documents/${id}/nodes`);
 
@@ -75,6 +90,28 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify(data),
     });
+  getAnswer = (answerId: string) => this.request<AnswerResponse>(`/answers/${answerId}`);
+  listQueryHistory = (collectionId: string, limit = 20) =>
+    this.request<QueryHistoryResponse[]>(`/queries/history?collection_id=${encodeURIComponent(collectionId)}&limit=${limit}`);
+
+  exportAnswerMarkdown = (answerId: string) => `${this.base}/answers/${answerId}/export/markdown`;
+  exportAnswerPdf = (answerId: string) => `${this.base}/answers/${answerId}/export/pdf`;
+
+  /* Collections hardening */
+  rebuildCollection = (collectionId: string) =>
+    this.request<CollectionRebuildResponse>(`/collections/${collectionId}/rebuild`, {
+      method: 'POST',
+    });
+
+  /* Evaluation */
+  listEvaluationDatasets = () => this.request<string[]>('/evaluation/datasets');
+  runEvaluation = (data: EvaluationRunRequest) =>
+    this.request<EvaluationRunResponse>('/evaluation/runs', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  listEvaluationRuns = () => this.request<EvaluationRunResponse[]>('/evaluation/runs');
+  getEvaluationReport = (id: string) => this.request<EvaluationRunResponse>(`/evaluation/reports/${id}`);
 }
 
 export const api = new ApiClient(API_BASE);
