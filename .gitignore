@@ -94,8 +94,10 @@ models/
 blob_store/
 storage/uploads/
 storage/visual_pages/
+storage/observability/
 backend/storage/uploads/
 backend/storage/visual_pages/
+backend/storage/observability/
 
 # ---------------------------------------------------------------------------
 # Database files
@@ -148,3 +150,4 @@ dmypy.json
 *.tmp
 *.temp
 scratch/
+tmp-audit-debug/

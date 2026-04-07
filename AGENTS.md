@@ -1,6 +1,6 @@
 # AGENTS.md — Atenex Nova
 
-> **Ultima actualizacion:** 2026-04-06
+> **Ultima actualizacion:** 2026-04-07
 > **Estado actual:** Fases 0-9 implementadas en el repo y validadas con tests/build.
 > **Fuente de verdad del producto:** `docs/baseline.md` + `docs/plan.md` + codigo actual.
 
@@ -258,6 +258,51 @@ Los estados del documento se van marcando de forma explicita en el pipeline:
 - `indexed`
 - `ready`
 - `failed`
+
+### Trazabilidad y observabilidad actual
+
+El flujo unico de subida converge en dos caminos de entrada, pero comparte el mismo pipeline de background una vez registrado el documento:
+
+```mermaid
+flowchart TD
+	A[Subida por archivo] --> B[POST /collections/{collection_id}/documents]
+	C[Importacion por ruta local] --> D[POST /collections/{collection_id}/documents/import]
+	B --> E[DocumentService.register + BlobStore.store]
+	D --> F[DocumentService.register_local]
+	E --> G[Documento registrado]
+	F --> G
+	G --> H[Job parse_document]
+	H --> I[Job normalize_document]
+	I --> J[Job segment_document]
+	J --> K[Job embed_document]
+	K --> L[extract_propositions]
+	L --> M[generate_summaries]
+	M --> N[build_graph]
+	N --> O[embed_summaries]
+	O --> P[index_visual_pages]
+	P --> Q[ready o failed]
+```
+
+```mermaid
+flowchart TD
+	A[PipelineAuditService.step(...)] --> B[(pipeline_audit_events)]
+	B --> C[GET /observability/audit]
+	D[GET /jobs] --> E[estado, error, reintentos]
+	F[GET /documents/{id}] --> G[status, error_message, source_path]
+	H[Frontend Colecciones] --> C
+	H --> F
+	I[Frontend Tareas] --> D
+	J[Logs del backend] --> K[audit pipeline=... stage=...]
+```
+
+Donde mirar los detalles cuando algo falla:
+
+- Vista de colecciones: estado, error persistido y trail del documento seleccionado.
+- Vista de tareas: jobs, reintentos y `error` persistido de cada job.
+- API de observabilidad: `GET /observability/audit?entity_type=document&entity_id=<doc_id>`.
+- Paquete de evidencia para IA: `GET /observability/documents/<doc_id>/evidence` devuelve documento, jobs y auditoría en un solo JSON copiable.
+- API de documento: `GET /documents/{document_id}` devuelve `error_message` y `status`.
+- Logs del backend: stdout/stderr del servidor FastAPI y del worker, con entradas `audit pipeline=...`.
 
 ---
 

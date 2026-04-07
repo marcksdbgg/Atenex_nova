@@ -6,6 +6,7 @@ from atenex_nova.domain.entities.job import Job
 from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocumentRepository
 from atenex_nova.infrastructure.db.repositories.sql_node_repo import SqlDocumentNodeRepository
 from atenex_nova.infrastructure.parsing.docling_adapter import DoclingParserAdapter
+from atenex_nova.shared.observability.pipeline_audit import PipelineAuditService
 from atenex_nova.workers.runner import BaseJobHandler
 
 logger = logging.getLogger(__name__)
@@ -24,22 +25,24 @@ class ParseDocumentJobHandler(BaseJobHandler):
             if not doc:
                 raise ValueError(f"Document {document_id} not found")
 
-            # We could define a 'processing' state, but for now we just parse.
-            # doc.parse()  # Transition status to processing
-            await session.commit()
+            audit = PipelineAuditService(session=session)
 
             try:
-                # 1. Parse with Docling
-                parser = DoclingParserAdapter()
-                nodes = await parser.parse(doc.source_path, document_id)
-
-                # 2. Save Nodes
-                node_repo = SqlDocumentNodeRepository(session)
-                await node_repo.create_many(nodes)
-
-                # 3. Update doc state
-                doc.mark_parsed()
-                await doc_repo.update(doc)
+                async with audit.step(
+                    run_id=job.id,
+                    entity_type="document",
+                    entity_id=document_id,
+                    pipeline="ingestion",
+                    stage="parse",
+                    context={"source_path": doc.source_path, "mime_type": doc.mime_type},
+                ) as step:
+                    parser = DoclingParserAdapter()
+                    nodes = await parser.parse(doc.source_path, document_id)
+                    node_repo = SqlDocumentNodeRepository(session)
+                    await node_repo.create_many(nodes)
+                    doc.mark_parsed()
+                    await doc_repo.update(doc)
+                    step.metrics(nodes_extracted=len(nodes), parser="docling" if parser.converter and parser.chunker else "fallback")
 
                 # 4. Enqueue Normalize Job
                 from atenex_nova.domain.entities.job import Job
@@ -51,7 +54,6 @@ class ParseDocumentJobHandler(BaseJobHandler):
                 await job_repo.create(next_job)
 
                 await session.commit()
-
 
                 return {"nodes_extracted": len(nodes)}
             except Exception as e:
@@ -78,36 +80,33 @@ class NormalizeDocumentJobHandler(BaseJobHandler):
 
             nodes = await node_repo.get_by_document(document_id)
 
-            # Simple normalization: trim whitespace, basic language guess (optional)
-            for node in nodes:
-                node.normalized_text = " ".join(node.raw_text.split())
+            audit = PipelineAuditService(session=session)
+            async with audit.step(
+                run_id=job.id,
+                entity_type="document",
+                entity_id=document_id,
+                pipeline="ingestion",
+                stage="normalize",
+                context={"node_count": len(nodes)},
+            ) as step:
+                # Simple normalization: trim whitespace, basic language guess (optional)
+                for node in nodes:
+                    node.normalized_text = " ".join(node.raw_text.split())
 
-            # Update all nodes... (a proper repo method or just bulk update)
-            # Since create_many might fail on PK violation if they exist,
-            # In SQLAlchemy, you can just merge them or since we got them from session,
-            # modifying them might not track if we mapped to pure entities.
-            # Wait, `get_by_document` returns pure `DocumentNode` entities.
-            # We would need a `update_many` in the repo.
+                from sqlalchemy import select
 
-            # For brevity:
-            for node in nodes:
-                # We should have an update in repo
-                pass
+                from atenex_nova.infrastructure.db.models.tables import DocumentNodeModel
 
-            # Let's just do it raw via models:
-            from sqlalchemy import select
+                stmt = select(DocumentNodeModel).where(DocumentNodeModel.document_id == document_id)
+                result = await session.execute(stmt)
+                models = result.scalars().all()
+                for m in models:
+                    m.normalized_text = " ".join(m.raw_text.split())
+                    session.add(m)
 
-            from atenex_nova.infrastructure.db.models.tables import DocumentNodeModel
-
-            stmt = select(DocumentNodeModel).where(DocumentNodeModel.document_id == document_id)
-            result = await session.execute(stmt)
-            models = result.scalars().all()
-            for m in models:
-                m.normalized_text = " ".join(m.raw_text.split())
-                session.add(m)
-
-            doc.mark_normalized()
-            await doc_repo.update(doc)
+                doc.mark_normalized()
+                await doc_repo.update(doc)
+                step.metrics(nodes_normalized=len(models))
 
             # Enqueue Segment Job
             from atenex_nova.domain.entities.job import Job
@@ -119,4 +118,4 @@ class NormalizeDocumentJobHandler(BaseJobHandler):
             await job_repo.create(next_job)
 
             await session.commit()
-            return {"nodes_normalized": len(models)}
+            return {"nodes_normalized": len(nodes)}

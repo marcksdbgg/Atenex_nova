@@ -50,6 +50,15 @@ class SqlJobRepository:
         r = await self._session.execute(stmt)
         return [self._to_entity(m) for m in r.scalars().all()]
 
+    async def list_by_target(self, target_id: str, limit: int = 50) -> list[Job]:
+        r = await self._session.execute(
+            select(JobModel)
+            .where(JobModel.target_id == target_id)
+            .order_by(JobModel.created_at.desc())
+            .limit(limit)
+        )
+        return [self._to_entity(m) for m in r.scalars().all()]
+
     async def update(self, job: Job) -> Job:
         r = await self._session.execute(select(JobModel).where(JobModel.id == job.id))
         model = r.scalar_one_or_none()

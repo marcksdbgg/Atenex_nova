@@ -17,6 +17,7 @@ from atenex_nova.infrastructure.db.repositories.sql_proposition_repo import SqlP
 from atenex_nova.infrastructure.db.repositories.sql_summary_repo import SqlSummaryRepository
 from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
 from atenex_nova.infrastructure.graph.graph_store import GraphStore
+from atenex_nova.shared.observability.pipeline_audit import PipelineAuditService
 from atenex_nova.workers.runner import BaseJobHandler
 
 
@@ -69,37 +70,47 @@ class ExtractPropositionsJobHandler(BaseJobHandler):
             chunk_repo = SqlChunkRepository(session)
             proposition_repo = SqlPropositionRepository(session)
             job_repo = SqlJobRepository(session)
+            audit = PipelineAuditService(session=session)
 
             document = await doc_repo.get_by_id(document_id)
             if document is None:
                 raise ValueError(f"Document {document_id} not found")
 
             chunks = await chunk_repo.get_by_document(document_id)
-            propositions: list[Proposition] = []
-            for chunk in chunks:
-                for sentence in split_sentences(chunk.text or chunk.summary):
-                    propositions.append(
+            async with audit.step(
+                run_id=job.id,
+                entity_type="document",
+                entity_id=document_id,
+                pipeline="memory_enrichment",
+                stage="extract_propositions",
+                context={"chunk_count": len(chunks)},
+            ) as step:
+                propositions: list[Proposition] = []
+                for chunk in chunks:
+                    for sentence in split_sentences(chunk.text or chunk.summary):
+                        propositions.append(
+                            Proposition(
+                                id=new_id(),
+                                document_id=document_id,
+                                source_chunk_id=chunk.id,
+                                text=sentence,
+                                kind=classify_proposition(sentence),
+                            )
+                        )
+
+                if not propositions:
+                    propositions = [
                         Proposition(
                             id=new_id(),
                             document_id=document_id,
-                            source_chunk_id=chunk.id,
-                            text=sentence,
-                            kind=classify_proposition(sentence),
+                            source_chunk_id=chunks[0].id if chunks else document_id,
+                            text=document.title,
+                            kind="fact",
                         )
-                    )
+                    ]
 
-            if not propositions:
-                propositions = [
-                    Proposition(
-                        id=new_id(),
-                        document_id=document_id,
-                        source_chunk_id=chunks[0].id if chunks else document_id,
-                        text=document.title,
-                        kind="fact",
-                    )
-                ]
-
-            await proposition_repo.create_many(propositions)
+                await proposition_repo.create_many(propositions)
+                step.metrics(propositions_created=len(propositions), proposition_types=sorted({prop.kind for prop in propositions}))
 
             for job_type in (
                 JobType.EMBED_PROPOSITIONS,
@@ -121,6 +132,7 @@ class EmbedPropositionsJobHandler(BaseJobHandler):
         async with self.session_factory() as session:
             doc_repo = SqlDocumentRepository(session)
             proposition_repo = SqlPropositionRepository(session)
+            audit = PipelineAuditService(session=session)
 
             document = await doc_repo.get_by_id(document_id)
             if document is None:
@@ -130,34 +142,51 @@ class EmbedPropositionsJobHandler(BaseJobHandler):
             if not propositions:
                 return {"embedded_propositions": 0}
 
-            embedder = EmbeddingGemmaAdapter(dim=384)
-            vectors = await embedder.embed([prop.text for prop in propositions])
-            qdrant = None
-            try:
-                from atenex_nova.infrastructure.qdrant.qdrant_adapter import QdrantAdapter, QdrantDocument
-
-                qdrant = QdrantAdapter(host="localhost", port=6333)
-                collection_name = f"collection_{document.collection_id}_propositions"
-                await qdrant.init_collection(collection_name, 384)
-                await qdrant.upsert(
-                    collection_name,
-                    [
-                        QdrantDocument(
-                            id=prop.id,
-                            vector=vector,
-                            payload={
-                                "document_id": prop.document_id,
-                                "collection_id": document.collection_id,
-                                "proposition_id": prop.id,
-                                "text": prop.text,
-                                "kind": prop.kind,
-                            },
-                        )
-                        for prop, vector in zip(propositions, vectors, strict=False)
-                    ],
-                )
-            except Exception:
+            async with audit.step(
+                run_id=job.id,
+                entity_type="document",
+                entity_id=document_id,
+                pipeline="memory_enrichment",
+                stage="embed_propositions",
+                context={"proposition_count": len(propositions)},
+            ) as step:
+                embedder = EmbeddingGemmaAdapter(dim=384)
+                vectors = await embedder.embed([prop.text for prop in propositions])
                 qdrant = None
+                try:
+                    from atenex_nova.infrastructure.qdrant.qdrant_adapter import QdrantAdapter, QdrantDocument
+
+                    qdrant = QdrantAdapter(host="localhost", port=6333)
+                    collection_name = f"collection_{document.collection_id}_propositions"
+                    await qdrant.init_collection(collection_name, embedder.embedding_dim)
+                    await qdrant.upsert(
+                        collection_name,
+                        [
+                            QdrantDocument(
+                                id=prop.id,
+                                vector=vector,
+                                payload={
+                                    "document_id": prop.document_id,
+                                    "collection_id": document.collection_id,
+                                    "proposition_id": prop.id,
+                                    "text": prop.text,
+                                    "kind": prop.kind,
+                                },
+                            )
+                            for prop, vector in zip(propositions, vectors, strict=False)
+                        ],
+                    )
+                except Exception:
+                    qdrant = None
+
+                step.metrics(
+                    embedded_propositions=len(propositions),
+                    embedding_dim=embedder.embedding_dim,
+                    fallback_embeddings=embedder.uses_fallback,
+                    qdrant_available=bool(qdrant and qdrant.is_available),
+                )
+
+            await session.commit()
 
             if qdrant is None:
                 return {"embedded_propositions": len(propositions), "qdrant": "unavailable"}
@@ -177,6 +206,7 @@ class GenerateSummariesJobHandler(BaseJobHandler):
             proposition_repo = SqlPropositionRepository(session)
             summary_repo = SqlSummaryRepository(session)
             job_repo = SqlJobRepository(session)
+            audit = PipelineAuditService(session=session)
 
             document = await doc_repo.get_by_id(document_id)
             if document is None:
@@ -185,33 +215,42 @@ class GenerateSummariesJobHandler(BaseJobHandler):
             chunks = await chunk_repo.get_by_document(document_id)
             propositions = await proposition_repo.list_by_document(document_id)
 
-            section_summaries: list[SummaryNode] = []
-            for chunk in chunks:
-                section_summaries.append(
-                    SummaryNode(
-                        id=new_id(),
-                        scope_type="section",
-                        scope_id=chunk.id,
-                        text=summarize_texts([chunk.summary or chunk.text]),
+            async with audit.step(
+                run_id=job.id,
+                entity_type="document",
+                entity_id=document_id,
+                pipeline="memory_enrichment",
+                stage="generate_summaries",
+                context={"chunk_count": len(chunks), "proposition_count": len(propositions)},
+            ) as step:
+                section_summaries: list[SummaryNode] = []
+                for chunk in chunks:
+                    section_summaries.append(
+                        SummaryNode(
+                            id=new_id(),
+                            scope_type="section",
+                            scope_id=chunk.id,
+                            text=summarize_texts([chunk.summary or chunk.text]),
+                        )
                     )
+
+                document_summary = SummaryNode(
+                    id=new_id(),
+                    scope_type="document",
+                    scope_id=document.id,
+                    text=summarize_texts([prop.text for prop in propositions] or [chunk.text for chunk in chunks]),
                 )
 
-            document_summary = SummaryNode(
-                id=new_id(),
-                scope_type="document",
-                scope_id=document.id,
-                text=summarize_texts([prop.text for prop in propositions] or [chunk.text for chunk in chunks]),
-            )
+                collection_summary = SummaryNode(
+                    id=new_id(),
+                    scope_type="collection",
+                    scope_id=document.collection_id,
+                    text=summarize_texts([document_summary.text] + [chunk.summary or chunk.text for chunk in chunks]),
+                )
 
-            collection_summary = SummaryNode(
-                id=new_id(),
-                scope_type="collection",
-                scope_id=document.collection_id,
-                text=summarize_texts([document_summary.text] + [chunk.summary or chunk.text for chunk in chunks]),
-            )
-
-            summaries = section_summaries + [document_summary, collection_summary]
-            await summary_repo.create_many(summaries)
+                summaries = section_summaries + [document_summary, collection_summary]
+                await summary_repo.create_many(summaries)
+                step.metrics(summaries_created=len(summaries), summary_scopes=[summary.scope_type for summary in summaries])
 
             await job_repo.create(Job(id=new_id(), job_type=JobType.EMBED_SUMMARIES, target_id=document_id))
             await session.commit()
@@ -228,6 +267,7 @@ class EmbedSummariesJobHandler(BaseJobHandler):
             doc_repo = SqlDocumentRepository(session)
             summary_repo = SqlSummaryRepository(session)
             chunk_repo = SqlChunkRepository(session)
+            audit = PipelineAuditService(session=session)
 
             document = await doc_repo.get_by_id(document_id)
             if document is None:
@@ -240,32 +280,53 @@ class EmbedSummariesJobHandler(BaseJobHandler):
             if not summaries:
                 return {"embedded_summaries": 0}
 
-            embedder = EmbeddingGemmaAdapter(dim=384)
-            vectors = await embedder.embed([summary.text for summary in summaries])
+            async with audit.step(
+                run_id=job.id,
+                entity_type="document",
+                entity_id=document_id,
+                pipeline="memory_enrichment",
+                stage="embed_summaries",
+                context={"summary_count": len(summaries)},
+            ) as step:
+                embedder = EmbeddingGemmaAdapter(dim=384)
+                vectors = await embedder.embed([summary.text for summary in summaries])
+                qdrant_unavailable = False
 
-            try:
-                from atenex_nova.infrastructure.qdrant.qdrant_adapter import QdrantAdapter, QdrantDocument
+                try:
+                    from atenex_nova.infrastructure.qdrant.qdrant_adapter import QdrantAdapter, QdrantDocument
 
-                qdrant = QdrantAdapter(host="localhost", port=6333)
-                collection_name = f"collection_{document.collection_id}_summaries"
-                await qdrant.init_collection(collection_name, 384)
-                await qdrant.upsert(
-                    collection_name,
-                    [
-                        QdrantDocument(
-                            id=summary.id,
-                            vector=vector,
-                            payload={
-                                "scope_type": summary.scope_type,
-                                "scope_id": summary.scope_id,
-                                "collection_id": document.collection_id,
-                                "text": summary.text,
-                            },
-                        )
-                        for summary, vector in zip(summaries, vectors, strict=False)
-                    ],
-                )
-            except Exception:
+                    qdrant = QdrantAdapter(host="localhost", port=6333)
+                    collection_name = f"collection_{document.collection_id}_summaries"
+                    await qdrant.init_collection(collection_name, embedder.embedding_dim)
+                    await qdrant.upsert(
+                        collection_name,
+                        [
+                            QdrantDocument(
+                                id=summary.id,
+                                vector=vector,
+                                payload={
+                                    "scope_type": summary.scope_type,
+                                    "scope_id": summary.scope_id,
+                                    "collection_id": document.collection_id,
+                                    "text": summary.text,
+                                },
+                            )
+                            for summary, vector in zip(summaries, vectors, strict=False)
+                        ],
+                    )
+                except Exception:
+                    qdrant_unavailable = True
+                    step.metrics(embedded_summaries=len(summaries), qdrant_available=False)
+                else:
+                    step.metrics(
+                        embedded_summaries=len(summaries),
+                        embedding_dim=embedder.embedding_dim,
+                        fallback_embeddings=embedder.uses_fallback,
+                        qdrant_available=True,
+                    )
+
+            await session.commit()
+            if qdrant_unavailable:
                 return {"embedded_summaries": len(summaries), "qdrant": "unavailable"}
 
             return {"embedded_summaries": len(summaries)}
@@ -282,47 +343,58 @@ class BuildGraphJobHandler(BaseJobHandler):
             proposition_repo = SqlPropositionRepository(session)
             job_repo = SqlJobRepository(session)
             graph_store = GraphStore(session)
+            audit = PipelineAuditService(session=session)
 
             document = await doc_repo.get_by_id(document_id)
             if document is None:
                 raise ValueError(f"Document {document_id} not found")
 
             propositions = await proposition_repo.list_by_document(document_id)
-            edges: list[RelationEdge] = []
-            for proposition in propositions:
-                edges.append(
-                    RelationEdge(
-                        id=new_id(),
-                        source_type="proposition",
-                        source_id=proposition.id,
-                        target_type="document",
-                        target_id=document_id,
-                        relation=RelationType.APPEARS_IN.value,
-                        weight=1.0,
+            async with audit.step(
+                run_id=job.id,
+                entity_type="document",
+                entity_id=document_id,
+                pipeline="memory_enrichment",
+                stage="build_graph",
+                context={"proposition_count": len(propositions)},
+            ) as step:
+                edges: list[RelationEdge] = []
+                for proposition in propositions:
+                    edges.append(
+                        RelationEdge(
+                            id=new_id(),
+                            source_type="proposition",
+                            source_id=proposition.id,
+                            target_type="document",
+                            target_id=document_id,
+                            relation=RelationType.APPEARS_IN.value,
+                            weight=1.0,
+                        )
                     )
-                )
-            for left, right in zip(propositions, propositions[1:], strict=False):
-                relation = RelationType.ELABORATES.value
-                lower = f"{left.text} {right.text}".lower()
-                if any(marker in lower for marker in ("however", "but", "sin embargo")):
-                    relation = RelationType.CONTRADICTS.value
-                elif any(marker in lower for marker in ("means", "defines", "se define")):
-                    relation = RelationType.DEFINES.value
-                elif any(marker in lower for marker in ("because", "causes", "provoca")):
-                    relation = RelationType.SUPPORTS.value
-                edges.append(
-                    RelationEdge(
-                        id=new_id(),
-                        source_type="proposition",
-                        source_id=left.id,
-                        target_type="proposition",
-                        target_id=right.id,
-                        relation=relation,
-                        weight=0.8,
+                for left, right in zip(propositions, propositions[1:], strict=False):
+                    relation = RelationType.ELABORATES.value
+                    lower = f"{left.text} {right.text}".lower()
+                    if any(marker in lower for marker in ("however", "but", "sin embargo")):
+                        relation = RelationType.CONTRADICTS.value
+                    elif any(marker in lower for marker in ("means", "defines", "se define")):
+                        relation = RelationType.DEFINES.value
+                    elif any(marker in lower for marker in ("because", "causes", "provoca")):
+                        relation = RelationType.SUPPORTS.value
+                    edges.append(
+                        RelationEdge(
+                            id=new_id(),
+                            source_type="proposition",
+                            source_id=left.id,
+                            target_type="proposition",
+                            target_id=right.id,
+                            relation=relation,
+                            weight=0.8,
+                        )
                     )
-                )
 
-            await graph_store.upsert_edges(edges)
+                await graph_store.upsert_edges(edges)
+                step.metrics(graph_edges_created=len(edges), relation_types=sorted({edge.relation for edge in edges}))
+
             await job_repo.create(Job(id=new_id(), job_type=JobType.INDEX_VISUAL_PAGES, target_id=document_id))
             await session.commit()
             return {"graph_edges_created": len(edges)}

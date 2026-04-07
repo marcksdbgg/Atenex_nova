@@ -11,6 +11,7 @@ from atenex_nova.domain.value_objects.identifiers import new_id
 from atenex_nova.infrastructure.db.repositories.sql_collection_repo import SqlCollectionRepository
 from atenex_nova.infrastructure.db.session import get_session
 from atenex_nova.infrastructure.files.blob_store import BlobStore
+from atenex_nova.shared.observability.pipeline_audit import PipelineAuditService
 from atenex_nova.presentation.api.dto.schemas import (
     CollectionResponse,
     CreateCollectionRequest,
@@ -133,61 +134,81 @@ async def rebuild_collection(
 async def upload_document(
     collection_id: str,
     file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_session),
     doc_service: DocumentService = Depends(get_document_service),
     blob_store: BlobStore = Depends(get_blob_store),
 ) -> DocumentResponse:
-    data = await file.read()
-    checksum = BlobStore.compute_checksum(data)
-    doc_id = new_id()
+    audit = PipelineAuditService(session=session)
+    async with audit.step(
+        run_id=new_id(),
+        entity_type="collection",
+        entity_id=collection_id,
+        pipeline="ingestion",
+        stage="register_upload",
+        context={"filename": file.filename, "mime_type": file.content_type},
+    ) as step:
+        data = await file.read()
+        checksum = BlobStore.compute_checksum(data)
+        doc_id = new_id()
+        path = blob_store.store(collection_id, doc_id, file.filename or "unknown", data)
+        doc = await doc_service.register(
+            collection_id=collection_id,
+            title=file.filename or "unknown",
+            source_path=str(path),
+            mime_type=file.content_type or "application/octet-stream",
+            checksum=checksum,
+            doc_id=doc_id,
+        )
+        step.metrics(bytes=len(data), checksum=checksum, source_path=str(path), document_id=doc.id)
 
-    path = blob_store.store(collection_id, doc_id, file.filename or "unknown", data)
-
-    doc = await doc_service.register(
-        collection_id=collection_id,
-        title=file.filename or "unknown",
-        source_path=str(path),
-        mime_type=file.content_type or "application/octet-stream",
-        checksum=checksum,
-        doc_id=doc_id,
-    )
-
-    return DocumentResponse(
-        id=doc.id,
-        collection_id=doc.collection_id,
-        title=doc.title,
-        mime_type=doc.mime_type,
-        source_path=doc.source_path,
-        status=doc.status.value,
-        language=doc.language,
-        version=doc.version,
-        error_message=doc.error_message,
-        created_at=doc.created_at,
-        updated_at=doc.updated_at,
-    )
+        return DocumentResponse(
+            id=doc.id,
+            collection_id=doc.collection_id,
+            title=doc.title,
+            mime_type=doc.mime_type,
+            source_path=doc.source_path,
+            status=doc.status.value,
+            language=doc.language,
+            version=doc.version,
+            error_message=doc.error_message,
+            created_at=doc.created_at,
+            updated_at=doc.updated_at,
+        )
 
 
 @router.post("/{collection_id}/documents/import", response_model=DocumentResponse, status_code=201)
 async def import_local_document(
     collection_id: str,
     body: ImportLocalDocumentRequest,
+    session: AsyncSession = Depends(get_session),
     doc_service: DocumentService = Depends(get_document_service),
 ) -> DocumentResponse:
-    doc = await doc_service.register_local(
-        collection_id=collection_id,
-        source_path=body.source_path,
-        title=body.title,
-        mime_type=body.mime_type,
-    )
-    return DocumentResponse(
-        id=doc.id,
-        collection_id=doc.collection_id,
-        title=doc.title,
-        mime_type=doc.mime_type,
-        source_path=doc.source_path,
-        status=doc.status.value,
-        language=doc.language,
-        version=doc.version,
-        error_message=doc.error_message,
-        created_at=doc.created_at,
-        updated_at=doc.updated_at,
-    )
+    audit = PipelineAuditService(session=session)
+    async with audit.step(
+        run_id=new_id(),
+        entity_type="collection",
+        entity_id=collection_id,
+        pipeline="ingestion",
+        stage="register_local",
+        context={"source_path": body.source_path, "title": body.title, "mime_type": body.mime_type},
+    ) as step:
+        doc = await doc_service.register_local(
+            collection_id=collection_id,
+            source_path=body.source_path,
+            title=body.title,
+            mime_type=body.mime_type,
+        )
+        step.metrics(source_path=doc.source_path, checksum=doc.checksum, document_id=doc.id)
+        return DocumentResponse(
+            id=doc.id,
+            collection_id=doc.collection_id,
+            title=doc.title,
+            mime_type=doc.mime_type,
+            source_path=doc.source_path,
+            status=doc.status.value,
+            language=doc.language,
+            version=doc.version,
+            error_message=doc.error_message,
+            created_at=doc.created_at,
+            updated_at=doc.updated_at,
+        )

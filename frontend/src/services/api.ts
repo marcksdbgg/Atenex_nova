@@ -7,10 +7,12 @@ import type {
   CreateCollectionRequest,
   Document,
   DocumentNode,
+  DocumentEvidenceResponse,
   EvaluationRunRequest,
   EvaluationRunResponse,
   HealthStatus,
   Job,
+  PipelineAuditEntry,
   QueryHistoryResponse,
   QuerySearchRequest,
   QuerySearchResponse,
@@ -77,6 +79,19 @@ class ApiClient {
   /* Jobs */
   listJobs = () => this.request<Job[]>('/jobs');
   getJob = (id: string) => this.request<Job>(`/jobs/${id}`);
+
+  /* Observability */
+  listPipelineAudit = (params: { entityType?: string; entityId?: string; runId?: string; limit?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (params.entityType) query.set('entity_type', params.entityType);
+    if (params.entityId) query.set('entity_id', params.entityId);
+    if (params.runId) query.set('run_id', params.runId);
+    if (params.limit) query.set('limit', String(params.limit));
+    const suffix = query.toString() ? `?${query.toString()}` : '';
+    return this.request<PipelineAuditEntry[]>(`/observability/audit${suffix}`);
+  };
+  getDocumentEvidence = (documentId: string) =>
+    this.request<DocumentEvidenceResponse>(`/observability/documents/${documentId}/evidence`);
 
   /* Queries */
   searchQuery = (data: QuerySearchRequest) =>

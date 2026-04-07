@@ -248,3 +248,26 @@ class ErrorResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     version: str = "0.1.0"
+
+
+class PipelineAuditResponse(BaseModel):
+    id: str
+    run_id: str
+    entity_type: str
+    entity_id: str
+    pipeline: str
+    stage: str
+    status: str
+    started_at: datetime
+    completed_at: datetime | None = None
+    duration_ms: float | None = None
+    metrics: dict[str, object]
+    context: dict[str, object]
+
+
+class DocumentEvidenceResponse(BaseModel):
+    entity_type: str = "document"
+    entity_id: str
+    document: DocumentResponse
+    jobs: list[JobResponse] = Field(default_factory=list)
+    audit_events: list[PipelineAuditResponse] = Field(default_factory=list)

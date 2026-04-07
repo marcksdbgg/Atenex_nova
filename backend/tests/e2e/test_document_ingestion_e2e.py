@@ -208,9 +208,28 @@ async def test_end_to_end_upload_ingestion_reaches_queryable_state(e2e_env, tmp_
 
             await _run_jobs_to_completion(session_factory)
 
+            audit_response = await client.get(
+                "/observability/audit",
+                params={"entity_type": "document", "entity_id": document["id"]},
+            )
+            assert audit_response.status_code == 200
+            audit_events = audit_response.json()
+            stages = {event["stage"] for event in audit_events}
+            assert {"parse", "normalize", "segment", "embed_index", "index_visual_pages"}.issubset(stages)
+            assert all("duration_ms" in event for event in audit_events)
+
             query_result = await _search(client, collection_id, "What does EmbeddingGemma support?")
             assert query_result["total_hits"] > 0
             assert any("EmbeddingGemma" in hit["snippet"] for hit in query_result["hits"])
+
+            query_audit = await client.get(
+                "/observability/audit",
+                params={"entity_type": "query", "entity_id": query_result["query_id"]},
+            )
+            assert query_audit.status_code == 200
+            query_events = query_audit.json()
+            assert any(event["stage"] == "search" for event in query_events)
+            assert any(event["stage"] == "score_chunks" for event in query_events)
 
     async with session_factory() as session:
         document_repo = SqlDocumentRepository(session)
@@ -272,12 +291,82 @@ async def test_end_to_end_local_path_import_keeps_original_file_reference(e2e_en
 
             await _run_jobs_to_completion(session_factory)
 
+            audit_response = await client.get(
+                "/observability/audit",
+                params={"entity_type": "document", "entity_id": document["id"]},
+            )
+            assert audit_response.status_code == 200
+            audit_events = audit_response.json()
+            assert {"parse", "normalize", "segment", "embed_index", "index_visual_pages"}.issubset(
+                {event["stage"] for event in audit_events}
+            )
+
             query_result = await _search(client, collection_id, "What does EmbeddingGemma support?")
             assert query_result["total_hits"] > 0
             assert any("EmbeddingGemma" in hit["snippet"] for hit in query_result["hits"])
+
+            query_audit = await client.get(
+                "/observability/audit",
+                params={"entity_type": "query", "entity_id": query_result["query_id"]},
+            )
+            assert query_audit.status_code == 200
+            query_events = query_audit.json()
+            assert any(event["stage"] == "search" for event in query_events)
 
     async with session_factory() as session:
         document_repo = SqlDocumentRepository(session)
         docs = await document_repo.list_by_collection(collection_id)
         assert docs and docs[0].source_path == str(source_file.resolve())
         assert docs[0].status.value == "ready"
+
+
+@pytest.mark.asyncio
+async def test_end_to_end_parse_failure_surfaces_error_message_and_failed_audit(e2e_env, tmp_path: Path) -> None:
+    session_factory = e2e_env["session_factory"]
+
+    source_file = tmp_path / "broken-source.txt"
+    source_file.write_text("This document will fail during parsing.", encoding="utf-8")
+
+    async def failing_parse(self, file_path: str, document_id: str) -> list[DocumentNode]:
+        raise RuntimeError("docling exploded")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(DoclingParserAdapter, "parse", failing_parse, raising=True)
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            collection_id = await _create_collection(client, "Failure E2E")
+            with source_file.open("rb") as handle:
+                response = await client.post(
+                    f"/collections/{collection_id}/documents",
+                    files={"file": (source_file.name, handle, "text/plain")},
+                )
+
+            assert response.status_code == 201
+            document = response.json()
+
+            with pytest.raises(RuntimeError, match="docling exploded"):
+                await _run_jobs_to_completion(session_factory)
+
+            document_response = await client.get(f"/documents/{document['id']}")
+            assert document_response.status_code == 200
+            persisted_document = document_response.json()
+            assert persisted_document["status"] == "failed"
+            assert "docling exploded" in (persisted_document["error_message"] or "")
+
+            audit_response = await client.get(
+                "/observability/audit",
+                params={"entity_type": "document", "entity_id": document["id"]},
+            )
+            assert audit_response.status_code == 200
+            audit_events = audit_response.json()
+            parse_event = next(event for event in audit_events if event["stage"] == "parse")
+            assert parse_event["status"] == "failed"
+            assert "docling exploded" in parse_event["metrics"]["error"]
+
+            evidence_response = await client.get(f"/observability/documents/{document['id']}/evidence")
+            assert evidence_response.status_code == 200
+            evidence = evidence_response.json()
+            assert evidence["document"]["error_message"] == "docling exploded"
+            assert evidence["jobs"]
+            assert any(job["error"] and "docling exploded" in job["error"] for job in evidence["jobs"])
+            assert any(event["status"] == "failed" for event in evidence["audit_events"])

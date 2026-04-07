@@ -18,6 +18,7 @@ from atenex_nova.domain.entities.citation import Citation
 from atenex_nova.infrastructure.db.repositories.sql_answer_repo import SqlAnswerRepository
 from atenex_nova.infrastructure.db.repositories.sql_citation_repo import SqlCitationRepository
 from atenex_nova.infrastructure.db.repositories.sql_query_repo import SqlQueryRepository
+from atenex_nova.shared.observability.pipeline_audit import PipelineAuditService
 
 
 @dataclass(slots=True)
@@ -42,17 +43,37 @@ class AnswerService:
         self._citation_repo = SqlCitationRepository(session)
         self._query_repo = SqlQueryRepository(session)
         self._orchestrator = AnswerOrchestrator()
+        self._audit = PipelineAuditService(session=session)
 
     async def answer(self, collection_id: str, query: str, mode: str = "auto", generation_profile: str = "standard") -> AnswerBundle:
         search_result = await self._query_service.search_only(collection_id=collection_id, query=query, mode=mode)
-        bundle = await self._orchestrator.compose(search_result, generation_profile=generation_profile)
-        citations = normalize_citation_answer_ids(bundle.answer.id, bundle.citations)
-        await self._answer_repo.create(bundle.answer)
-        if citations:
-            await self._citation_repo.create_many(citations)
-        await self._session.commit()
-        bundle.citations = citations
-        return bundle
+        async with self._audit.step(
+            run_id=search_result.query.id,
+            entity_type="query",
+            entity_id=search_result.query.id,
+            pipeline="answering",
+            stage="compose_answer",
+            context={"query": query, "mode": mode, "generation_profile": generation_profile, "collection_id": collection_id},
+        ) as audit:
+            audit.metrics(
+                evidence_items=len(search_result.evidence_pack.items),
+                route_mode=search_result.query.route_mode,
+                intent=search_result.query.intent,
+            )
+            bundle = await self._orchestrator.compose(search_result, generation_profile=generation_profile)
+            citations = normalize_citation_answer_ids(bundle.answer.id, bundle.citations)
+            await self._answer_repo.create(bundle.answer)
+            if citations:
+                await self._citation_repo.create_many(citations)
+            await self._session.commit()
+            audit.metrics(
+                answer_id=bundle.answer.id,
+                citations=len(citations),
+                grounding_score=bundle.answer.grounding_score,
+                verdict=bundle.answer.verdict,
+            )
+            bundle.citations = citations
+            return bundle
 
     async def get_answer(self, answer_id: str) -> AnswerDetail | None:
         answer = await self._answer_repo.get_by_id(answer_id)
@@ -110,8 +131,8 @@ class AnswerService:
 
     def export_pdf(self, detail: AnswerDetail) -> bytes:
         try:
-            from reportlab.lib.pagesizes import A4
-            from reportlab.pdfgen import canvas
+            from reportlab.lib.pagesizes import A4  # type: ignore[import-not-found]
+            from reportlab.pdfgen import canvas  # type: ignore[import-not-found]
         except Exception:
             return self.export_markdown(detail).encode("utf-8")
 

@@ -12,6 +12,7 @@ from atenex_nova.infrastructure.embeddings.bm25_encoder import BM25SparseEncoder
 from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
 from atenex_nova.infrastructure.qdrant.qdrant_adapter import QdrantAdapter, QdrantDocument
 from atenex_nova.shared.config.settings import get_settings
+from atenex_nova.domain.value_objects.identifiers import new_id
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +99,8 @@ class ColPaliAdapter:
 
     def _normalize_page(self, collection_id: str, page: dict) -> VisualPage:
         page_number = int(page.get("page_number") or 1)
-        page_id = str(page.get("id") or f"{page.get('document_id', 'doc')}:{page_number}")
+        source_page_id = str(page.get("id") or f"{page.get('document_id', 'doc')}:{page_number}")
+        page_id = str(page.get("id") or new_id())
         text = str(page.get("text") or page.get("content") or "").strip()
         image_path = self._render_page_image(collection_id, page_id, page.get("title", "Visual page"), text)
         return VisualPage(
@@ -110,7 +112,7 @@ class ColPaliAdapter:
             text=text or str(page.get("title") or "Visual page"),
             is_complex=bool(page.get("is_complex", False)),
             image_path=str(image_path) if image_path else None,
-            metadata=page.get("metadata") or {},
+            metadata={**(page.get("metadata") or {}), "source_page_id": source_page_id},
         )
 
     def _render_page_image(self, collection_id: str, page_id: str, title: str, text: str) -> Path | None:

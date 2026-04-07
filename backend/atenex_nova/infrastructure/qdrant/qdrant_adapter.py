@@ -100,3 +100,7 @@ class QdrantAdapter(HybridIndex):
             {"id": str(res.id), "score": res.score, "payload": res.payload}
             for res in results
         ]
+
+    @property
+    def is_available(self) -> bool:
+        return self._available

@@ -57,3 +57,15 @@ class EmbeddingGemmaAdapter(Embedder):
             vector[index] += sign
         norm = sqrt(sum(value * value for value in vector)) or 1.0
         return [value / norm for value in vector]
+
+    @property
+    def uses_fallback(self) -> bool:
+        return self.model is None
+
+    @property
+    def model_name(self) -> str:
+        return self._model_name
+
+    @property
+    def embedding_dim(self) -> int:
+        return self._dim

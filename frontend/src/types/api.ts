@@ -70,6 +70,29 @@ export interface Job {
   completed_at?: string;
 }
 
+export interface PipelineAuditEntry {
+  id: string;
+  run_id: string;
+  entity_type: string;
+  entity_id: string;
+  pipeline: string;
+  stage: string;
+  status: string;
+  started_at: string;
+  completed_at?: string | null;
+  duration_ms?: number | null;
+  metrics: Record<string, unknown>;
+  context: Record<string, unknown>;
+}
+
+export interface DocumentEvidenceResponse {
+  entity_type: string;
+  entity_id: string;
+  document: Document;
+  jobs: Job[];
+  audit_events: PipelineAuditEntry[];
+}
+
 export interface QuerySearchRequest {
   collection_id: string;
   query: string;

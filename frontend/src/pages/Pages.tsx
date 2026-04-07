@@ -11,7 +11,9 @@ import type {
   Citation,
   Collection,
   Document,
+  DocumentEvidenceResponse,
   EvaluationRunResponse,
+  PipelineAuditEntry,
   QueryHit,
   QueryHistoryResponse,
   QuerySearchResponse,
@@ -85,6 +87,19 @@ function formatRelativeDate(value: string): string {
 
 function getDocumentPipeline(status: string) {
   return DOCUMENT_PIPELINE.find(step => step.key === status) ?? DOCUMENT_PIPELINE[0];
+}
+
+function formatAuditValue(value: unknown): string {
+  if (value === null || value === undefined) return '—';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return value.length === 0 ? '[]' : value.map(item => formatAuditValue(item)).join(', ');
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+function pickDocumentByPriority(documents: Document[]): Document | null {
+  return documents.find(document => document.status !== 'failed') ?? documents[0] ?? null;
 }
 
 function mapHistoryToTurn(item: QueryHistoryResponse): ChatTurn {
@@ -177,6 +192,11 @@ export function CollectionsPage() {
   const [uploadQueues, setUploadQueues] = useState<Record<string, UploadQueueItem[]>>({});
   const [localSourcePaths, setLocalSourcePaths] = useState<Record<string, string>>({});
   const [processingUploads, setProcessingUploads] = useState<Record<string, boolean>>({});
+  const [selectedTraceDocumentIds, setSelectedTraceDocumentIds] = useState<Record<string, string>>({});
+  const [auditEventsByDocument, setAuditEventsByDocument] = useState<Record<string, PipelineAuditEntry[]>>({});
+  const [auditLoadingByDocument, setAuditLoadingByDocument] = useState<Record<string, boolean>>({});
+  const [auditErrorByDocument, setAuditErrorByDocument] = useState<Record<string, string>>({});
+  const [evidenceLoadingByDocument, setEvidenceLoadingByDocument] = useState<Record<string, boolean>>({});
   const [busyCollectionId, setBusyCollectionId] = useState('');
   const [message, setMessage] = useState('');
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -200,6 +220,33 @@ export function CollectionsPage() {
   useEffect(() => {
     processingUploadsRef.current = processingUploads;
   }, [processingUploads]);
+
+  useEffect(() => {
+    setSelectedTraceDocumentIds(current => {
+      let changed = false;
+      const next = { ...current };
+
+      for (const collection of collections) {
+        const documents = documentsByCollection[collection.id] ?? [];
+        if (documents.length === 0) {
+          if (next[collection.id]) {
+            delete next[collection.id];
+            changed = true;
+          }
+          continue;
+        }
+
+        const selectedId = next[collection.id];
+        const selectedExists = selectedId ? documents.some(document => document.id === selectedId) : false;
+        if (!selectedExists) {
+          next[collection.id] = pickDocumentByPriority(documents)?.id ?? documents[0].id;
+          changed = true;
+        }
+      }
+
+      return changed ? next : current;
+    });
+  }, [collections, documentsByCollection]);
 
   useEffect(() => {
     let mounted = true;
@@ -319,6 +366,45 @@ export function CollectionsPage() {
     }
   };
 
+  const loadDocumentAudit = async (collectionId: string, document: Document) => {
+    if (auditLoadingByDocument[document.id]) return;
+
+    setSelectedTraceDocumentIds(current => ({ ...current, [collectionId]: document.id }));
+    setAuditLoadingByDocument(current => ({ ...current, [document.id]: true }));
+    setAuditErrorByDocument(current => {
+      const next = { ...current };
+      delete next[document.id];
+      return next;
+    });
+
+    try {
+      const events = await api.listPipelineAudit({ entityType: 'document', entityId: document.id, limit: 25 });
+      setAuditEventsByDocument(current => ({ ...current, [document.id]: events }));
+    } catch (error) {
+      setAuditErrorByDocument(current => ({
+        ...current,
+        [document.id]: error instanceof Error ? error.message : 'No se pudo cargar la auditoría.',
+      }));
+    } finally {
+      setAuditLoadingByDocument(current => ({ ...current, [document.id]: false }));
+    }
+  };
+
+  const copyDocumentEvidence = async (document: Document) => {
+    if (evidenceLoadingByDocument[document.id]) return;
+
+    setEvidenceLoadingByDocument(current => ({ ...current, [document.id]: true }));
+    try {
+      const evidence: DocumentEvidenceResponse = await api.getDocumentEvidence(document.id);
+      await navigator.clipboard.writeText(JSON.stringify(evidence, null, 2));
+      setMessage(`Evidencia JSON copiada para ${document.title}.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'No se pudo copiar la evidencia.');
+    } finally {
+      setEvidenceLoadingByDocument(current => ({ ...current, [document.id]: false }));
+    }
+  };
+
   const processCollectionQueue = async (collectionId: string, initialBatch: UploadQueueItem[] = []) => {
     if (processingUploadsRef.current[collectionId]) return;
 
@@ -419,6 +505,30 @@ export function CollectionsPage() {
     }
   };
 
+  useEffect(() => {
+    collections.forEach(collection => {
+      const documents = documentsByCollection[collection.id] ?? [];
+      if (documents.length === 0) return;
+
+      const selectedId = selectedTraceDocumentIds[collection.id];
+      const selectedDocument = documents.find(document => document.id === selectedId) ?? pickDocumentByPriority(documents);
+      if (!selectedDocument) return;
+
+      if (auditEventsByDocument[selectedDocument.id] || auditLoadingByDocument[selectedDocument.id] || auditErrorByDocument[selectedDocument.id]) {
+        return;
+      }
+
+      void loadDocumentAudit(collection.id, selectedDocument);
+    });
+  }, [
+    collections,
+    documentsByCollection,
+    selectedTraceDocumentIds,
+    auditEventsByDocument,
+    auditLoadingByDocument,
+    auditErrorByDocument,
+  ]);
+
   return (
     <div className="animate-fade-in-up">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-6)' }}>
@@ -494,6 +604,10 @@ export function CollectionsPage() {
             const queuedCount = collectionQueue.filter(item => item.status === 'queued').length;
             const runningCount = collectionQueue.filter(item => item.status === 'uploading').length;
             const errorCount = collectionQueue.filter(item => item.status === 'error').length;
+            const selectedTraceDocument = collectionDocuments.find(document => document.id === selectedTraceDocumentIds[collection.id]) ?? pickDocumentByPriority(collectionDocuments);
+            const selectedTraceAudit = selectedTraceDocument ? auditEventsByDocument[selectedTraceDocument.id] ?? [] : [];
+            const selectedTraceLoading = selectedTraceDocument ? auditLoadingByDocument[selectedTraceDocument.id] ?? false : false;
+            const selectedTraceError = selectedTraceDocument ? auditErrorByDocument[selectedTraceDocument.id] ?? '' : '';
 
             return (
             <article key={collection.id} className="card" style={{ display: 'grid', gap: 'var(--space-5)' }}>
@@ -681,8 +795,28 @@ export function CollectionsPage() {
                   <div style={{ display: 'grid', gap: 'var(--space-2)' }}>
                     {collectionDocuments.slice(0, MAX_VISIBLE_DOCUMENTS).map(document => {
                       const pipeline = getDocumentPipeline(document.status);
+                      const isSelected = selectedTraceDocument?.id === document.id;
                       return (
-                        <div key={document.id} className="document-row">
+                        <div
+                          key={document.id}
+                          className="document-row"
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => {
+                            void loadDocumentAudit(collection.id, document);
+                          }}
+                          onKeyDown={event => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault();
+                              void loadDocumentAudit(collection.id, document);
+                            }
+                          }}
+                          style={{
+                            cursor: 'pointer',
+                            borderColor: isSelected ? 'rgba(99,102,241,0.55)' : undefined,
+                            background: isSelected ? 'linear-gradient(180deg, rgba(99,102,241,0.08), rgba(15,20,31,0.92))' : undefined,
+                          }}
+                        >
                           <div className="document-row__top">
                             <div className="document-row__title-wrap">
                               <div className="document-row__title">{document.title}</div>
@@ -699,6 +833,11 @@ export function CollectionsPage() {
                             <span>{pipeline.detail}</span>
                             <span>{document.status}</span>
                           </div>
+                          {document.error_message ? (
+                            <p style={{ marginTop: 'var(--space-2)', color: 'var(--color-error)', fontSize: 'var(--font-sm)', lineHeight: 'var(--line-height-relaxed)' }}>
+                              {document.error_message}
+                            </p>
+                          ) : null}
                         </div>
                       );
                     })}
@@ -716,6 +855,87 @@ export function CollectionsPage() {
                         + {collectionDocuments.length - MAX_VISIBLE_DOCUMENTS} documentos más en esta colección.
                       </p>
                     ) : null}
+                  </div>
+
+                  <div className="card" style={{ background: 'var(--color-bg-primary)', borderColor: 'var(--color-border)', display: 'grid', gap: 'var(--space-4)' }}>
+                    <div className="card__header">
+                      <div>
+                        <div className="card__title">Trazabilidad avanzada</div>
+                        <p style={{ color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>Selecciona un documento para ver sus auditorías, métricas y errores persistidos.</p>
+                      </div>
+                      <span className="badge badge--accent">{selectedTraceDocument ? selectedTraceDocument.status : 'sin selección'}</span>
+                    </div>
+
+                    {selectedTraceDocument ? (
+                      <>
+                        <div className="card" style={{ background: 'rgba(10,14,23,0.96)', borderColor: 'var(--color-border)' }}>
+                          <div style={{ display: 'grid', gap: 'var(--space-2)' }}>
+                            <div style={{ fontWeight: 'var(--font-weight-semibold)' }}>{selectedTraceDocument.title}</div>
+                            <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-xs)' }}>
+                              {selectedTraceDocument.mime_type} · v{selectedTraceDocument.version} · {selectedTraceDocument.status}
+                            </div>
+                            {selectedTraceDocument.error_message ? (
+                              <div style={{ padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.35)', color: 'var(--color-error)', lineHeight: 'var(--line-height-relaxed)' }}>
+                                {selectedTraceDocument.error_message}
+                              </div>
+                            ) : (
+                              <p style={{ color: 'var(--color-text-tertiary)' }}>El documento no reporta error persistido. Revisa la auditoría si algo no cuadra.</p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
+                          <button className="btn btn-primary" type="button" onClick={() => void copyDocumentEvidence(selectedTraceDocument)} disabled={evidenceLoadingByDocument[selectedTraceDocument.id]}>
+                            {evidenceLoadingByDocument[selectedTraceDocument.id] ? 'Copiando...' : 'Copiar evidencia JSON'}
+                          </button>
+                          <span style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-xs)', alignSelf: 'center' }}>
+                            Incluye documento, jobs y auditoría para enviarlo a una IA o archivarlo.
+                          </span>
+                        </div>
+
+                        {selectedTraceLoading ? (
+                          <p style={{ color: 'var(--color-text-tertiary)' }}>Cargando auditoría del documento...</p>
+                        ) : selectedTraceError ? (
+                          <div style={{ padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.25)', color: 'var(--color-error)' }}>
+                            {selectedTraceError}
+                          </div>
+                        ) : selectedTraceAudit.length === 0 ? (
+                          <p style={{ color: 'var(--color-text-tertiary)' }}>Todavía no hay eventos de auditoría para este documento.</p>
+                        ) : (
+                          <div style={{ display: 'grid', gap: 'var(--space-3)' }}>
+                            {selectedTraceAudit.slice(0, 8).map(event => (
+                              <details key={event.id} className="card" style={{ background: 'rgba(10,14,23,0.96)', borderColor: 'var(--color-border)' }}>
+                                <summary style={{ cursor: 'pointer', listStyle: 'none', display: 'flex', justifyContent: 'space-between', gap: 'var(--space-3)', alignItems: 'center' }}>
+                                  <div style={{ display: 'grid', gap: 'var(--space-1)' }}>
+                                    <strong>{event.stage}</strong>
+                                    <span style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-xs)' }}>{event.pipeline} · {event.entity_type}/{event.entity_id}</span>
+                                  </div>
+                                  <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                    <span className={`badge badge--${event.status === 'failed' ? 'error' : event.status === 'succeeded' ? 'success' : 'warning'}`}>{event.status}</span>
+                                    <span className="badge badge--info">{event.duration_ms !== null && event.duration_ms !== undefined ? `${event.duration_ms.toFixed(1)} ms` : 'sin duración'}</span>
+                                  </div>
+                                </summary>
+                                <div style={{ display: 'grid', gap: 'var(--space-2)', marginTop: 'var(--space-3)' }}>
+                                  <div style={{ fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)' }}>Run: {event.run_id}</div>
+                                  <div style={{ fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)' }}>Inicio: {formatRelativeDate(event.started_at)}</div>
+                                  {event.completed_at ? <div style={{ fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)' }}>Fin: {formatRelativeDate(event.completed_at)}</div> : null}
+                                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap', background: 'rgba(255,255,255,0.03)', borderRadius: 'var(--radius-md)', padding: 'var(--space-3)', color: 'var(--color-text-secondary)', fontSize: 'var(--font-xs)', lineHeight: 'var(--line-height-relaxed)' }}>
+                                    métricas: {formatAuditValue(event.metrics)}
+{`\n`}contexto: {formatAuditValue(event.context)}
+                                  </pre>
+                                </div>
+                              </details>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div className="empty-state" style={{ padding: 'var(--space-6) var(--space-4)' }}>
+                        <div className="empty-state__icon">⌕</div>
+                        <div className="empty-state__title">Sin documento seleccionado</div>
+                        <p>Selecciona una fila para inspeccionar su trail de auditoría.</p>
+                      </div>
+                    )}
                   </div>
 
                   <button className="btn btn-secondary" type="button" onClick={() => refreshCollectionDocuments(collection.id)}>
@@ -1123,13 +1343,168 @@ export function QueryPage() {
 }
 
 export function JobsPage() {
+  const [jobs, setJobs] = useState<import('../types/api').Job[]>([]);
+  const [selectedJobId, setSelectedJobId] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const refreshJobs = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const items = await api.listJobs();
+      setJobs(items);
+      if (!selectedJobId && items[0]) {
+        setSelectedJobId(items[0].id);
+      }
+    } catch (jobError) {
+      setError(jobError instanceof Error ? jobError.message : 'No se pudieron cargar las tareas.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshJobs();
+  }, []);
+
+  useEffect(() => {
+    if (selectedJobId || jobs.length === 0) return;
+    setSelectedJobId(jobs[0].id);
+  }, [jobs, selectedJobId]);
+
+  const selectedJob = jobs.find(job => job.id === selectedJobId) ?? jobs[0] ?? null;
+
   return (
     <div className="animate-fade-in-up">
-      <h2 style={{ fontSize: 'var(--font-xl)', fontWeight: 'var(--font-weight-bold)', marginBottom: 'var(--space-6)' }}>Tareas</h2>
-      <div className="empty-state">
-        <div className="empty-state__icon">⟳</div>
-        <div className="empty-state__title">No hay tareas</div>
-        <p>Las tareas de procesamiento en segundo plano aparecerán aquí.</p>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-6)' }}>
+        <div>
+          <h2 style={{ fontSize: 'var(--font-xl)', fontWeight: 'var(--font-weight-bold)' }}>Tareas</h2>
+          <p style={{ color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>Estado vivo del pipeline, errores persistidos y reintentos.</p>
+        </div>
+        <button className="btn btn-primary" type="button" onClick={() => void refreshJobs()} disabled={loading}>
+          {loading ? 'Actualizando...' : 'Refrescar'}
+        </button>
+      </div>
+
+      {error ? (
+        <div className="card" style={{ marginBottom: 'var(--space-5)' }}>
+          <p style={{ color: 'var(--color-error)' }}>{error}</p>
+        </div>
+      ) : null}
+
+      <div className="jobs-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.2fr) minmax(320px, 0.8fr)', gap: 'var(--space-5)' }}>
+        <section className="card" style={{ display: 'grid', gap: 'var(--space-4)' }}>
+          <div className="card__header">
+            <div>
+              <div className="card__title">Jobs recientes</div>
+              <p style={{ color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>Parseo, embeddings, summaries, visual indexing y rebuilds.</p>
+            </div>
+            <span className="badge badge--accent">{jobs.length}</span>
+          </div>
+
+          <div style={{ display: 'grid', gap: 'var(--space-3)' }}>
+            {jobs.length === 0 ? (
+              <div className="empty-state" style={{ padding: 'var(--space-6) var(--space-4)' }}>
+                <div className="empty-state__icon">⟳</div>
+                <div className="empty-state__title">No hay tareas todavía</div>
+                <p>Cuando un documento entra en el pipeline, aparecerá aquí con su estado real.</p>
+              </div>
+            ) : (
+              jobs.map(job => {
+                const isSelected = selectedJob?.id === job.id;
+                const hasError = Boolean(job.error);
+                const tone = job.status === 'failed' || hasError ? 'error' : job.status === 'succeeded' ? 'success' : job.status === 'running' ? 'warning' : 'accent';
+                const badgeLabel = job.status === 'pending' && hasError ? 'Con error' : job.status;
+                return (
+                  <article
+                    key={job.id}
+                    className="card"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelectedJobId(job.id)}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        setSelectedJobId(job.id);
+                      }
+                    }}
+                    style={{
+                      cursor: 'pointer',
+                      padding: 'var(--space-4)',
+                      background: isSelected ? 'linear-gradient(180deg, rgba(99,102,241,0.08), rgba(15,20,31,0.92))' : 'var(--color-bg-primary)',
+                      borderColor: isSelected ? 'rgba(99,102,241,0.55)' : 'var(--color-border)',
+                    }}
+                  >
+                    <div className="card__header" style={{ marginBottom: 'var(--space-3)' }}>
+                      <div>
+                        <div className="card__title">{job.job_type}</div>
+                        <p style={{ color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>{job.target_id}</p>
+                      </div>
+                      <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                        <span className={`badge badge--${tone}`}>{badgeLabel}</span>
+                        <span className="badge badge--info">{job.retries} reintentos</span>
+                      </div>
+                    </div>
+                    <div className="progress-track">
+                      <div className={`progress-fill progress-fill--${tone}`} style={{ width: job.status === 'succeeded' ? '100%' : job.status === 'running' ? '70%' : job.status === 'failed' ? '100%' : '15%' }} />
+                    </div>
+                    <div className="queue-item__bottom" style={{ marginTop: 'var(--space-3)' }}>
+                      <span className="queue-item__stage">{hasError ? 'Error persistido' : job.started_at ? `Inicio ${formatRelativeDate(job.started_at)}` : 'Pendiente de inicio'}</span>
+                      <span className="queue-item__status">{job.completed_at ? `Fin ${formatRelativeDate(job.completed_at)}` : hasError ? 'con error' : 'Activo'}</span>
+                    </div>
+                    {job.error ? <p style={{ marginTop: 'var(--space-2)', color: 'var(--color-error)', lineHeight: 'var(--line-height-relaxed)' }}>{job.error}</p> : null}
+                  </article>
+                );
+              })
+            )}
+          </div>
+        </section>
+
+        <aside className="card" style={{ display: 'grid', gap: 'var(--space-4)', background: 'var(--color-bg-primary)', borderColor: 'var(--color-border)' }}>
+          <div className="card__header">
+            <div>
+              <div className="card__title">Detalle del job</div>
+              <p style={{ color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>Útil para ver por qué un archivo falló o se quedó atascado.</p>
+            </div>
+            <span className="badge badge--accent">{selectedJob ? selectedJob.status : 'sin selección'}</span>
+          </div>
+
+          {selectedJob ? (
+            <>
+              <div className="card" style={{ background: 'rgba(10,14,23,0.96)', borderColor: 'var(--color-border)' }}>
+                <div style={{ display: 'grid', gap: 'var(--space-2)' }}>
+                  <div style={{ fontWeight: 'var(--font-weight-semibold)' }}>{selectedJob.job_type}</div>
+                  <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-xs)' }}>{selectedJob.target_id}</div>
+                  <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-xs)' }}>Job ID: {selectedJob.id}</div>
+                  <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-xs)' }}>Reintentos: {selectedJob.retries}</div>
+                  {selectedJob.error ? (
+                    <div style={{ padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.35)', color: 'var(--color-error)', lineHeight: 'var(--line-height-relaxed)' }}>
+                      {selectedJob.error}
+                    </div>
+                  ) : (
+                    <p style={{ color: 'var(--color-text-tertiary)' }}>No hay error persistido para este job.</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="card" style={{ background: 'rgba(10,14,23,0.96)', borderColor: 'var(--color-border)' }}>
+                <div className="card__title">Timestamps</div>
+                <div style={{ display: 'grid', gap: 'var(--space-2)', marginTop: 'var(--space-3)' }}>
+                  <div style={{ fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)' }}>Creado: {formatRelativeDate(selectedJob.created_at)}</div>
+                  <div style={{ fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)' }}>Iniciado: {selectedJob.started_at ? formatRelativeDate(selectedJob.started_at) : '—'}</div>
+                  <div style={{ fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)' }}>Completado: {selectedJob.completed_at ? formatRelativeDate(selectedJob.completed_at) : '—'}</div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="empty-state" style={{ padding: 'var(--space-8) var(--space-4)' }}>
+              <div className="empty-state__icon">⌕</div>
+              <div className="empty-state__title">Selecciona un job</div>
+              <p>Verás el error, los reintentos y las marcas temporales aquí.</p>
+            </div>
+          )}
+        </aside>
       </div>
     </div>
   );

@@ -23,6 +23,7 @@ from atenex_nova.infrastructure.db.repositories.sql_summary_repo import SqlSumma
 from atenex_nova.infrastructure.embeddings.bm25_encoder import BM25SparseEncoder
 from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
 from atenex_nova.infrastructure.visual.colpali_adapter import ColPaliAdapter
+from atenex_nova.shared.observability.pipeline_audit import PipelineAuditService
 
 
 _TOKEN_RE = re.compile(r"[\w\-]+", re.UNICODE)
@@ -58,6 +59,7 @@ class RetrievalOrchestrator:
         qdrant_adapter=None,
         embedder: EmbeddingGemmaAdapter | None = None,
         visual_adapter: ColPaliAdapter | None = None,
+        audit: PipelineAuditService | None = None,
     ) -> None:
         self._session = session
         self._qdrant = qdrant_adapter
@@ -65,6 +67,7 @@ class RetrievalOrchestrator:
         self._visual = visual_adapter or ColPaliAdapter()
         self._router = QueryRoutingPolicy()
         self._packer = ContextPackingPolicy()
+        self._audit = audit or PipelineAuditService(session=session)
 
     async def search(self, collection_id: str, query_text: str, mode: str = "auto") -> SearchResult:
         query_repo = SqlQueryRepository(self._session)
@@ -89,43 +92,111 @@ class RetrievalOrchestrator:
         )
         await query_repo.create(query)
 
-        documents = await doc_repo.list_by_collection(collection_id)
-        document_titles = {document.id: document.title for document in documents}
+        async with self._audit.step(
+            run_id=query.id,
+            entity_type="query",
+            entity_id=query.id,
+            pipeline="retrieval",
+            stage="search",
+            context={"collection_id": collection_id, "mode": mode, "route_mode": route_mode_name},
+        ) as audit:
+            documents = await doc_repo.list_by_collection(collection_id)
+            document_titles = {document.id: document.title for document in documents}
 
-        chunks = await chunk_repo.list_by_collection(collection_id)
-        propositions = await proposition_repo.list_by_collection(collection_id)
-        summaries = []
-        for document in documents:
-            summaries.extend(await summary_repo.list_by_document(document.id))
-            for chunk in await chunk_repo.get_by_document(document.id):
-                summaries.extend(await summary_repo.list_by_scope("section", chunk.id))
-        summaries.extend(await summary_repo.list_by_collection(collection_id))
+            chunks = await chunk_repo.list_by_collection(collection_id)
+            propositions = await proposition_repo.list_by_collection(collection_id)
+            summaries = []
+            for document in documents:
+                summaries.extend(await summary_repo.list_by_document(document.id))
+                for chunk in await chunk_repo.get_by_document(document.id):
+                    summaries.extend(await summary_repo.list_by_scope("section", chunk.id))
+            summaries.extend(await summary_repo.list_by_collection(collection_id))
 
-        hits: list[SearchHit] = []
-        hits.extend(await self._score_chunks(query, chunks, document_titles))
-        hits.extend(await self._score_propositions(query, propositions, document_titles))
-        hits.extend(self._score_summaries(query, summaries, document_titles))
+            hits: list[SearchHit] = []
+            async with self._audit.step(
+                run_id=query.id,
+                entity_type="query",
+                entity_id=query.id,
+                pipeline="retrieval",
+                stage="score_chunks",
+                context={"documents": len(documents), "chunks": len(chunks)},
+            ) as step:
+                chunk_hits = await self._score_chunks(query, chunks, document_titles)
+                step.metrics(hit_count=len(chunk_hits), source="chunks")
+                hits.extend(chunk_hits)
 
-        if route_mode_name == "visual":
-            hits.extend(await self._score_visual_pages(collection_id, query, document_titles))
+            async with self._audit.step(
+                run_id=query.id,
+                entity_type="query",
+                entity_id=query.id,
+                pipeline="retrieval",
+                stage="score_propositions",
+                context={"propositions": len(propositions)},
+            ) as step:
+                proposition_hits = await self._score_propositions(query, propositions, document_titles)
+                step.metrics(hit_count=len(proposition_hits), source="propositions")
+                hits.extend(proposition_hits)
 
-        if route_mode_name == "multi_hop" and propositions:
-            expanded = await relation_repo.expand([prop.id for prop in propositions[:3]], depth=2)
-            for edge in expanded:
-                hits.append(
-                    SearchHit(
-                        id=new_id(),
-                        source_type="graph_edge",
-                        source_id=edge.id,
-                        document_id=None,
-                        title="Graph expansion",
-                        snippet=f"{edge.source_type}:{edge.source_id} -> {edge.relation} -> {edge.target_type}:{edge.target_id}",
-                        score=edge.weight * 0.8,
-                        rank=0,
-                    )
-                )
+            async with self._audit.step(
+                run_id=query.id,
+                entity_type="query",
+                entity_id=query.id,
+                pipeline="retrieval",
+                stage="score_summaries",
+                context={"summaries": len(summaries)},
+            ) as step:
+                summary_hits = self._score_summaries(query, summaries, document_titles)
+                step.metrics(hit_count=len(summary_hits), source="summaries")
+                hits.extend(summary_hits)
 
-        ranked_hits = self._rank_hits(hits, route_mode_name)
+            if route_mode_name == "visual":
+                async with self._audit.step(
+                    run_id=query.id,
+                    entity_type="query",
+                    entity_id=query.id,
+                    pipeline="retrieval",
+                    stage="score_visual_pages",
+                    context={"collection_id": collection_id},
+                ) as step:
+                    visual_hits = await self._score_visual_pages(collection_id, query, document_titles)
+                    step.metrics(hit_count=len(visual_hits), source="visual_pages")
+                    hits.extend(visual_hits)
+
+            if route_mode_name == "multi_hop" and propositions:
+                async with self._audit.step(
+                    run_id=query.id,
+                    entity_type="query",
+                    entity_id=query.id,
+                    pipeline="retrieval",
+                    stage="expand_graph",
+                    context={"seed_propositions": min(len(propositions), 3)},
+                ) as step:
+                    expanded = await relation_repo.expand([prop.id for prop in propositions[:3]], depth=2)
+                    step.metrics(edge_count=len(expanded))
+                    for edge in expanded:
+                        hits.append(
+                            SearchHit(
+                                id=new_id(),
+                                source_type="graph_edge",
+                                source_id=edge.id,
+                                document_id=None,
+                                title="Graph expansion",
+                                snippet=f"{edge.source_type}:{edge.source_id} -> {edge.relation} -> {edge.target_type}:{edge.target_id}",
+                                score=edge.weight * 0.8,
+                                rank=0,
+                            )
+                        )
+
+            ranked_hits = self._rank_hits(hits, route_mode_name)
+            audit.metrics(
+                documents=len(documents),
+                chunks=len(chunks),
+                propositions=len(propositions),
+                summaries=len(summaries),
+                ranked_hits=len(ranked_hits),
+                route_mode=route_mode_name,
+                intent=intent.value,
+            )
         evidence_items = [
             EvidenceItem(
                 id=hit.id,
