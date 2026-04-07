@@ -159,7 +159,7 @@ export interface QuerySearchResponse {
   hits: QueryHit[];
 }
 
-export interface QueryHistoryResponse extends QueryHistoryItem {}
+export type QueryHistoryResponse = QueryHistoryItem;
 
 export interface CollectionRebuildResponse {
   job_id: string;

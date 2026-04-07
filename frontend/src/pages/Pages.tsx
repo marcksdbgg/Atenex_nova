@@ -210,6 +210,8 @@ export function CollectionsPage() {
   const uploadQueuesRef = useRef(uploadQueues);
   const documentsByCollectionRef = useRef(documentsByCollection);
   const processingUploadsRef = useRef(processingUploads);
+  const rebuildPollingTimersRef = useRef<Record<string, number>>({});
+  const [rebuildPollingByCollection, setRebuildPollingByCollection] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     uploadQueuesRef.current = uploadQueues;
@@ -222,6 +224,47 @@ export function CollectionsPage() {
   useEffect(() => {
     processingUploadsRef.current = processingUploads;
   }, [processingUploads]);
+
+  useEffect(
+    () => () => {
+      Object.values(rebuildPollingTimersRef.current).forEach(timerId => window.clearTimeout(timerId));
+      rebuildPollingTimersRef.current = {};
+    },
+    [],
+  );
+
+  const totalDocuments = useMemo(
+    () => Object.values(documentsByCollection).reduce((count, docs) => count + docs.length, 0),
+    [documentsByCollection],
+  );
+
+  const activeDocumentCount = useMemo(
+    () =>
+      Object.values(documentsByCollection).reduce(
+        (count, docs) => count + docs.filter(document => document.status !== 'ready' && document.status !== 'failed').length,
+        0,
+      ),
+    [documentsByCollection],
+  );
+
+  const queuedFileCount = useMemo(
+    () =>
+      Object.values(uploadQueues).reduce(
+        (count, items) => count + items.filter(item => item.status === 'queued' || item.status === 'uploading').length,
+        0,
+      ),
+    [uploadQueues],
+  );
+
+  const erroredFileCount = useMemo(
+    () => Object.values(uploadQueues).reduce((count, items) => count + items.filter(item => item.status === 'error').length, 0),
+    [uploadQueues],
+  );
+
+  const hasRebuildPolling = useMemo(
+    () => Object.values(rebuildPollingByCollection).some(Boolean),
+    [rebuildPollingByCollection],
+  );
 
   useEffect(() => {
     setSelectedTraceDocumentIds(current => {
@@ -324,7 +367,7 @@ export function CollectionsPage() {
 
     void runSync();
 
-    if (!hasLiveProcessing) return () => {
+    if (!(hasLiveProcessing || hasRebuildPolling)) return () => {
       mounted = false;
     };
 
@@ -336,7 +379,18 @@ export function CollectionsPage() {
       mounted = false;
       window.clearInterval(timer);
     };
-  }, [collections, hasLiveProcessing]);
+  }, [collections, hasLiveProcessing, hasRebuildPolling]);
+
+  const refreshAllCollections = async () => {
+    if (collections.length === 0) return;
+    setMessage('');
+    try {
+      await syncCollectionDocuments(collections.map(collection => collection.id));
+      setMessage('Inventario sincronizado.');
+    } catch {
+      setMessage('No se pudo sincronizar el inventario.');
+    }
+  };
 
   const refreshCollectionDocuments = async (collectionId: string) => {
     await syncCollectionDocuments([collectionId]);
@@ -500,6 +554,20 @@ export function CollectionsPage() {
     try {
       const response = await api.rebuildCollection(collectionId);
       setMessage(`Reprocesado completo en cola: ${response.job_id}`);
+      setRebuildPollingByCollection(current => ({ ...current, [collectionId]: true }));
+      const previousTimerId = rebuildPollingTimersRef.current[collectionId];
+      if (previousTimerId) {
+        window.clearTimeout(previousTimerId);
+      }
+      rebuildPollingTimersRef.current[collectionId] = window.setTimeout(() => {
+        setRebuildPollingByCollection(current => {
+          const next = { ...current };
+          delete next[collectionId];
+          return next;
+        });
+        delete rebuildPollingTimersRef.current[collectionId];
+      }, 15000);
+      await refreshCollectionDocuments(collectionId);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'No se pudo lanzar el reprocesado.');
     } finally {
@@ -533,15 +601,40 @@ export function CollectionsPage() {
 
   return (
     <div className="animate-fade-in-up">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-6)' }}>
-        <div>
-          <h2 style={{ fontSize: 'var(--font-xl)', fontWeight: 'var(--font-weight-bold)' }}>Colecciones</h2>
-          <p style={{ color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>Ingesta en lote, control por archivo y reconstrucción completa del corpus.</p>
+      <section className="collections-page-header card">
+        <div className="collections-page-header__copy">
+          <div className="collections-page-header__eyebrow">Corpus y reconstrucción</div>
+          <h2 className="collections-page-header__title">Colecciones</h2>
+          <p className="collections-page-header__description">Ingesta en lote, control por archivo y reconstrucción completa del corpus con estado visible de cada cola.</p>
         </div>
-        <button className="btn btn-primary" type="button" onClick={() => setShowCreateForm(current => !current)}>+ Nueva colección</button>
+        <div className="collections-page-header__actions">
+          <button className="btn btn-secondary" type="button" onClick={() => void refreshAllCollections()} disabled={collections.length === 0}>Actualizar inventario</button>
+          <button className="btn btn-primary" type="button" onClick={() => setShowCreateForm(current => !current)}>+ Nueva colección</button>
+        </div>
+      </section>
+
+      <div className="collections-page-metrics">
+        <div className="collections-page-metric card">
+          <span>Colecciones</span>
+          <strong>{collections.length}</strong>
+        </div>
+        <div className="collections-page-metric card">
+          <span>Documentos</span>
+          <strong>{totalDocuments}</strong>
+        </div>
+        <div className="collections-page-metric card">
+          <span>Activos</span>
+          <strong>{activeDocumentCount}</strong>
+        </div>
+        <div className="collections-page-metric card">
+          <span>Cola</span>
+          <strong>{queuedFileCount}</strong>
+          <small>{erroredFileCount > 0 ? `${erroredFileCount} con error` : hasRebuildPolling ? 'rebuild en seguimiento' : 'sin actividad'}</small>
+        </div>
       </div>
+
       {message ? (
-        <div className="card" style={{ marginBottom: 'var(--space-5)' }}>
+        <div className="collections-page-message card" style={{ marginBottom: 'var(--space-5)' }}>
           <p style={{ color: 'var(--color-text-secondary)' }}>{message}</p>
         </div>
       ) : null}
@@ -612,15 +705,23 @@ export function CollectionsPage() {
             const selectedTraceError = selectedTraceDocument ? auditErrorByDocument[selectedTraceDocument.id] ?? '' : '';
 
             return (
-            <article key={collection.id} className="card" style={{ display: 'grid', gap: 'var(--space-5)' }}>
-              <div className="card__header">
+            <article key={collection.id} className="card collection-card" style={{ display: 'grid', gap: 'var(--space-5)' }}>
+              <div className="collection-card__header">
                 <div>
                   <div className="card__title">{collection.name}</div>
                   <p style={{ color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>{collection.description || 'Sin descripción'}</p>
                 </div>
-                <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                <div className="collection-card__meta">
                   <span className="badge badge--accent">{collection.language_profile}</span>
                   <span className="badge badge--info">{(documentsByCollection[collection.id] ?? []).length} documentos</span>
+                  <button
+                    className="btn btn-secondary collection-card__action"
+                    onClick={() => void handleRebuild(collection.id)}
+                    disabled={busyCollectionId === collection.id}
+                    type="button"
+                  >
+                    {busyCollectionId === collection.id ? 'Reprocesando...' : 'Reprocesar corpus'}
+                  </button>
                 </div>
               </div>
               <div className="collection-ingest-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.3fr) minmax(280px, 0.9fr)', gap: 'var(--space-5)' }}>
@@ -648,14 +749,6 @@ export function CollectionsPage() {
                         <label className="btn btn-primary collection-dropzone__button" htmlFor={`upload-${collection.id}`}>
                           Seleccionar archivos
                         </label>
-                        <button
-                          className="btn btn-secondary"
-                          onClick={() => handleRebuild(collection.id)}
-                          disabled={busyCollectionId === collection.id}
-                          type="button"
-                        >
-                          {busyCollectionId === collection.id ? 'Reprocesando...' : 'Reprocesar corpus'}
-                        </button>
                       </div>
 
                       <div style={{ display: 'grid', gap: 'var(--space-3)', marginTop: 'var(--space-4)' }}>
