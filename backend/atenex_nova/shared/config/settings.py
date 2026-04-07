@@ -12,7 +12,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
-STORAGE_ROOT = PROJECT_ROOT / "storage"
+STORAGE_ROOT = PROJECT_ROOT / "backend" / "storage"
+DEFAULT_SQLITE_DB_PATH = PROJECT_ROOT / "backend" / "atenex_nova.db"
 
 
 class Profile(StrEnum):
@@ -68,7 +69,7 @@ class Settings(BaseSettings):
     )
 
     # --- Database ---
-    database_url: str = "sqlite+aiosqlite:///./atenex_nova.db"
+    database_url: str = f"sqlite+aiosqlite:///{DEFAULT_SQLITE_DB_PATH.as_posix()}"
 
     # --- Qdrant ---
     qdrant_url: str = "http://localhost:6333"

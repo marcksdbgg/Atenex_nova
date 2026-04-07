@@ -57,6 +57,30 @@ class QdrantAdapter(HybridIndex):
             logger.warning("Qdrant unavailable, skipping delete for %s: %s", collection_name, exc)
             self._available = False
 
+    async def delete_by_filter(self, collection_name: str, filter_dict: dict[str, str]) -> None:
+        """Delete points in an existing collection using exact-match payload filters."""
+        if not self._available or not filter_dict:
+            return
+        try:
+            exists = await self.client.collection_exists(collection_name)
+            if not exists:
+                return
+
+            must = [
+                models.FieldCondition(key=key, match=models.MatchValue(value=value))
+                for key, value in filter_dict.items()
+            ]
+            await self.client.delete(
+                collection_name=collection_name,
+                points_selector=models.FilterSelector(
+                    filter=models.Filter(must=must),
+                ),
+            )
+            logger.info("Deleted filtered points in %s with %s", collection_name, filter_dict)
+        except Exception as exc:
+            logger.warning("Qdrant unavailable, skipping filtered delete for %s: %s", collection_name, exc)
+            self._available = False
+
     async def upsert(self, collection_name: str, documents: list[VectorDocument]) -> None:
         if not self._available:
             logger.info("Qdrant unavailable, skipping upsert for %s", collection_name)

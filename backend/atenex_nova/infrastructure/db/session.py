@@ -57,6 +57,29 @@ async def create_all_tables() -> None:
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
+        if conn.dialect.name == "sqlite":
+            pragma_rows = await conn.exec_driver_sql("PRAGMA table_info(documents)")
+            columns = {row[1] for row in pragma_rows.fetchall()}
+            if "collection_path" not in columns:
+                await conn.exec_driver_sql(
+                    "ALTER TABLE documents ADD COLUMN collection_path VARCHAR(800) NOT NULL DEFAULT ''"
+                )
+            await conn.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_documents_collection_path ON documents (collection_path)"
+            )
+            await conn.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_documents_collection_checksum ON documents (collection_id, checksum)"
+            )
+        else:
+            await conn.exec_driver_sql(
+                "ALTER TABLE documents ADD COLUMN IF NOT EXISTS collection_path VARCHAR(800) NOT NULL DEFAULT ''"
+            )
+            await conn.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_documents_collection_path ON documents (collection_path)"
+            )
+            await conn.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_documents_collection_checksum ON documents (collection_id, checksum)"
+            )
 
 
 async def dispose_engine() -> None:

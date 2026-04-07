@@ -197,28 +197,49 @@ class RebuildCollectionJobHandler(BaseJobHandler):
             summary_repo = SqlSummaryRepository(session)
             relation_repo = SqlRelationRepository(session)
             job_repo = SqlJobRepository(session)
+            audit = PipelineAuditService(session=session)
 
             collection = await collection_repo.get_by_id(collection_id)
             if collection is None:
                 raise ValueError(f"Collection {collection_id} not found")
 
             documents = await doc_repo.list_by_collection(collection_id)
-            for document in documents:
-                chunks = await chunk_repo.get_by_document(document.id)
-                propositions = await proposition_repo.list_by_document(document.id)
-                await proposition_repo.delete_by_document(document.id)
-                await summary_repo.delete_by_scope("document", document.id)
-                await summary_repo.delete_by_scope("collection", collection_id)
-                for chunk in chunks:
-                    await summary_repo.delete_by_scope("section", chunk.id)
-                await relation_repo.delete_by_source_ids([prop.id for prop in propositions])
-                await chunk_repo.delete_by_document(document.id)
-                await node_repo.delete_by_document(document.id)
-                await job_repo.create(Job(id=new_id(), job_type=JobType.SEGMENT_DOCUMENT, target_id=document.id))
+            target_ids = [collection_id, *[document.id for document in documents]]
+            async with audit.step(
+                run_id=job.id,
+                entity_type="collection",
+                entity_id=collection_id,
+                pipeline="memory_building",
+                stage="rebuild_collection",
+                context={"document_count": len(documents)},
+            ) as step:
+                removed_jobs = await job_repo.delete_pending_by_targets(target_ids, exclude_job_id=job.id)
 
-            visual_cache = get_settings().visual_pages_path / f"{collection_id}.json"
-            if visual_cache.exists():
-                visual_cache.unlink()
+                for document in documents:
+                    document.mark_registered()
+                    await doc_repo.update(document)
+
+                    chunks = await chunk_repo.get_by_document(document.id)
+                    propositions = await proposition_repo.list_by_document(document.id)
+                    await proposition_repo.delete_by_document(document.id)
+                    await summary_repo.delete_by_scope("document", document.id)
+                    await summary_repo.delete_by_scope("collection", collection_id)
+                    for chunk in chunks:
+                        await summary_repo.delete_by_scope("section", chunk.id)
+                    await relation_repo.delete_by_source_ids([prop.id for prop in propositions])
+                    await chunk_repo.delete_by_document(document.id)
+                    await node_repo.delete_by_document(document.id)
+                    await job_repo.create(Job(id=new_id(), job_type=JobType.PARSE_DOCUMENT, target_id=document.id))
+
+                visual_cache = get_settings().visual_pages_path / f"{collection_id}.json"
+                if visual_cache.exists():
+                    visual_cache.unlink()
+
+                step.metrics(
+                    documents_requeued=len(documents),
+                    parse_jobs_created=len(documents),
+                    stale_jobs_removed=removed_jobs,
+                )
 
             await session.commit()
-            return {"documents_queued": len(documents)}
+            return {"documents_requeued": len(documents)}

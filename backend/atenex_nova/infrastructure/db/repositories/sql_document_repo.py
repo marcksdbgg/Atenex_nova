@@ -18,6 +18,7 @@ class SqlDocumentRepository:
             collection_id=doc.collection_id,
             title=doc.title,
             source_path=doc.source_path,
+            collection_path=doc.collection_path,
             mime_type=doc.mime_type,
             checksum=doc.checksum,
             status=doc.status.value,
@@ -38,6 +39,22 @@ class SqlDocumentRepository:
         model = r.scalar_one_or_none()
         return self._to_entity(model) if model else None
 
+    async def get_by_collection_and_checksum(self, collection_id: str, checksum: str) -> Document | None:
+        r = await self._session.execute(
+            select(DocumentModel)
+            .where(
+                DocumentModel.collection_id == collection_id,
+                DocumentModel.checksum == checksum,
+            )
+            .order_by(DocumentModel.updated_at.desc())
+        )
+        matches = r.scalars().all()
+        if not matches:
+            return None
+
+        preferred = next((model for model in matches if model.status != DocumentStatus.FAILED.value), matches[0])
+        return self._to_entity(preferred)
+
     async def list_by_collection(
         self,
         collection_id: str,
@@ -56,6 +73,8 @@ class SqlDocumentRepository:
         r = await self._session.execute(select(DocumentModel).where(DocumentModel.id == doc.id))
         model = r.scalar_one_or_none()
         if model:
+            model.source_path = doc.source_path
+            model.collection_path = doc.collection_path
             model.status = doc.status.value
             model.language = doc.language
             model.error_message = doc.error_message
@@ -89,6 +108,7 @@ class SqlDocumentRepository:
             collection_id=m.collection_id,
             title=m.title,
             source_path=m.source_path,
+            collection_path=m.collection_path,
             mime_type=m.mime_type,
             checksum=m.checksum,
             status=DocumentStatus(m.status),

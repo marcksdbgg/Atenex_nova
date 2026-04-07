@@ -17,6 +17,10 @@ class DocumentRepository(Protocol):
         """Get a document by its ID."""
         ...
 
+    async def get_by_collection_and_checksum(self, collection_id: str, checksum: str) -> Document | None:
+        """Get an existing document in a collection by content checksum."""
+        ...
+
     async def list_by_collection(
         self,
         collection_id: str,

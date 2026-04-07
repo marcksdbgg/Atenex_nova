@@ -23,12 +23,20 @@ export interface Document {
   title: string;
   mime_type: string;
   source_path?: string | null;
+  collection_path?: string;
   status: string;
   language: string;
   version: number;
   error_message?: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface ImportLocalFolderResponse {
+  imported: number;
+  source_folder: string;
+  collection_path: string;
+  document_ids: string[];
 }
 
 export interface QueryHistoryItem {

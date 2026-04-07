@@ -11,6 +11,7 @@ import type {
   EvaluationRunRequest,
   EvaluationRunResponse,
   HealthStatus,
+  ImportLocalFolderResponse,
   Job,
   PipelineAuditEntry,
   QueryHistoryResponse,
@@ -52,9 +53,19 @@ class ApiClient {
     this.request<void>(`/collections/${id}`, { method: 'DELETE' });
 
   /* Documents */
-  uploadDocument = async (collectionId: string, file: File): Promise<Document> => {
+  uploadDocument = async (
+    collectionId: string,
+    file: File,
+    options: { collectionPath?: string; displayTitle?: string } = {},
+  ): Promise<Document> => {
     const formData = new FormData();
     formData.append('file', file);
+    if (options.collectionPath) {
+      formData.append('collection_path', options.collectionPath);
+    }
+    if (options.displayTitle) {
+      formData.append('display_title', options.displayTitle);
+    }
     const res = await fetch(`${this.base}/collections/${collectionId}/documents`, {
       method: 'POST',
       body: formData,
@@ -73,6 +84,18 @@ class ApiClient {
         mime_type: mimeType,
       }),
     });
+  importLocalFolder = (collectionId: string, sourceFolder: string, collectionPath?: string, recursive = true) =>
+    this.request<ImportLocalFolderResponse>(
+      `/collections/${collectionId}/documents/import-folder`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          source_folder: sourceFolder,
+          collection_path: collectionPath,
+          recursive,
+        }),
+      },
+    );
   getDocument = (id: string) => this.request<Document>(`/documents/${id}`);
   getDocumentNodes = (id: string) => this.request<DocumentNode[]>(`/documents/${id}/nodes`);
 

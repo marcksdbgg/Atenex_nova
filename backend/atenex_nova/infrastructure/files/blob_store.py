@@ -18,10 +18,18 @@ class BlobStore:
         self._base.mkdir(parents=True, exist_ok=True)
         logger.info("BlobStore initialized → %s", self._base.resolve())
 
-    def store(self, collection_id: str, doc_id: str, filename: str, data: bytes) -> Path:
-        target_dir = self._base / collection_id / doc_id
+    def store(
+        self,
+        collection_id: str,
+        doc_id: str,
+        filename: str,
+        data: bytes,
+        relative_path: str | None = None,
+    ) -> Path:
+        normalized_relative_path = self._normalize_relative_path(relative_path, filename)
+        target_dir = self._base / collection_id / doc_id / normalized_relative_path.parent
         target_dir.mkdir(parents=True, exist_ok=True)
-        target_path = target_dir / filename
+        target_path = target_dir / normalized_relative_path.name
         target_path.write_bytes(data)
         logger.info("Stored %s (%d bytes)", target_path, len(data))
         return target_path
@@ -38,3 +46,11 @@ class BlobStore:
     @staticmethod
     def compute_checksum(data: bytes) -> str:
         return hashlib.sha256(data).hexdigest()
+
+    @staticmethod
+    def _normalize_relative_path(relative_path: str | None, fallback_filename: str) -> Path:
+        raw = (relative_path or fallback_filename).replace("\\", "/").strip().strip("/")
+        parts = [part.strip() for part in raw.split("/") if part.strip() and part not in {".", ".."}]
+        if not parts:
+            parts = [fallback_filename]
+        return Path(*parts)

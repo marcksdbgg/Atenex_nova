@@ -2,7 +2,7 @@
 
 import json
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from atenex_nova.domain.entities.job import Job
@@ -58,6 +58,16 @@ class SqlJobRepository:
             .limit(limit)
         )
         return [self._to_entity(m) for m in r.scalars().all()]
+
+    async def delete_pending_by_targets(self, target_ids: list[str], exclude_job_id: str | None = None) -> int:
+        if not target_ids:
+            return 0
+
+        stmt = delete(JobModel).where(JobModel.status == JobStatus.PENDING.value, JobModel.target_id.in_(target_ids))
+        if exclude_job_id is not None:
+            stmt = stmt.where(JobModel.id != exclude_job_id)
+        result = await self._session.execute(stmt)
+        return int(result.rowcount or 0)
 
     async def update(self, job: Job) -> Job:
         r = await self._session.execute(select(JobModel).where(JobModel.id == job.id))

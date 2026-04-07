@@ -37,6 +37,7 @@ class DocumentResponse(BaseModel):
     title: str
     mime_type: str
     source_path: str | None = None
+    collection_path: str = ""
     status: str
     language: str
     version: int
@@ -49,6 +50,20 @@ class ImportLocalDocumentRequest(BaseModel):
     source_path: str = Field(min_length=1, max_length=1000)
     title: str | None = Field(default=None, max_length=255)
     mime_type: str | None = Field(default=None, max_length=255)
+    collection_path: str | None = Field(default=None, max_length=800)
+
+
+class ImportLocalFolderRequest(BaseModel):
+    source_folder: str = Field(min_length=1, max_length=1000)
+    collection_path: str | None = Field(default=None, max_length=800)
+    recursive: bool = True
+
+
+class ImportLocalFolderResponse(BaseModel):
+    imported: int
+    source_folder: str
+    collection_path: str
+    document_ids: list[str]
 
 
 class DocumentNodeResponse(BaseModel):

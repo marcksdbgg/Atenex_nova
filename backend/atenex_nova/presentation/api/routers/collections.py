@@ -1,8 +1,9 @@
 """Collections router."""
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from atenex_nova.application.services.collection_cleanup_service import CollectionCleanupService
 from atenex_nova.application.services.document_service import DocumentService
 from atenex_nova.application.services.rebuild_service import RebuildService
 from atenex_nova.dependencies import get_blob_store, get_document_service
@@ -11,16 +12,26 @@ from atenex_nova.domain.value_objects.identifiers import new_id
 from atenex_nova.infrastructure.db.repositories.sql_collection_repo import SqlCollectionRepository
 from atenex_nova.infrastructure.db.session import get_session
 from atenex_nova.infrastructure.files.blob_store import BlobStore
-from atenex_nova.shared.observability.pipeline_audit import PipelineAuditService
 from atenex_nova.presentation.api.dto.schemas import (
     CollectionResponse,
     CreateCollectionRequest,
     DocumentResponse,
     ImportLocalDocumentRequest,
+    ImportLocalFolderRequest,
+    ImportLocalFolderResponse,
     UpdateCollectionRequest,
 )
+from atenex_nova.shared.observability.pipeline_audit import PipelineAuditService
 
 router = APIRouter(prefix="/collections", tags=["collections"])
+
+
+def _normalize_collection_path(raw_path: str | None) -> str:
+    if not raw_path:
+        return ""
+    normalized = raw_path.replace("\\", "/").strip().strip("/")
+    parts = [part.strip() for part in normalized.split("/") if part.strip() and part not in {".", ".."}]
+    return "/".join(parts)
 
 
 @router.post("", response_model=CollectionResponse, status_code=201)
@@ -86,8 +97,8 @@ async def delete_collection(
     collection_id: str,
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    repo = SqlCollectionRepository(session)
-    deleted = await repo.delete(collection_id)
+    service = CollectionCleanupService(session)
+    deleted = await service.delete_collection(collection_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Collection not found")
 
@@ -105,6 +116,7 @@ async def list_collection_documents(
             title=item.title,
             mime_type=item.mime_type,
             source_path=item.source_path,
+            collection_path=item.collection_path,
             status=item.status.value,
             language=item.language,
             version=item.version,
@@ -134,10 +146,15 @@ async def rebuild_collection(
 async def upload_document(
     collection_id: str,
     file: UploadFile = File(...),
+    collection_path: str | None = Form(default=None),
+    display_title: str | None = Form(default=None),
     session: AsyncSession = Depends(get_session),
     doc_service: DocumentService = Depends(get_document_service),
     blob_store: BlobStore = Depends(get_blob_store),
 ) -> DocumentResponse:
+    normalized_collection_path = _normalize_collection_path(collection_path) or _normalize_collection_path(file.filename or "unknown")
+    resolved_title = (display_title or "").strip() or normalized_collection_path or file.filename or "unknown"
+
     audit = PipelineAuditService(session=session)
     async with audit.step(
         run_id=new_id(),
@@ -145,21 +162,45 @@ async def upload_document(
         entity_id=collection_id,
         pipeline="ingestion",
         stage="register_upload",
-        context={"filename": file.filename, "mime_type": file.content_type},
+        context={"filename": file.filename, "mime_type": file.content_type, "collection_path": normalized_collection_path},
     ) as step:
         data = await file.read()
         checksum = BlobStore.compute_checksum(data)
-        doc_id = new_id()
-        path = blob_store.store(collection_id, doc_id, file.filename or "unknown", data)
-        doc = await doc_service.register(
-            collection_id=collection_id,
-            title=file.filename or "unknown",
-            source_path=str(path),
-            mime_type=file.content_type or "application/octet-stream",
+        deduplicated = False
+        existing = await doc_service.find_by_collection_checksum(collection_id, checksum)
+        if existing is not None:
+            doc = existing
+            deduplicated = True
+        else:
+            provisional_doc_id = new_id()
+            path = blob_store.store(
+                collection_id,
+                provisional_doc_id,
+                file.filename or "unknown",
+                data,
+                relative_path=normalized_collection_path,
+            )
+            doc = await doc_service.register(
+                collection_id=collection_id,
+                title=resolved_title,
+                source_path=str(path),
+                mime_type=file.content_type or "application/octet-stream",
+                checksum=checksum,
+                doc_id=provisional_doc_id,
+                collection_path=normalized_collection_path,
+            )
+            deduplicated = doc.id != provisional_doc_id
+            if deduplicated:
+                blob_store.delete(collection_id, provisional_doc_id)
+
+        step.metrics(
+            bytes=len(data),
             checksum=checksum,
-            doc_id=doc_id,
+            source_path=doc.source_path,
+            collection_path=normalized_collection_path,
+            document_id=doc.id,
+            deduplicated=deduplicated,
         )
-        step.metrics(bytes=len(data), checksum=checksum, source_path=str(path), document_id=doc.id)
 
         return DocumentResponse(
             id=doc.id,
@@ -167,6 +208,7 @@ async def upload_document(
             title=doc.title,
             mime_type=doc.mime_type,
             source_path=doc.source_path,
+            collection_path=doc.collection_path,
             status=doc.status.value,
             language=doc.language,
             version=doc.version,
@@ -197,18 +239,67 @@ async def import_local_document(
             source_path=body.source_path,
             title=body.title,
             mime_type=body.mime_type,
+            collection_path=body.collection_path,
         )
-        step.metrics(source_path=doc.source_path, checksum=doc.checksum, document_id=doc.id)
+        step.metrics(
+            source_path=doc.source_path,
+            checksum=doc.checksum,
+            collection_path=doc.collection_path,
+            document_id=doc.id,
+        )
         return DocumentResponse(
             id=doc.id,
             collection_id=doc.collection_id,
             title=doc.title,
             mime_type=doc.mime_type,
             source_path=doc.source_path,
+            collection_path=doc.collection_path,
             status=doc.status.value,
             language=doc.language,
             version=doc.version,
             error_message=doc.error_message,
             created_at=doc.created_at,
             updated_at=doc.updated_at,
+        )
+
+
+@router.post("/{collection_id}/documents/import-folder", response_model=ImportLocalFolderResponse, status_code=201)
+async def import_local_folder(
+    collection_id: str,
+    body: ImportLocalFolderRequest,
+    session: AsyncSession = Depends(get_session),
+    doc_service: DocumentService = Depends(get_document_service),
+) -> ImportLocalFolderResponse:
+    normalized_collection_path = _normalize_collection_path(body.collection_path)
+
+    audit = PipelineAuditService(session=session)
+    async with audit.step(
+        run_id=new_id(),
+        entity_type="collection",
+        entity_id=collection_id,
+        pipeline="ingestion",
+        stage="register_local_folder",
+        context={
+            "source_folder": body.source_folder,
+            "collection_path": normalized_collection_path,
+            "recursive": body.recursive,
+        },
+    ) as step:
+        documents = await doc_service.register_local_folder(
+            collection_id=collection_id,
+            source_folder=body.source_folder,
+            collection_path=normalized_collection_path,
+            recursive=body.recursive,
+        )
+        step.metrics(
+            source_folder=body.source_folder,
+            collection_path=normalized_collection_path,
+            imported=len(documents),
+        )
+
+        return ImportLocalFolderResponse(
+            imported=len(documents),
+            source_folder=body.source_folder,
+            collection_path=normalized_collection_path,
+            document_ids=[document.id for document in documents],
         )

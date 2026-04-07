@@ -1,15 +1,45 @@
 """Job handlers for ingestion (parse & normalize)."""
 
 import logging
+from pathlib import Path
 
 from atenex_nova.domain.entities.job import Job
 from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocumentRepository
 from atenex_nova.infrastructure.db.repositories.sql_node_repo import SqlDocumentNodeRepository
 from atenex_nova.infrastructure.parsing.docling_adapter import DoclingParserAdapter
+from atenex_nova.shared.config.settings import PROJECT_ROOT
 from atenex_nova.shared.observability.pipeline_audit import PipelineAuditService
 from atenex_nova.workers.runner import BaseJobHandler
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_document_source_path(source_path: str, project_root: Path = PROJECT_ROOT) -> Path:
+    """Resolve source paths for both current and legacy storage layouts.
+
+    Current layout stores uploads under backend/storage. Older records may keep
+    relative paths and depend on process CWD. Resolve deterministically to avoid
+    worker failures when started from a different directory.
+    """
+
+    candidate = Path(source_path).expanduser()
+    if candidate.is_absolute():
+        return candidate.resolve()
+
+    root_candidate = (project_root / candidate).resolve()
+    if root_candidate.exists():
+        return root_candidate
+
+    legacy_backend_candidate = (project_root / "backend" / candidate).resolve()
+    if legacy_backend_candidate.exists():
+        logger.warning(
+            "Resolved legacy source_path '%s' to '%s'",
+            source_path,
+            legacy_backend_candidate,
+        )
+        return legacy_backend_candidate
+
+    return root_candidate
 
 
 class ParseDocumentJobHandler(BaseJobHandler):
@@ -26,6 +56,10 @@ class ParseDocumentJobHandler(BaseJobHandler):
                 raise ValueError(f"Document {document_id} not found")
 
             audit = PipelineAuditService(session=session)
+            resolved_source_path = _resolve_document_source_path(doc.source_path)
+            if doc.source_path != str(resolved_source_path):
+                doc.source_path = str(resolved_source_path)
+                await doc_repo.update(doc)
 
             try:
                 async with audit.step(
@@ -34,10 +68,10 @@ class ParseDocumentJobHandler(BaseJobHandler):
                     entity_id=document_id,
                     pipeline="ingestion",
                     stage="parse",
-                    context={"source_path": doc.source_path, "mime_type": doc.mime_type},
+                    context={"source_path": str(resolved_source_path), "mime_type": doc.mime_type},
                 ) as step:
                     parser = DoclingParserAdapter()
-                    nodes = await parser.parse(doc.source_path, document_id)
+                    nodes = await parser.parse(str(resolved_source_path), document_id)
                     node_repo = SqlDocumentNodeRepository(session)
                     await node_repo.create_many(nodes)
                     doc.mark_parsed()

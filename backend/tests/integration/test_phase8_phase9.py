@@ -15,6 +15,7 @@ from atenex_nova.domain.entities.chunk import Chunk
 from atenex_nova.domain.entities.collection import Collection
 from atenex_nova.domain.entities.document import Document
 from atenex_nova.domain.entities.document_node import DocumentNode
+from atenex_nova.domain.entities.job import Job
 from atenex_nova.domain.value_objects.identifiers import NodeType, new_id, JobType
 from atenex_nova.infrastructure.db.models import tables as _tables  # noqa: F401
 from atenex_nova.infrastructure.db.repositories.sql_chunk_repo import SqlChunkRepository
@@ -194,3 +195,32 @@ async def test_rebuild_and_answer_exports(session_factory) -> None:
         job = await job_repo.get_by_id(job_id)
         assert job is not None
         assert job.job_type == JobType.REBUILD_COLLECTION
+
+
+@pytest.mark.asyncio
+async def test_rebuild_collection_resets_documents_and_requeues_parse(session_factory) -> None:
+    collection_id, document_id = await _seed_full_corpus(session_factory)
+
+    async with session_factory() as session:
+        job_repo = SqlJobRepository(session)
+        await job_repo.create(Job(id=new_id(), job_type=JobType.SEGMENT_DOCUMENT, target_id=document_id))
+
+        rebuild_handler = RebuildService(session)
+        job_id = await rebuild_handler.enqueue(collection_id)
+        await session.commit()
+
+        from atenex_nova.workers.jobs.mem_builder_job import RebuildCollectionJobHandler
+
+        handler = RebuildCollectionJobHandler(session_factory)
+        await handler.execute(Job(id=job_id, job_type=JobType.REBUILD_COLLECTION, target_id=collection_id))
+
+    async with session_factory() as session:
+        document_repo = SqlDocumentRepository(session)
+        job_repo = SqlJobRepository(session)
+        doc = await document_repo.get_by_id(document_id)
+        assert doc is not None
+        assert doc.status.value == "registered"
+
+        jobs = await job_repo.list_by_target(document_id)
+        assert all(job.job_type != JobType.SEGMENT_DOCUMENT for job in jobs)
+        assert any(job.job_type == JobType.PARSE_DOCUMENT for job in jobs)

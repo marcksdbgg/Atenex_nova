@@ -25,6 +25,7 @@ class Document:
     source_path: str
     mime_type: str
     checksum: str
+    collection_path: str = ""
     status: DocumentStatus = DocumentStatus.REGISTERED
     language: str = "auto"
     version: int = 1
@@ -69,6 +70,10 @@ class Document:
     def mark_ready(self) -> None:
         """Mark document as ready for querying."""
         self._transition_to(DocumentStatus.READY)
+
+    def mark_registered(self) -> None:
+        """Return document to the registered state for a rebuild."""
+        self._transition_to(DocumentStatus.REGISTERED)
 
     def fail(self, reason: str) -> None:
         """Mark document as failed with an error reason."""

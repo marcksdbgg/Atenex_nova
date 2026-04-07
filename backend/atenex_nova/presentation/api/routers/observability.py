@@ -55,6 +55,7 @@ async def get_document_evidence(
             title=document.title,
             mime_type=document.mime_type,
             source_path=document.source_path,
+            collection_path=document.collection_path,
             status=document.status.value,
             language=document.language,
             version=document.version,

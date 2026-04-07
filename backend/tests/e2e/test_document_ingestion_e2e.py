@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 
@@ -14,11 +15,17 @@ from atenex_nova.dependencies import get_blob_store
 from atenex_nova.domain.entities.document_node import DocumentNode
 from atenex_nova.domain.value_objects.identifiers import JobType, NodeType, new_id
 from atenex_nova.infrastructure.db.models import tables as _tables  # noqa: F401
+from atenex_nova.infrastructure.db.models.tables import (
+    AnswerModel,
+    CitationModel,
+    EvaluationCaseModel,
+    EvaluationRunModel,
+    PipelineAuditModel,
+    QueryModel,
+)
 from atenex_nova.infrastructure.db.repositories.sql_chunk_repo import SqlChunkRepository
-from atenex_nova.infrastructure.db.repositories.sql_collection_repo import SqlCollectionRepository
 from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocumentRepository
 from atenex_nova.infrastructure.db.repositories.sql_job_repo import SqlJobRepository
-from atenex_nova.infrastructure.db.repositories.sql_node_repo import SqlDocumentNodeRepository
 from atenex_nova.infrastructure.db.repositories.sql_proposition_repo import SqlPropositionRepository
 from atenex_nova.infrastructure.db.repositories.sql_relation_repo import SqlRelationRepository
 from atenex_nova.infrastructure.db.repositories.sql_summary_repo import SqlSummaryRepository
@@ -26,8 +33,14 @@ from atenex_nova.infrastructure.db.session import get_session
 from atenex_nova.infrastructure.files.blob_store import BlobStore
 from atenex_nova.infrastructure.parsing.docling_adapter import DoclingParserAdapter
 from atenex_nova.main import app
-from atenex_nova.workers.jobs.ingestion_job import NormalizeDocumentJobHandler, ParseDocumentJobHandler
-from atenex_nova.workers.jobs.mem_builder_job import EmbedDocumentJobHandler, SegmentDocumentJobHandler
+from atenex_nova.workers.jobs.ingestion_job import (
+    NormalizeDocumentJobHandler,
+    ParseDocumentJobHandler,
+)
+from atenex_nova.workers.jobs.mem_builder_job import (
+    EmbedDocumentJobHandler,
+    SegmentDocumentJobHandler,
+)
 from atenex_nova.workers.jobs.memory_enrichment_job import (
     BuildGraphJobHandler,
     EmbedPropositionsJobHandler,
@@ -61,6 +74,10 @@ async def e2e_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(
         "atenex_nova.infrastructure.visual.colpali_adapter.get_settings",
+        lambda: SimpleNamespace(visual_pages_path=visual_root),
+    )
+    monkeypatch.setattr(
+        "atenex_nova.application.services.collection_cleanup_service.get_settings",
         lambda: SimpleNamespace(visual_pages_path=visual_root),
     )
 
@@ -318,6 +335,302 @@ async def test_end_to_end_local_path_import_keeps_original_file_reference(e2e_en
         docs = await document_repo.list_by_collection(collection_id)
         assert docs and docs[0].source_path == str(source_file.resolve())
         assert docs[0].status.value == "ready"
+
+
+@pytest.mark.asyncio
+async def test_end_to_end_upload_deduplicates_same_checksum(e2e_env, tmp_path: Path) -> None:
+    session_factory = e2e_env["session_factory"]
+    blob_root = e2e_env["blob_root"]
+
+    source_a = tmp_path / "dedupe-a.txt"
+    source_b = tmp_path / "dedupe-b.txt"
+    payload = "same payload for dedupe"
+    source_a.write_text(payload, encoding="utf-8")
+    source_b.write_text(payload, encoding="utf-8")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        collection_id = await _create_collection(client, "Upload Dedupe E2E")
+
+        with source_a.open("rb") as handle_a:
+            response_a = await client.post(
+                f"/collections/{collection_id}/documents",
+                files={"file": (source_a.name, handle_a, "text/plain")},
+            )
+        with source_b.open("rb") as handle_b:
+            response_b = await client.post(
+                f"/collections/{collection_id}/documents",
+                files={"file": (source_b.name, handle_b, "text/plain")},
+            )
+
+        assert response_a.status_code == 201
+        assert response_b.status_code == 201
+
+        first = response_a.json()
+        second = response_b.json()
+        assert second["id"] == first["id"]
+        assert second["source_path"] == first["source_path"]
+
+    collection_blob_root = blob_root / collection_id
+    assert collection_blob_root.exists()
+    blob_doc_dirs = [entry for entry in collection_blob_root.iterdir() if entry.is_dir()]
+    assert len(blob_doc_dirs) == 1
+
+    async with session_factory() as session:
+        document_repo = SqlDocumentRepository(session)
+        docs = await document_repo.list_by_collection(collection_id)
+        assert len(docs) == 1
+
+        jobs = await SqlJobRepository(session).list_all()
+        parse_jobs = [job for job in jobs if job.job_type == JobType.PARSE_DOCUMENT]
+        assert len(parse_jobs) == 1
+
+
+@pytest.mark.asyncio
+async def test_end_to_end_upload_preserves_collection_folder_path(e2e_env, tmp_path: Path) -> None:
+    session_factory = e2e_env["session_factory"]
+    blob_root = e2e_env["blob_root"]
+
+    source_file = tmp_path / "folder-upload.txt"
+    source_file.write_text("Folder uploads should keep collection path metadata.", encoding="utf-8")
+
+    async def fake_parse(self, file_path: str, document_id: str) -> list[DocumentNode]:
+        text = Path(file_path).read_text(encoding="utf-8").strip()
+        return [
+            DocumentNode(
+                id=new_id(),
+                document_id=document_id,
+                node_type=NodeType.PARAGRAPH,
+                raw_text=text,
+                normalized_text="",
+                page_number=1,
+                order_index=0,
+            )
+        ]
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(DoclingParserAdapter, "parse", fake_parse, raising=True)
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            collection_id = await _create_collection(client, "Folder Upload E2E")
+            with source_file.open("rb") as handle:
+                response = await client.post(
+                    f"/collections/{collection_id}/documents",
+                    data={
+                        "collection_path": "lote-a/subcarpeta/folder-upload.txt",
+                        "display_title": "lote-a/subcarpeta/folder-upload.txt",
+                    },
+                    files={"file": (source_file.name, handle, "text/plain")},
+                )
+
+            assert response.status_code == 201
+            document = response.json()
+            assert document["collection_path"] == "lote-a/subcarpeta/folder-upload.txt"
+            assert document["title"] == "lote-a/subcarpeta/folder-upload.txt"
+
+            stored_path = Path(document["source_path"])
+            assert stored_path.exists()
+            assert (blob_root / collection_id / document["id"] / "lote-a" / "subcarpeta" / "folder-upload.txt").exists()
+
+            await _run_jobs_to_completion(session_factory)
+
+    async with session_factory() as session:
+        docs = await SqlDocumentRepository(session).list_by_collection(collection_id)
+        assert docs and docs[0].collection_path == "lote-a/subcarpeta/folder-upload.txt"
+
+
+@pytest.mark.asyncio
+async def test_end_to_end_local_folder_import_registers_all_files(e2e_env, tmp_path: Path) -> None:
+    session_factory = e2e_env["session_factory"]
+
+    source_folder = tmp_path / "local-folder"
+    (source_folder / "uno").mkdir(parents=True, exist_ok=True)
+    (source_folder / "dos").mkdir(parents=True, exist_ok=True)
+    file_a = source_folder / "uno" / "a.txt"
+    file_b = source_folder / "dos" / "b.md"
+    file_a.write_text("archivo a", encoding="utf-8")
+    file_b.write_text("archivo b", encoding="utf-8")
+
+    async def fake_parse(self, file_path: str, document_id: str) -> list[DocumentNode]:
+        text = Path(file_path).read_text(encoding="utf-8").strip()
+        return [
+            DocumentNode(
+                id=new_id(),
+                document_id=document_id,
+                node_type=NodeType.PARAGRAPH,
+                raw_text=text,
+                normalized_text="",
+                page_number=1,
+                order_index=0,
+            )
+        ]
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(DoclingParserAdapter, "parse", fake_parse, raising=True)
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            collection_id = await _create_collection(client, "Folder Import E2E")
+            response = await client.post(
+                f"/collections/{collection_id}/documents/import-folder",
+                json={
+                    "source_folder": str(source_folder),
+                    "collection_path": "batch-local",
+                    "recursive": True,
+                },
+            )
+            assert response.status_code == 201
+            payload = response.json()
+            assert payload["imported"] == 2
+
+            await _run_jobs_to_completion(session_factory)
+
+            documents_response = await client.get(f"/collections/{collection_id}/documents")
+            assert documents_response.status_code == 200
+            documents = documents_response.json()
+            assert len(documents) == 2
+            collection_paths = {item["collection_path"] for item in documents}
+            assert "batch-local/uno/a.txt" in collection_paths
+            assert "batch-local/dos/b.md" in collection_paths
+            source_paths = {item["source_path"] for item in documents}
+            assert str(file_a.resolve()) in source_paths
+            assert str(file_b.resolve()) in source_paths
+
+
+@pytest.mark.asyncio
+async def test_delete_collection_cleans_indexes_without_deleting_source_files(e2e_env, tmp_path: Path) -> None:
+    session_factory = e2e_env["session_factory"]
+    visual_root = e2e_env["visual_root"]
+
+    source_file = tmp_path / "delete-source.txt"
+    source_file.write_text(
+        "Colecciones deben eliminar índices sin tocar archivos fuente.",
+        encoding="utf-8",
+    )
+
+    deleted_collections: list[str] = []
+    deleted_filters: list[tuple[str, dict[str, str]]] = []
+
+    async def fake_parse(self, file_path: str, document_id: str) -> list[DocumentNode]:
+        text = Path(file_path).read_text(encoding="utf-8").strip()
+        return [
+            DocumentNode(
+                id=new_id(),
+                document_id=document_id,
+                node_type=NodeType.PARAGRAPH,
+                raw_text=text,
+                normalized_text="",
+                page_number=1,
+                order_index=0,
+            )
+        ]
+
+    def fake_qdrant_init(self, host: str = "localhost", port: int = 6333) -> None:
+        self.client = None
+        self._available = True
+
+    async def fake_qdrant_init_collection(self, collection_name: str, vector_size: int) -> None:
+        del collection_name, vector_size
+
+    async def fake_qdrant_upsert(self, collection_name: str, documents: list) -> None:
+        del collection_name, documents
+
+    async def fake_qdrant_delete_collection(self, collection_name: str) -> None:
+        deleted_collections.append(collection_name)
+
+    async def fake_qdrant_delete_by_filter(self, collection_name: str, filter_dict: dict[str, str]) -> None:
+        deleted_filters.append((collection_name, dict(filter_dict)))
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(DoclingParserAdapter, "parse", fake_parse, raising=True)
+        patch.setattr(
+            "atenex_nova.infrastructure.qdrant.qdrant_adapter.QdrantAdapter.__init__",
+            fake_qdrant_init,
+            raising=True,
+        )
+        patch.setattr(
+            "atenex_nova.infrastructure.qdrant.qdrant_adapter.QdrantAdapter.init_collection",
+            fake_qdrant_init_collection,
+            raising=True,
+        )
+        patch.setattr(
+            "atenex_nova.infrastructure.qdrant.qdrant_adapter.QdrantAdapter.upsert",
+            fake_qdrant_upsert,
+            raising=True,
+        )
+        patch.setattr(
+            "atenex_nova.infrastructure.qdrant.qdrant_adapter.QdrantAdapter.delete_collection",
+            fake_qdrant_delete_collection,
+            raising=True,
+        )
+        patch.setattr(
+            "atenex_nova.infrastructure.qdrant.qdrant_adapter.QdrantAdapter.delete_by_filter",
+            fake_qdrant_delete_by_filter,
+            raising=True,
+        )
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            collection_id = await _create_collection(client, "Delete E2E")
+
+            register_response = await client.post(
+                f"/collections/{collection_id}/documents/import",
+                json={"source_path": str(source_file), "title": "Delete Source"},
+            )
+            assert register_response.status_code == 201
+            document_id = register_response.json()["id"]
+
+            await _run_jobs_to_completion(session_factory)
+            assert (visual_root / f"{collection_id}.json").exists()
+
+            query_result = await _search(client, collection_id, "¿Qué se debe preservar?")
+            assert query_result["query_id"]
+
+            delete_response = await client.delete(f"/collections/{collection_id}")
+            assert delete_response.status_code == 204
+
+            list_response = await client.get("/collections")
+            assert list_response.status_code == 200
+            assert all(item["id"] != collection_id for item in list_response.json())
+
+            document_response = await client.get(f"/documents/{document_id}")
+            assert document_response.status_code == 404
+
+    assert source_file.exists()
+    assert not (visual_root / f"{collection_id}.json").exists()
+    assert f"collection_{collection_id}" in deleted_collections
+    assert f"collection_{collection_id}_propositions" in deleted_collections
+    assert f"collection_{collection_id}_summaries" in deleted_collections
+    assert ("pages_visual", {"collection_id": collection_id}) in deleted_filters
+
+    async with session_factory() as session:
+        doc_repo = SqlDocumentRepository(session)
+        chunk_repo = SqlChunkRepository(session)
+        proposition_repo = SqlPropositionRepository(session)
+        summary_repo = SqlSummaryRepository(session)
+
+        assert await doc_repo.list_by_collection(collection_id) == []
+        assert await chunk_repo.list_by_collection(collection_id) == []
+        assert await proposition_repo.list_by_collection(collection_id) == []
+        assert await summary_repo.list_by_collection(collection_id) == []
+
+        query_rows = await session.execute(select(QueryModel.id).where(QueryModel.collection_id == collection_id))
+        query_ids = [row[0] for row in query_rows.all()]
+        assert query_ids == []
+
+        answer_rows = await session.execute(select(AnswerModel.id))
+        answer_ids = [row[0] for row in answer_rows.all()]
+        assert answer_ids == []
+
+        citation_rows = await session.execute(select(CitationModel.id))
+        citation_ids = [row[0] for row in citation_rows.all()]
+        assert citation_ids == []
+
+        eval_run_rows = await session.execute(select(EvaluationRunModel.id).where(EvaluationRunModel.collection_id == collection_id))
+        assert eval_run_rows.all() == []
+
+        eval_case_rows = await session.execute(select(EvaluationCaseModel.id))
+        assert eval_case_rows.all() == []
+
+        audit_rows = await session.execute(select(PipelineAuditModel.id).where(PipelineAuditModel.entity_id == collection_id))
+        assert audit_rows.all() == []
 
 
 @pytest.mark.asyncio

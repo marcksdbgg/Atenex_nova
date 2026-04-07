@@ -1,5 +1,7 @@
 /* Atenex Nova — Main App with routing */
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { useState } from 'react';
+import { BrowserRouter, Route, Routes } from 'react-router-dom';
+
 import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
 import { DashboardPage, CollectionsPage, QueryPage, JobsPage, ObservabilityPage, EvaluationPage } from './pages/Pages';
@@ -14,10 +16,26 @@ const ROUTES = [
 ];
 
 function AppShell() {
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
   return (
-    <div className="app-shell">
-      <Sidebar />
-      <main className="main-content">
+    <div className={`app-shell${sidebarCollapsed ? ' app-shell--sidebar-collapsed' : ''}${mobileNavOpen ? ' app-shell--mobile-nav-open' : ''}`}>
+      <Sidebar
+        collapsed={sidebarCollapsed}
+        mobileOpen={mobileNavOpen}
+        onToggleCollapsed={() => setSidebarCollapsed(current => !current)}
+        onCloseMobile={() => setMobileNavOpen(false)}
+      />
+      {mobileNavOpen ? (
+        <button
+          aria-label="Cerrar navegación"
+          className="app-shell__backdrop"
+          onClick={() => setMobileNavOpen(false)}
+          type="button"
+        />
+      ) : null}
+      <main className={`main-content${sidebarCollapsed ? ' main-content--collapsed' : ''}`}>
         <Routes>
           {ROUTES.map(r => (
             <Route
@@ -25,7 +43,12 @@ function AppShell() {
               path={r.path}
               element={
                 <>
-                  <TopBar title={r.title} />
+                  <TopBar
+                    navigationCollapsed={sidebarCollapsed}
+                    onOpenNavigation={() => setMobileNavOpen(true)}
+                    onToggleNavigation={() => setSidebarCollapsed(current => !current)}
+                    title={r.title}
+                  />
                   <div className="page-content">{r.element}</div>
                 </>
               }

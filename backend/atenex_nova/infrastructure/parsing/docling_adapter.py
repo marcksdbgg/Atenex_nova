@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from pathlib import Path
 
 from atenex_nova.domain.entities.document_node import DocumentNode
 from atenex_nova.domain.value_objects.identifiers import NodeType, new_id
@@ -24,7 +25,42 @@ class DoclingParserAdapter:
             self.converter = None
             self.chunker = None
 
+    @staticmethod
+    def _is_plain_text(file_path: str) -> bool:
+        return Path(file_path).suffix.lower() in {".txt", ".text", ".md", ".markdown", ".rst"}
+
+    async def _parse_plain_text(self, file_path: str, document_id: str) -> list[DocumentNode]:
+        raw_text = await asyncio.to_thread(Path(file_path).read_text, encoding="utf-8", errors="replace")
+        normalized_text = raw_text.replace("\r\n", "\n").strip()
+        if not normalized_text:
+            return []
+
+        blocks = [block.strip() for block in normalized_text.split("\n\n") if block.strip()]
+        if not blocks:
+            blocks = [normalized_text]
+
+        nodes: list[DocumentNode] = []
+        for idx, block in enumerate(blocks):
+            nodes.append(
+                DocumentNode(
+                    id=new_id(),
+                    document_id=document_id,
+                    node_type=NodeType.PARAGRAPH,
+                    raw_text=block,
+                    normalized_text="",
+                    order_index=idx,
+                    metadata={"source_format": "text/plain", "source_path": file_path},
+                )
+            )
+
+        logger.info("Extracted %d plain-text nodes for document %s", len(nodes), document_id)
+        return nodes
+
     async def parse(self, file_path: str, document_id: str) -> list[DocumentNode]:
+        if self._is_plain_text(file_path):
+            logger.info("Parsing plain text document %s at %s", document_id, file_path)
+            return await self._parse_plain_text(file_path, document_id)
+
         if not self.converter or not self.chunker:
             logger.error("Cannot parse: Docling is not available")
             return []
@@ -32,7 +68,13 @@ class DoclingParserAdapter:
         logger.info(f"Parsing document {document_id} at {file_path} with Docling...")
 
         # Run synchronous Docling conversion in a worker thread
-        result = await asyncio.to_thread(self.converter.convert, file_path)
+        try:
+            result = await asyncio.to_thread(self.converter.convert, file_path)
+        except Exception:
+            if self._is_plain_text(file_path):
+                logger.warning("Docling failed for %s, falling back to plain-text parsing", file_path)
+                return await self._parse_plain_text(file_path, document_id)
+            raise
         doc = result.document
 
         logger.info(f"Document {document_id} parsed. Chunking...")

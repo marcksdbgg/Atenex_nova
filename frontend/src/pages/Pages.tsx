@@ -21,12 +21,47 @@ import type {
 
 type UploadStatus = 'queued' | 'uploading' | 'done' | 'error';
 
+type UploadCandidate = {
+  file: File;
+  relativePath?: string;
+};
+
 type UploadQueueItem = {
   id: string;
   file: File;
   status: UploadStatus;
+  collectionPath?: string;
+  displayTitle?: string;
   message?: string;
   document?: Document;
+};
+
+type FolderWizardState = {
+  collectionId: string;
+  candidates: UploadCandidate[];
+  baseCollectionPath: string;
+  rootMappings: Record<string, string>;
+  preserveHierarchy: boolean;
+};
+
+type FileSystemEntryLike = {
+  isFile: boolean;
+  isDirectory: boolean;
+  name: string;
+};
+
+type FileSystemFileEntryLike = FileSystemEntryLike & {
+  file: (callback: (file: File) => void) => void;
+};
+
+type FileSystemDirectoryEntryLike = FileSystemEntryLike & {
+  createReader: () => {
+    readEntries: (callback: (entries: FileSystemEntryLike[]) => void) => void;
+  };
+};
+
+type DataTransferItemWithEntry = DataTransferItem & {
+  webkitGetAsEntry?: () => FileSystemEntryLike | null;
 };
 
 type ChatTurn = {
@@ -49,6 +84,9 @@ type ChatTurn = {
 };
 
 const MAX_VISIBLE_DOCUMENTS = 6;
+const INVENTORY_PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
+type InventoryStatusFilter = 'all' | 'ready' | 'active' | 'failed';
+type AuditStatusFilter = 'all' | 'succeeded' | 'failed' | 'running';
 
 const DOCUMENT_PIPELINE = [
   { key: 'registered', label: 'En cola', detail: 'Documento recibido y pendiente de análisis', tone: 'accent', progress: 12 },
@@ -63,6 +101,20 @@ const DOCUMENT_PIPELINE = [
 
 const AUDIT_ENTITY_TYPES = ['document', 'query', 'collection', 'answer', 'job'] as const;
 
+const INVENTORY_STATUS_FILTERS: Array<{ value: InventoryStatusFilter; label: string }> = [
+  { value: 'all', label: 'Todos' },
+  { value: 'ready', label: 'Listos' },
+  { value: 'active', label: 'Activos' },
+  { value: 'failed', label: 'Errores' },
+];
+
+const AUDIT_STATUS_FILTERS: Array<{ value: AuditStatusFilter; label: string }> = [
+  { value: 'all', label: 'Todos' },
+  { value: 'succeeded', label: 'Succeeded' },
+  { value: 'failed', label: 'Failed' },
+  { value: 'running', label: 'Running' },
+];
+
 function createFileId(file: File): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
@@ -74,6 +126,101 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function normalizeCollectionPath(path: string | undefined | null): string {
+  if (!path) return '';
+  const normalized = path.replace(/\\/g, '/').trim().replace(/^\/+|\/+$/g, '');
+  if (!normalized) return '';
+  return normalized
+    .split('/')
+    .map(part => part.trim())
+    .filter(part => part.length > 0 && part !== '.' && part !== '..')
+    .join('/');
+}
+
+function joinCollectionPaths(...segments: Array<string | undefined | null>): string {
+  return segments
+    .map(segment => normalizeCollectionPath(segment))
+    .filter(Boolean)
+    .join('/');
+}
+
+function inferRelativePath(file: File): string {
+  const webkitRelativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
+  return normalizeCollectionPath(webkitRelativePath || file.name) || file.name;
+}
+
+function getRootFolder(relativePath: string): string {
+  const normalized = normalizeCollectionPath(relativePath);
+  if (!normalized.includes('/')) return '';
+  return normalized.split('/')[0] ?? '';
+}
+
+function getCollectionDisplayTitle(document: Document): string {
+  const collectionPath = normalizeCollectionPath(document.collection_path || document.title);
+  if (!collectionPath) return document.title;
+  const parts = collectionPath.split('/');
+  return parts[parts.length - 1] || document.title;
+}
+
+async function readDirectoryEntries(entry: FileSystemDirectoryEntryLike): Promise<FileSystemEntryLike[]> {
+  const reader = entry.createReader();
+  const allEntries: FileSystemEntryLike[] = [];
+  while (true) {
+    const chunk = await new Promise<FileSystemEntryLike[]>(resolve => {
+      reader.readEntries(resolve);
+    });
+    if (chunk.length === 0) break;
+    allEntries.push(...chunk);
+  }
+  return allEntries;
+}
+
+async function collectEntryFiles(entry: FileSystemEntryLike, parentPath = ''): Promise<UploadCandidate[]> {
+  if (entry.isFile) {
+    const fileEntry = entry as FileSystemFileEntryLike;
+    const file = await new Promise<File>(resolve => {
+      fileEntry.file(resolve);
+    });
+    const relativePath = joinCollectionPaths(parentPath, file.name) || file.name;
+    return [{ file, relativePath }];
+  }
+
+  if (!entry.isDirectory) {
+    return [];
+  }
+
+  const directoryEntry = entry as FileSystemDirectoryEntryLike;
+  const nextPath = joinCollectionPaths(parentPath, entry.name);
+  const children = await readDirectoryEntries(directoryEntry);
+  const nested = await Promise.all(children.map(child => collectEntryFiles(child, nextPath)));
+  return nested.flat();
+}
+
+async function collectDroppedCandidates(dataTransfer: DataTransfer): Promise<UploadCandidate[]> {
+  const items = Array.from(dataTransfer.items || []);
+  const entryItems = items
+    .filter(item => item.kind === 'file')
+    .map(item => (item as DataTransferItemWithEntry).webkitGetAsEntry?.())
+    .filter(Boolean) as FileSystemEntryLike[];
+
+  if (entryItems.length > 0) {
+    const nested = await Promise.all(entryItems.map(entry => collectEntryFiles(entry)));
+    const files = nested.flat();
+    if (files.length > 0) {
+      return files;
+    }
+  }
+
+  return Array.from(dataTransfer.files || []).map(file => ({
+    file,
+    relativePath: inferRelativePath(file),
+  }));
+}
+
+function normalizeSearchValue(value: string): string {
+  return value.trim().toLowerCase();
 }
 
 function formatRelativeDate(value: string): string {
@@ -89,6 +236,17 @@ function formatRelativeDate(value: string): string {
 
 function getDocumentPipeline(status: string) {
   return DOCUMENT_PIPELINE.find(step => step.key === status) ?? DOCUMENT_PIPELINE[0];
+}
+
+function matchesInventoryStatus(document: Document, filter: InventoryStatusFilter): boolean {
+  if (filter === 'all') return true;
+  if (filter === 'ready') return document.status === 'ready';
+  if (filter === 'failed') return document.status === 'failed';
+  return document.status !== 'ready' && document.status !== 'failed';
+}
+
+function matchesAuditStatus(status: string, filter: AuditStatusFilter): boolean {
+  return filter === 'all' ? true : status === filter;
 }
 
 function formatAuditValue(value: unknown): string {
@@ -193,13 +351,33 @@ export function CollectionsPage() {
   const [documentsByCollection, setDocumentsByCollection] = useState<Record<string, Document[]>>({});
   const [uploadQueues, setUploadQueues] = useState<Record<string, UploadQueueItem[]>>({});
   const [localSourcePaths, setLocalSourcePaths] = useState<Record<string, string>>({});
+  const [localFolderPaths, setLocalFolderPaths] = useState<Record<string, string>>({});
+  const [localFolderCollectionPaths, setLocalFolderCollectionPaths] = useState<Record<string, string>>({});
   const [processingUploads, setProcessingUploads] = useState<Record<string, boolean>>({});
   const [selectedTraceDocumentIds, setSelectedTraceDocumentIds] = useState<Record<string, string>>({});
   const [auditEventsByDocument, setAuditEventsByDocument] = useState<Record<string, PipelineAuditEntry[]>>({});
   const [auditLoadingByDocument, setAuditLoadingByDocument] = useState<Record<string, boolean>>({});
   const [auditErrorByDocument, setAuditErrorByDocument] = useState<Record<string, string>>({});
+  const [collectionAuditByCollection, setCollectionAuditByCollection] = useState<Record<string, PipelineAuditEntry[]>>({});
+  const [collectionAuditLoadingByCollection, setCollectionAuditLoadingByCollection] = useState<Record<string, boolean>>({});
+  const [collectionAuditErrorByCollection, setCollectionAuditErrorByCollection] = useState<Record<string, string>>({});
   const [evidenceLoadingByDocument, setEvidenceLoadingByDocument] = useState<Record<string, boolean>>({});
   const [busyCollectionId, setBusyCollectionId] = useState('');
+  const [refreshingDocumentsByCollection, setRefreshingDocumentsByCollection] = useState<Record<string, boolean>>({});
+  const [importingLocalByCollection, setImportingLocalByCollection] = useState<Record<string, boolean>>({});
+  const [importingLocalFolderByCollection, setImportingLocalFolderByCollection] = useState<Record<string, boolean>>({});
+  const [inventorySearchByCollection, setInventorySearchByCollection] = useState<Record<string, string>>({});
+  const [inventoryStatusByCollection, setInventoryStatusByCollection] = useState<Record<string, InventoryStatusFilter>>({});
+  const [inventoryPageByCollection, setInventoryPageByCollection] = useState<Record<string, number>>({});
+  const [inventoryPageSizeByCollection, setInventoryPageSizeByCollection] = useState<Record<string, number>>({});
+  const [collectionAuditSearchByCollection, setCollectionAuditSearchByCollection] = useState<Record<string, string>>({});
+  const [collectionAuditStatusByCollection, setCollectionAuditStatusByCollection] = useState<Record<string, AuditStatusFilter>>({});
+  const [traceAuditSearchByCollection, setTraceAuditSearchByCollection] = useState<Record<string, string>>({});
+  const [traceAuditStatusByCollection, setTraceAuditStatusByCollection] = useState<Record<string, AuditStatusFilter>>({});
+  const [collapsedCollectionLogsByCollection, setCollapsedCollectionLogsByCollection] = useState<Record<string, boolean>>({});
+  const [collapsedTraceByCollection, setCollapsedTraceByCollection] = useState<Record<string, boolean>>({});
+  const [deletingCollectionId, setDeletingCollectionId] = useState('');
+  const [folderWizard, setFolderWizard] = useState<FolderWizardState | null>(null);
   const [message, setMessage] = useState('');
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -344,6 +522,52 @@ export function CollectionsPage() {
     });
   };
 
+  const syncCollectionAudits = async (collectionIds: string[]) => {
+    if (collectionIds.length === 0) return;
+    setCollectionAuditLoadingByCollection(current => {
+      const next = { ...current };
+      for (const collectionId of collectionIds) {
+        next[collectionId] = true;
+      }
+      return next;
+    });
+    try {
+      const entries = await Promise.all(
+        collectionIds.map(async collectionId => [collectionId, await api.listPipelineAudit({ entityType: 'collection', entityId: collectionId, limit: 8 })] as const),
+      );
+
+      setCollectionAuditByCollection(current => ({
+        ...current,
+        ...Object.fromEntries(entries),
+      }));
+
+      setCollectionAuditErrorByCollection(current => {
+        const next = { ...current };
+        for (const [collectionId] of entries) {
+          delete next[collectionId];
+        }
+        return next;
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo cargar la bitácora de la colección.';
+      setCollectionAuditErrorByCollection(current => {
+        const next = { ...current };
+        for (const collectionId of collectionIds) {
+          next[collectionId] = message;
+        }
+        return next;
+      });
+    } finally {
+      setCollectionAuditLoadingByCollection(current => {
+        const next = { ...current };
+        for (const collectionId of collectionIds) {
+          delete next[collectionId];
+        }
+        return next;
+      });
+    }
+  };
+
   const hasLiveProcessing = useMemo(
     () =>
       Object.values(documentsByCollection).some(docs => docs.some(doc => doc.status !== 'ready' && doc.status !== 'failed')) ||
@@ -357,7 +581,8 @@ export function CollectionsPage() {
 
     const runSync = async () => {
       try {
-        await syncCollectionDocuments(collections.map(collection => collection.id));
+        const collectionIds = collections.map(collection => collection.id);
+        await Promise.all([syncCollectionDocuments(collectionIds), syncCollectionAudits(collectionIds)]);
       } catch {
         if (mounted) {
           setMessage('No se pudo actualizar el estado de los documentos.');
@@ -366,14 +591,10 @@ export function CollectionsPage() {
     };
 
     void runSync();
-
-    if (!(hasLiveProcessing || hasRebuildPolling)) return () => {
-      mounted = false;
-    };
-
+    const intervalMs = hasLiveProcessing || hasRebuildPolling ? 3500 : 12000;
     const timer = window.setInterval(() => {
       void runSync();
-    }, 3500);
+    }, intervalMs);
 
     return () => {
       mounted = false;
@@ -385,15 +606,40 @@ export function CollectionsPage() {
     if (collections.length === 0) return;
     setMessage('');
     try {
-      await syncCollectionDocuments(collections.map(collection => collection.id));
+      const collectionIds = collections.map(collection => collection.id);
+      await Promise.all([syncCollectionDocuments(collectionIds), syncCollectionAudits(collectionIds)]);
       setMessage('Inventario sincronizado.');
     } catch {
       setMessage('No se pudo sincronizar el inventario.');
     }
   };
 
-  const refreshCollectionDocuments = async (collectionId: string) => {
-    await syncCollectionDocuments([collectionId]);
+  const refreshCollectionDocuments = async (collectionId: string, options: { silent?: boolean } = {}) => {
+    if (refreshingDocumentsByCollection[collectionId]) return;
+
+    setRefreshingDocumentsByCollection(current => ({ ...current, [collectionId]: true }));
+    if (!options.silent) {
+      setMessage('');
+    }
+
+    try {
+      await syncCollectionDocuments([collectionId]);
+      void syncCollectionAudits([collectionId]).catch(() => undefined);
+      if (!options.silent) {
+        setMessage('Inventario actualizado.');
+      }
+    } catch (error) {
+      if (!options.silent) {
+        setMessage(error instanceof Error ? error.message : 'No se pudo actualizar el inventario.');
+      }
+      throw error;
+    } finally {
+      setRefreshingDocumentsByCollection(current => {
+        const next = { ...current };
+        delete next[collectionId];
+        return next;
+      });
+    }
   };
 
   const updateQueueItem = (collectionId: string, itemId: string, patch: Partial<UploadQueueItem>) => {
@@ -407,6 +653,9 @@ export function CollectionsPage() {
     const sourcePath = (localSourcePaths[collectionId] ?? '').trim();
     if (!sourcePath) return;
 
+    if (importingLocalByCollection[collectionId]) return;
+
+    setImportingLocalByCollection(current => ({ ...current, [collectionId]: true }));
     setMessage('');
     try {
       const document = await api.importLocalDocument(collectionId, sourcePath);
@@ -417,8 +666,15 @@ export function CollectionsPage() {
       setLocalSourcePaths(current => ({ ...current, [collectionId]: '' }));
       setMessage(`Ruta local registrada para ${document.title}. El pipeline continúa sin duplicar bytes.`);
       await syncCollectionDocuments([collectionId]);
+      void syncCollectionAudits([collectionId]).catch(() => undefined);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'No se pudo registrar la ruta local.');
+    } finally {
+      setImportingLocalByCollection(current => {
+        const next = { ...current };
+        delete next[collectionId];
+        return next;
+      });
     }
   };
 
@@ -461,6 +717,75 @@ export function CollectionsPage() {
     }
   };
 
+  const enqueueUploadBatch = async (collectionId: string, batch: UploadQueueItem[]) => {
+    setUploadQueues(current => ({
+      ...current,
+      [collectionId]: [...(current[collectionId] ?? []), ...batch],
+    }));
+    const collectionName = collections.find(collection => collection.id === collectionId)?.name ?? collectionId;
+    setMessage(`Cola ampliada en ${collectionName}: ${batch.length} archivos añadidos.`);
+    await processCollectionQueue(collectionId, batch);
+  };
+
+  const openFolderWizard = (collectionId: string, candidates: UploadCandidate[]) => {
+    const roots = new Set(
+      candidates
+        .map(candidate => getRootFolder(candidate.relativePath || candidate.file.name))
+        .filter(Boolean),
+    );
+
+    setFolderWizard({
+      collectionId,
+      candidates,
+      baseCollectionPath: '',
+      rootMappings: Object.fromEntries(Array.from(roots).map(root => [root, root])),
+      preserveHierarchy: true,
+    });
+  };
+
+  const finalizeFolderWizard = async () => {
+    if (!folderWizard) return;
+
+    const { collectionId, candidates, baseCollectionPath, preserveHierarchy, rootMappings } = folderWizard;
+    const normalizedBasePath = normalizeCollectionPath(baseCollectionPath);
+
+    const batch: UploadQueueItem[] = candidates.map(candidate => {
+      const fallbackFileName = candidate.file.name;
+      const relativePath = normalizeCollectionPath(candidate.relativePath || fallbackFileName) || fallbackFileName;
+      const root = getRootFolder(relativePath);
+
+      let scopedPath = relativePath;
+      if (root) {
+        const mappedRoot = normalizeCollectionPath(rootMappings[root] ?? root);
+        if (preserveHierarchy) {
+          const rest = relativePath.split('/').slice(1).join('/');
+          scopedPath = joinCollectionPaths(mappedRoot, rest || fallbackFileName) || fallbackFileName;
+        } else {
+          scopedPath = joinCollectionPaths(mappedRoot, fallbackFileName) || fallbackFileName;
+        }
+      } else if (!preserveHierarchy) {
+        scopedPath = fallbackFileName;
+      }
+
+      const collectionPath = joinCollectionPaths(normalizedBasePath, scopedPath) || fallbackFileName;
+      return {
+        id: createFileId(candidate.file),
+        file: candidate.file,
+        status: 'queued',
+        collectionPath,
+        displayTitle: collectionPath,
+      };
+    });
+
+    setFolderWizard(null);
+    await enqueueUploadBatch(collectionId, batch);
+  };
+
+  const cancelFolderWizard = () => {
+    setFolderWizard(null);
+    setMessage('Carga por carpeta cancelada.');
+  };
+
   const processCollectionQueue = async (collectionId: string, initialBatch: UploadQueueItem[] = []) => {
     if (processingUploadsRef.current[collectionId]) return;
 
@@ -478,9 +803,12 @@ export function CollectionsPage() {
           batch.map(async item => {
             updateQueueItem(collectionId, item.id, { status: 'uploading', message: 'Subiendo al servidor y registrando documento...' });
             try {
-              const document = await api.uploadDocument(collectionId, item.file);
+              const document = await api.uploadDocument(collectionId, item.file, {
+                collectionPath: item.collectionPath,
+                displayTitle: item.displayTitle,
+              });
               updateQueueItem(collectionId, item.id, {
-                status: 'uploading',
+                status: 'done',
                 message: 'Documento registrado. Esperando lectura, segmentación e indexación...',
                 document,
               });
@@ -498,29 +826,74 @@ export function CollectionsPage() {
         );
 
         await syncCollectionDocuments([collectionId]);
+        setUploadQueues(current => ({
+          ...current,
+          [collectionId]: (current[collectionId] ?? []).filter(item => item.status !== 'done'),
+        }));
       }
     } finally {
       setProcessingUploads(current => ({ ...current, [collectionId]: false }));
     }
   };
 
-  const handleCollectionFiles = async (collectionId: string, fileList: FileList | File[]) => {
-    const files = Array.from(fileList);
-    if (files.length === 0) return;
+  const handleCollectionFiles = async (
+    collectionId: string,
+    input: FileList | File[] | UploadCandidate[],
+  ) => {
+    const candidates: UploadCandidate[] =
+      Array.isArray(input) && input.length > 0 && 'file' in input[0]
+        ? (input as UploadCandidate[])
+        : Array.from(input as FileList | File[]).map(file => ({
+            file,
+            relativePath: inferRelativePath(file),
+          }));
 
-    const batch = files.map(file => ({
-      id: createFileId(file),
-      file,
-      status: 'queued' as const,
-    }));
+    if (candidates.length === 0) return;
 
-    setUploadQueues(current => ({
-      ...current,
-      [collectionId]: [...(current[collectionId] ?? []), ...batch],
-    }));
-    const collectionName = collections.find(collection => collection.id === collectionId)?.name ?? collectionId;
-    setMessage(`Cola ampliada en ${collectionName}: ${batch.length} archivos añadidos.`);
-    await processCollectionQueue(collectionId, batch);
+    const hasFolderStructure = candidates.some(candidate => normalizeCollectionPath(candidate.relativePath).includes('/'));
+    if (hasFolderStructure) {
+      openFolderWizard(collectionId, candidates);
+      return;
+    }
+
+    const batch: UploadQueueItem[] = candidates.map(candidate => {
+      const collectionPath = normalizeCollectionPath(candidate.relativePath || candidate.file.name) || candidate.file.name;
+      return {
+        id: createFileId(candidate.file),
+        file: candidate.file,
+        status: 'queued',
+        collectionPath,
+        displayTitle: candidate.file.name,
+      };
+    });
+
+    await enqueueUploadBatch(collectionId, batch);
+  };
+
+  const handleLocalFolderImport = async (collectionId: string) => {
+    const sourceFolder = (localFolderPaths[collectionId] ?? '').trim();
+    if (!sourceFolder) return;
+    if (importingLocalFolderByCollection[collectionId]) return;
+
+    const collectionPath = (localFolderCollectionPaths[collectionId] ?? '').trim();
+    setImportingLocalFolderByCollection(current => ({ ...current, [collectionId]: true }));
+    setMessage('');
+    try {
+      const result = await api.importLocalFolder(collectionId, sourceFolder, collectionPath || undefined, true);
+      setMessage(`Carpeta importada: ${result.imported} archivos registrados sin duplicar bytes.`);
+      setLocalFolderPaths(current => ({ ...current, [collectionId]: '' }));
+      setLocalFolderCollectionPaths(current => ({ ...current, [collectionId]: '' }));
+      await syncCollectionDocuments([collectionId]);
+      void syncCollectionAudits([collectionId]).catch(() => undefined);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'No se pudo importar la carpeta local.');
+    } finally {
+      setImportingLocalFolderByCollection(current => {
+        const next = { ...current };
+        delete next[collectionId];
+        return next;
+      });
+    }
   };
 
   const handleCreateCollection = async (event: FormEvent<HTMLFormElement>) => {
@@ -548,6 +921,159 @@ export function CollectionsPage() {
     }
   };
 
+  const clearCollectionState = (collectionId: string) => {
+    setDocumentsByCollection(current => {
+      const next = { ...current };
+      delete next[collectionId];
+      return next;
+    });
+    setUploadQueues(current => {
+      const next = { ...current };
+      delete next[collectionId];
+      return next;
+    });
+    setLocalSourcePaths(current => {
+      const next = { ...current };
+      delete next[collectionId];
+      return next;
+    });
+    setLocalFolderPaths(current => {
+      const next = { ...current };
+      delete next[collectionId];
+      return next;
+    });
+    setLocalFolderCollectionPaths(current => {
+      const next = { ...current };
+      delete next[collectionId];
+      return next;
+    });
+    setProcessingUploads(current => {
+      const next = { ...current };
+      delete next[collectionId];
+      return next;
+    });
+    setSelectedTraceDocumentIds(current => {
+      const next = { ...current };
+      delete next[collectionId];
+      return next;
+    });
+    setCollectionAuditByCollection(current => {
+      const next = { ...current };
+      delete next[collectionId];
+      return next;
+    });
+    setCollectionAuditLoadingByCollection(current => {
+      const next = { ...current };
+      delete next[collectionId];
+      return next;
+    });
+    setCollectionAuditErrorByCollection(current => {
+      const next = { ...current };
+      delete next[collectionId];
+      return next;
+    });
+    setInventorySearchByCollection(current => {
+      const next = { ...current };
+      delete next[collectionId];
+      return next;
+    });
+    setInventoryStatusByCollection(current => {
+      const next = { ...current };
+      delete next[collectionId];
+      return next;
+    });
+    setInventoryPageByCollection(current => {
+      const next = { ...current };
+      delete next[collectionId];
+      return next;
+    });
+    setInventoryPageSizeByCollection(current => {
+      const next = { ...current };
+      delete next[collectionId];
+      return next;
+    });
+    setCollectionAuditSearchByCollection(current => {
+      const next = { ...current };
+      delete next[collectionId];
+      return next;
+    });
+    setCollectionAuditStatusByCollection(current => {
+      const next = { ...current };
+      delete next[collectionId];
+      return next;
+    });
+    setTraceAuditSearchByCollection(current => {
+      const next = { ...current };
+      delete next[collectionId];
+      return next;
+    });
+    setTraceAuditStatusByCollection(current => {
+      const next = { ...current };
+      delete next[collectionId];
+      return next;
+    });
+    setCollapsedCollectionLogsByCollection(current => {
+      const next = { ...current };
+      delete next[collectionId];
+      return next;
+    });
+    setCollapsedTraceByCollection(current => {
+      const next = { ...current };
+      delete next[collectionId];
+      return next;
+    });
+    setRefreshingDocumentsByCollection(current => {
+      const next = { ...current };
+      delete next[collectionId];
+      return next;
+    });
+    setImportingLocalByCollection(current => {
+      const next = { ...current };
+      delete next[collectionId];
+      return next;
+    });
+    setImportingLocalFolderByCollection(current => {
+      const next = { ...current };
+      delete next[collectionId];
+      return next;
+    });
+    setRebuildPollingByCollection(current => {
+      const next = { ...current };
+      delete next[collectionId];
+      return next;
+    });
+
+    const timerId = rebuildPollingTimersRef.current[collectionId];
+    if (timerId) {
+      window.clearTimeout(timerId);
+      delete rebuildPollingTimersRef.current[collectionId];
+    }
+
+    setFolderWizard(current => (current?.collectionId === collectionId ? null : current));
+  };
+
+  const handleDeleteCollection = async (collection: Collection) => {
+    if (deletingCollectionId === collection.id) return;
+
+    const confirmed = window.confirm(
+      `Eliminar la colección "${collection.name}" borrará índices, embeddings, auditoría y metadatos. Los archivos de origen no se borran. ¿Continuar?`,
+    );
+    if (!confirmed) return;
+
+    setDeletingCollectionId(collection.id);
+    setMessage('');
+    try {
+      await api.deleteCollection(collection.id);
+      setCollections(current => current.filter(item => item.id !== collection.id));
+      clearCollectionState(collection.id);
+      setMessage(`Colección eliminada: ${collection.name}. Se conservaron los archivos de origen.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'No se pudo eliminar la colección.');
+    } finally {
+      setDeletingCollectionId('');
+    }
+  };
+
   const handleRebuild = async (collectionId: string) => {
     setBusyCollectionId(collectionId);
     setMessage('');
@@ -566,8 +1092,9 @@ export function CollectionsPage() {
           return next;
         });
         delete rebuildPollingTimersRef.current[collectionId];
-      }, 15000);
-      await refreshCollectionDocuments(collectionId);
+      }, 60000);
+      await refreshCollectionDocuments(collectionId, { silent: true });
+      void syncCollectionAudits([collectionId]).catch(() => undefined);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'No se pudo lanzar el reprocesado.');
     } finally {
@@ -696,13 +1223,60 @@ export function CollectionsPage() {
             const collectionQueue = uploadQueues[collection.id] ?? [];
             const liveDocuments = collectionDocuments.filter(document => document.status !== 'ready' && document.status !== 'failed');
             const readyCount = collectionDocuments.filter(document => document.status === 'ready').length;
-            const queuedCount = collectionQueue.filter(item => item.status === 'queued').length;
-            const runningCount = collectionQueue.filter(item => item.status === 'uploading').length;
-            const errorCount = collectionQueue.filter(item => item.status === 'error').length;
+            const failedCount = collectionDocuments.filter(document => document.status === 'failed').length;
+            const collectionAudit = collectionAuditByCollection[collection.id] ?? [];
+            const collectionAuditLoading = collectionAuditLoadingByCollection[collection.id] ?? false;
+            const collectionAuditError = collectionAuditErrorByCollection[collection.id] ?? '';
+            const isRebuilding = busyCollectionId === collection.id || rebuildPollingByCollection[collection.id];
+            const logsCollapsed = collapsedCollectionLogsByCollection[collection.id] ?? false;
+            const traceCollapsed = collapsedTraceByCollection[collection.id] ?? false;
+            const activeFolderWizard = folderWizard?.collectionId === collection.id ? folderWizard : null;
             const selectedTraceDocument = collectionDocuments.find(document => document.id === selectedTraceDocumentIds[collection.id]) ?? pickDocumentByPriority(collectionDocuments);
             const selectedTraceAudit = selectedTraceDocument ? auditEventsByDocument[selectedTraceDocument.id] ?? [] : [];
             const selectedTraceLoading = selectedTraceDocument ? auditLoadingByDocument[selectedTraceDocument.id] ?? false : false;
             const selectedTraceError = selectedTraceDocument ? auditErrorByDocument[selectedTraceDocument.id] ?? '' : '';
+            const inventorySearch = normalizeSearchValue(inventorySearchByCollection[collection.id] ?? '');
+            const inventoryStatus = inventoryStatusByCollection[collection.id] ?? 'all';
+            const inventoryPageSize = inventoryPageSizeByCollection[collection.id] ?? INVENTORY_PAGE_SIZE_OPTIONS[0];
+            const currentPage = inventoryPageByCollection[collection.id] ?? 1;
+
+            const filteredInventoryDocuments = collectionDocuments
+              .filter(document => {
+                const matchesStatus = matchesInventoryStatus(document, inventoryStatus);
+                if (!matchesStatus) return false;
+                if (!inventorySearch) return true;
+                const collectionPath = normalizeCollectionPath(document.collection_path || document.title);
+                return (
+                  document.title.toLowerCase().includes(inventorySearch)
+                  || collectionPath.toLowerCase().includes(inventorySearch)
+                  || document.mime_type.toLowerCase().includes(inventorySearch)
+                  || document.status.toLowerCase().includes(inventorySearch)
+                );
+              })
+              .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+
+            const totalInventoryPages = Math.max(1, Math.ceil(filteredInventoryDocuments.length / inventoryPageSize));
+            const safeInventoryPage = Math.min(currentPage, totalInventoryPages);
+            const pagedInventoryDocuments = filteredInventoryDocuments.slice(
+              (safeInventoryPage - 1) * inventoryPageSize,
+              safeInventoryPage * inventoryPageSize,
+            );
+
+            const collectionAuditSearch = normalizeSearchValue(collectionAuditSearchByCollection[collection.id] ?? '');
+            const collectionAuditStatus = collectionAuditStatusByCollection[collection.id] ?? 'all';
+            const visibleCollectionAudit = collectionAudit.filter(event => {
+              if (!matchesAuditStatus(event.status, collectionAuditStatus)) return false;
+              if (!collectionAuditSearch) return true;
+              return `${event.stage} ${event.pipeline} ${event.entity_id}`.toLowerCase().includes(collectionAuditSearch);
+            });
+
+            const traceAuditSearch = normalizeSearchValue(traceAuditSearchByCollection[collection.id] ?? '');
+            const traceAuditStatus = traceAuditStatusByCollection[collection.id] ?? 'all';
+            const visibleTraceAudit = selectedTraceAudit.filter(event => {
+              if (!matchesAuditStatus(event.status, traceAuditStatus)) return false;
+              if (!traceAuditSearch) return true;
+              return `${event.stage} ${event.pipeline} ${event.entity_id} ${event.run_id}`.toLowerCase().includes(traceAuditSearch);
+            });
 
             return (
             <article key={collection.id} className="card collection-card" style={{ display: 'grid', gap: 'var(--space-5)' }}>
@@ -713,19 +1287,119 @@ export function CollectionsPage() {
                 </div>
                 <div className="collection-card__meta">
                   <span className="badge badge--accent">{collection.language_profile}</span>
-                  <span className="badge badge--info">{(documentsByCollection[collection.id] ?? []).length} documentos</span>
+                  <span className="badge badge--info">{collectionDocuments.length} documentos</span>
+                  <span className={`badge badge--${failedCount > 0 ? 'error' : 'success'}`}>{failedCount > 0 ? `${failedCount} con error` : 'estable'}</span>
                   <button
                     className="btn btn-secondary collection-card__action"
                     onClick={() => void handleRebuild(collection.id)}
-                    disabled={busyCollectionId === collection.id}
+                    disabled={isRebuilding}
                     type="button"
                   >
-                    {busyCollectionId === collection.id ? 'Reprocesando...' : 'Reprocesar corpus'}
+                    {isRebuilding ? 'Reprocesando...' : 'Reprocesar corpus'}
+                  </button>
+                  <button
+                    className="btn btn-danger collection-card__action"
+                    onClick={() => void handleDeleteCollection(collection)}
+                    disabled={deletingCollectionId === collection.id}
+                    type="button"
+                  >
+                    {deletingCollectionId === collection.id ? 'Eliminando...' : 'Eliminar colección'}
                   </button>
                 </div>
               </div>
-              <div className="collection-ingest-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.3fr) minmax(280px, 0.9fr)', gap: 'var(--space-5)' }}>
-                <section style={{ display: 'grid', gap: 'var(--space-4)' }}>
+              <div className="collection-activity-panel card">
+                <div className="card__header">
+                  <div>
+                    <div className="card__title">Logs de colección</div>
+                    <p style={{ color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>Eventos reales del backend para esta colección.</p>
+                  </div>
+                  <div className="collection-panel-actions">
+                    <div className="collection-activity-panel__status">
+                      <span className={`collection-live-indicator ${isRebuilding ? 'collection-live-indicator--active' : ''}`} />
+                      <span className="badge badge--accent">{visibleCollectionAudit.length}</span>
+                    </div>
+                    <button
+                      className="btn btn-ghost panel-toggle-btn"
+                      onClick={() => setCollapsedCollectionLogsByCollection(current => ({ ...current, [collection.id]: !logsCollapsed }))}
+                      type="button"
+                    >
+                      {logsCollapsed ? 'Expandir' : 'Minimizar'}
+                    </button>
+                  </div>
+                </div>
+                {logsCollapsed ? null : (
+                  <>
+                    {isRebuilding ? (
+                      <div className="collection-processing-banner">
+                        <span className="collection-processing-banner__dot" />
+                        <div>
+                          <strong>Reprocesando corpus</strong>
+                          <p>La colección está reconstruyendo texto, segmentos, embeddings y auditoría en vivo.</p>
+                        </div>
+                      </div>
+                    ) : null}
+                    <div className="trace-toolbar">
+                      <input
+                        className="inventory-search"
+                        onChange={event => setCollectionAuditSearchByCollection(current => ({ ...current, [collection.id]: event.target.value }))}
+                        placeholder="Buscar por stage, pipeline o entidad..."
+                        value={collectionAuditSearchByCollection[collection.id] ?? ''}
+                      />
+                      <div className="trace-toolbar__filters">
+                        <select
+                          className="trace-select"
+                          onChange={event => setCollectionAuditStatusByCollection(current => ({ ...current, [collection.id]: event.target.value as AuditStatusFilter }))}
+                          value={collectionAuditStatusByCollection[collection.id] ?? 'all'}
+                        >
+                          {AUDIT_STATUS_FILTERS.map(option => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    {collectionAuditLoading ? (
+                      <div className="empty-state" style={{ padding: 'var(--space-4)' }}>
+                        <div className="empty-state__icon">⟲</div>
+                        <div className="empty-state__title">Cargando logs</div>
+                        <p>Actualizando eventos de la colección.</p>
+                      </div>
+                    ) : collectionAuditError ? (
+                      <div style={{ padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.35)', color: 'var(--color-error)' }}>
+                        {collectionAuditError}
+                      </div>
+                    ) : visibleCollectionAudit.length === 0 ? (
+                      <p style={{ color: 'var(--color-text-tertiary)' }}>No hay eventos para los filtros actuales.</p>
+                    ) : (
+                      <div className="trace-list trace-list--bounded">
+                        {visibleCollectionAudit.map(event => (
+                          <article key={event.id} className="trace-entry">
+                            <div className="trace-entry__header">
+                              <div>
+                                <div className="trace-entry__title">{event.stage}</div>
+                                <div className="trace-entry__meta">{event.pipeline} · {formatRelativeDate(event.started_at)}</div>
+                              </div>
+                              <div style={{ display: 'inline-flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                                <span className={`badge badge--${event.status === 'failed' ? 'error' : event.status === 'succeeded' ? 'success' : 'warning'}`}>{event.status}</span>
+                                <span className="badge badge--info">{event.duration_ms !== null && event.duration_ms !== undefined ? `${event.duration_ms.toFixed(1)} ms` : 'sin duración'}</span>
+                              </div>
+                            </div>
+                            <div className="trace-entry__body">
+                              <div>Run: {event.run_id}</div>
+                              <div>Entidad: {event.entity_type}/{event.entity_id}</div>
+                              <details style={{ marginTop: 'var(--space-2)' }}>
+                                <summary style={{ cursor: 'pointer' }}>Ver métricas y contexto</summary>
+                                <pre className="trace-entry__json">métricas: {formatAuditValue(event.metrics)}{`\n`}contexto: {formatAuditValue(event.context)}</pre>
+                              </details>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+              <div className="collection-ingest-grid">
+                <section className="collection-ingest-primary">
                   <div
                     className={`collection-dropzone ${dragOverCollectionId === collection.id ? 'collection-dropzone--active' : ''}`}
                     onDragOver={event => {
@@ -736,65 +1410,153 @@ export function CollectionsPage() {
                     onDrop={async event => {
                       event.preventDefault();
                       setDragOverCollectionId('');
-                      await handleCollectionFiles(collection.id, event.dataTransfer.files);
+                      const candidates = await collectDroppedCandidates(event.dataTransfer);
+                      await handleCollectionFiles(collection.id, candidates);
                     }}
                   >
                     <div className="collection-dropzone__copy">
                       <span className="collection-dropzone__eyebrow">Carga masiva</span>
-                      <h3 className="collection-dropzone__title">Arrastra un lote o abre el selector propio</h3>
-                      <p className="collection-dropzone__body">
-                        Sube más de 100 archivos de una vez. Cada uno entra en la cola, se analiza y el estado se actualiza solo mientras progresa.
-                      </p>
+                      <h3 className="collection-dropzone__title">Arrastra el lote completo aquí</h3>
                       <div className="collection-dropzone__actions">
                         <label className="btn btn-primary collection-dropzone__button" htmlFor={`upload-${collection.id}`}>
                           Seleccionar archivos
                         </label>
+                        <label className="btn btn-secondary collection-dropzone__button" htmlFor={`upload-folder-${collection.id}`}>
+                          Seleccionar carpeta
+                        </label>
                       </div>
 
-                      <div style={{ display: 'grid', gap: 'var(--space-3)', marginTop: 'var(--space-4)' }}>
-                        <label style={{ display: 'grid', gap: 'var(--space-2)' }}>
-                          <span style={{ fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                            Importar por ruta local
+                      {activeFolderWizard ? (
+                        <div className="folder-wizard">
+                          <div className="folder-wizard__header">
+                            <strong>Asistente de carpetas</strong>
+                            <span className="badge badge--accent">{activeFolderWizard.candidates.length} archivos</span>
+                          </div>
+                          <p className="folder-wizard__description">Mapea carpetas origen a carpetas destino dentro de esta colección antes de subir.</p>
+                          <label className="folder-wizard__field">
+                            <span>Ruta base en colección (opcional)</span>
+                            <input
+                              className="collection-dropzone__local-input"
+                              value={activeFolderWizard.baseCollectionPath}
+                              onChange={event => {
+                                const value = event.target.value;
+                                setFolderWizard(current => {
+                                  if (!current || current.collectionId !== collection.id) return current;
+                                  return { ...current, baseCollectionPath: value };
+                                });
+                              }}
+                              placeholder="ej: legal/2026"
+                            />
+                          </label>
+                          {Object.keys(activeFolderWizard.rootMappings).length > 0 ? (
+                            <div className="folder-wizard__roots">
+                              {Object.entries(activeFolderWizard.rootMappings).map(([root, mapped]) => (
+                                <label className="folder-wizard__field" key={root}>
+                                  <span>{root}</span>
+                                  <input
+                                    className="collection-dropzone__local-input"
+                                    value={mapped}
+                                    onChange={event => {
+                                      const value = event.target.value;
+                                      setFolderWizard(current => {
+                                        if (!current || current.collectionId !== collection.id) return current;
+                                        return {
+                                          ...current,
+                                          rootMappings: {
+                                            ...current.rootMappings,
+                                            [root]: value,
+                                          },
+                                        };
+                                      });
+                                    }}
+                                    placeholder="Subcarpeta destino"
+                                  />
+                                </label>
+                              ))}
+                            </div>
+                          ) : null}
+                          <label className="folder-wizard__toggle">
+                            <input
+                              checked={activeFolderWizard.preserveHierarchy}
+                              onChange={event => {
+                                const checked = event.target.checked;
+                                setFolderWizard(current => {
+                                  if (!current || current.collectionId !== collection.id) return current;
+                                  return { ...current, preserveHierarchy: checked };
+                                });
+                              }}
+                              type="checkbox"
+                            />
+                            <span>Conservar jerarquía interna</span>
+                          </label>
+                          <div className="folder-wizard__actions">
+                            <button className="btn btn-ghost" type="button" onClick={cancelFolderWizard}>Cancelar</button>
+                            <button className="btn btn-primary" type="button" onClick={() => void finalizeFolderWizard()}>Aplicar y subir</button>
+                          </div>
+                        </div>
+                      ) : null}
+
+                      <div className="collection-dropzone__local">
+                        <label className="collection-dropzone__local-label">
+                          <span className="collection-dropzone__local-caption">
+                            Importar archivo local
                           </span>
                           <input
                             value={localSourcePaths[collection.id] ?? ''}
                             onChange={event => setLocalSourcePaths(current => ({ ...current, [collection.id]: event.target.value }))}
                             placeholder="C:\\ruta\\al\\archivo.txt o ./storage/uploads/archivo.txt"
-                            style={{ width: '100%', padding: 'var(--space-4)', background: 'var(--color-bg-primary)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', color: 'var(--color-text-primary)', fontSize: 'var(--font-md)' }}
+                            className="collection-dropzone__local-input"
                           />
                         </label>
-                        <div style={{ display: 'flex', gap: 'var(--space-3)', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <div className="collection-dropzone__local-actions">
                           <button
                             className="btn btn-secondary"
                             type="button"
-                            onClick={() => handleLocalDocumentImport(collection.id)}
-                            disabled={!localSourcePaths[collection.id]?.trim()}
+                            onClick={() => void handleLocalDocumentImport(collection.id)}
+                            disabled={!localSourcePaths[collection.id]?.trim() || importingLocalByCollection[collection.id]}
                           >
-                            Registrar ruta local
+                            {importingLocalByCollection[collection.id] ? 'Registrando...' : 'Registrar ruta local'}
                           </button>
-                          <span style={{ fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)', lineHeight: 'var(--line-height-relaxed)' }}>
+                          <span className="collection-dropzone__helper">
                             Reutiliza el archivo ya existente en disco y sólo encola el pipeline.
                           </span>
                         </div>
                       </div>
-                    </div>
 
-                    <div className="collection-dropzone__stats">
-                      <div className="collection-dropzone__metric">
-                        <span>Listos</span>
-                        <strong>{readyCount}</strong>
-                      </div>
-                      <div className="collection-dropzone__metric">
-                        <span>Activos</span>
-                        <strong>{liveDocuments.length}</strong>
-                      </div>
-                      <div className="collection-dropzone__metric">
-                        <span>En cola</span>
-                        <strong>{queuedCount + runningCount}</strong>
-                      </div>
-                      <div className="collection-dropzone__metric">
-                        <span>Errores</span>
-                        <strong>{errorCount}</strong>
+                      <div className="collection-dropzone__local">
+                        <label className="collection-dropzone__local-label">
+                          <span className="collection-dropzone__local-caption">
+                            Importar carpeta local
+                          </span>
+                          <input
+                            value={localFolderPaths[collection.id] ?? ''}
+                            onChange={event => setLocalFolderPaths(current => ({ ...current, [collection.id]: event.target.value }))}
+                            placeholder="C:\\ruta\\a\\carpeta"
+                            className="collection-dropzone__local-input"
+                          />
+                        </label>
+                        <label className="collection-dropzone__local-label">
+                          <span className="collection-dropzone__local-caption">Subcarpeta destino (opcional)</span>
+                          <input
+                            value={localFolderCollectionPaths[collection.id] ?? ''}
+                            onChange={event => setLocalFolderCollectionPaths(current => ({ ...current, [collection.id]: event.target.value }))}
+                            placeholder="ej: litigios/2026"
+                            className="collection-dropzone__local-input"
+                          />
+                        </label>
+                        <div className="collection-dropzone__local-actions">
+                          <button
+                            className="btn btn-secondary"
+                            type="button"
+                            onClick={() => void handleLocalFolderImport(collection.id)}
+                            disabled={!localFolderPaths[collection.id]?.trim() || importingLocalFolderByCollection[collection.id]}
+                          >
+                            {importingLocalFolderByCollection[collection.id] ? 'Importando carpeta...' : 'Importar carpeta local'}
+                          </button>
+                          <span className="collection-dropzone__helper">
+                            Registra toda la carpeta y conserva la estructura interna sin mover ni duplicar archivos origen.
+                          </span>
+                        </div>
                       </div>
                     </div>
 
@@ -804,10 +1566,23 @@ export function CollectionsPage() {
                       type="file"
                       multiple
                       accept="*/*"
-                      onChange={async (event: ChangeEvent<HTMLInputElement>) => {
+                      onChange={event => {
                         const files = event.target.files;
                         if (!files || files.length === 0) return;
-                        await handleCollectionFiles(collection.id, files);
+                        void handleCollectionFiles(collection.id, files);
+                        event.target.value = '';
+                      }}
+                    />
+                    <input
+                      id={`upload-folder-${collection.id}`}
+                      className="collection-dropzone__input"
+                      type="file"
+                      multiple
+                      {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
+                      onChange={event => {
+                        const files = event.target.files;
+                        if (!files || files.length === 0) return;
+                        void handleCollectionFiles(collection.id, files);
                         event.target.value = '';
                       }}
                     />
@@ -815,41 +1590,35 @@ export function CollectionsPage() {
 
                   <div className="collection-summary-strip">
                     <div>
-                      <span>Documentos visibles</span>
+                      <span>Documentos</span>
                       <strong>{collectionDocuments.length}</strong>
+                    </div>
+                    <div>
+                      <span>Indexados</span>
+                      <strong>{readyCount}</strong>
                     </div>
                     <div>
                       <span>Procesando</span>
                       <strong>{liveDocuments.length}</strong>
                     </div>
                     <div>
-                      <span>Rebuild</span>
-                      <strong>{busyCollectionId === collection.id ? 'Activo' : 'Listo'}</strong>
-                    </div>
-                    <div>
-                      <span>Auto-sync</span>
-                      <strong>{hasLiveProcessing ? 'Encendido' : 'En reposo'}</strong>
+                      <span>Con error</span>
+                      <strong>{failedCount}</strong>
                     </div>
                   </div>
 
-                  <div className="collection-queue-panel card" style={{ background: 'var(--color-bg-primary)', borderColor: 'var(--color-border)' }}>
-                    <div className="card__header">
-                      <div>
-                        <div className="card__title">Cola viva</div>
-                        <p style={{ color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>Cada archivo muestra el estado exacto del pipeline.</p>
-                      </div>
-                      <span className="badge badge--accent">{collectionQueue.length}</span>
-                    </div>
-
-                    <div style={{ display: 'grid', gap: 'var(--space-3)' }}>
-                      {collectionQueue.length === 0 ? (
-                        <div className="empty-state" style={{ padding: 'var(--space-6) var(--space-4)' }}>
-                          <div className="empty-state__icon">⟲</div>
-                          <div className="empty-state__title">Sin archivos en la cola</div>
-                          <p>Selecciona un lote para empezar a procesar.</p>
+                  {collectionQueue.length > 0 ? (
+                    <div className="collection-queue-panel card" style={{ background: 'var(--color-bg-primary)', borderColor: 'var(--color-border)' }}>
+                      <div className="card__header">
+                        <div>
+                          <div className="card__title">Cola viva</div>
+                          <p style={{ color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>Se muestra solo mientras existan archivos en tránsito.</p>
                         </div>
-                      ) : (
-                        collectionQueue.map(item => {
+                        <span className="badge badge--accent">{collectionQueue.length}</span>
+                      </div>
+
+                      <div style={{ display: 'grid', gap: 'var(--space-3)' }}>
+                        {collectionQueue.map(item => {
                           const pipeline = item.document ? getDocumentPipeline(item.document.status) : null;
                           const progress = pipeline?.progress ?? (item.status === 'done' ? 100 : item.status === 'error' ? 100 : item.status === 'uploading' ? 24 : 8);
                           const tone = item.status === 'done' ? 'success' : item.status === 'error' ? 'error' : item.status === 'uploading' ? 'warning' : 'accent';
@@ -858,7 +1627,7 @@ export function CollectionsPage() {
                               <div className="queue-item__top">
                                 <div className="queue-item__title-wrap">
                                   <div className="queue-item__title">{item.file.name}</div>
-                                  <div className="queue-item__meta">{formatBytes(item.file.size)} · {item.file.type || 'tipo desconocido'}</div>
+                                  <div className="queue-item__meta">{item.collectionPath ? `${item.collectionPath} · ` : ''}{formatBytes(item.file.size)} · {item.file.type || 'tipo desconocido'}</div>
                                 </div>
                                 <span className={`badge badge--${tone}`}>{pipeline?.label ?? (item.status === 'uploading' ? 'Subiendo' : item.status === 'error' ? 'Error' : 'En cola')}</span>
                               </div>
@@ -872,154 +1641,109 @@ export function CollectionsPage() {
                               {item.message ? <p className="queue-item__message">{item.message}</p> : null}
                             </article>
                           );
-                        })
-                      )}
-                    </div>
-                  </div>
-                </section>
-
-                <aside className="collection-doc-panel card" style={{ background: 'var(--color-bg-primary)', borderColor: 'var(--color-border)' }}>
-                  <div className="card__header">
-                    <div>
-                      <div className="card__title">Inventario vivo</div>
-                      <p style={{ color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>Se refresca solo mientras hay documentos en proceso.</p>
-                    </div>
-                    <span className="badge badge--info">{collectionDocuments.length}</span>
-                  </div>
-
-                  <div style={{ display: 'grid', gap: 'var(--space-2)' }}>
-                    {collectionDocuments.slice(0, MAX_VISIBLE_DOCUMENTS).map(document => {
-                      const pipeline = getDocumentPipeline(document.status);
-                      const isSelected = selectedTraceDocument?.id === document.id;
-                      return (
-                        <div
-                          key={document.id}
-                          className="document-row"
-                          role="button"
-                          tabIndex={0}
-                          onClick={() => {
-                            void loadDocumentAudit(collection.id, document);
-                          }}
-                          onKeyDown={event => {
-                            if (event.key === 'Enter' || event.key === ' ') {
-                              event.preventDefault();
-                              void loadDocumentAudit(collection.id, document);
-                            }
-                          }}
-                          style={{
-                            cursor: 'pointer',
-                            borderColor: isSelected ? 'rgba(99,102,241,0.55)' : undefined,
-                            background: isSelected ? 'linear-gradient(180deg, rgba(99,102,241,0.08), rgba(15,20,31,0.92))' : undefined,
-                          }}
-                        >
-                          <div className="document-row__top">
-                            <div className="document-row__title-wrap">
-                              <div className="document-row__title">{document.title}</div>
-                              <div className="document-row__meta" title={document.source_path ?? undefined}>
-                                {document.mime_type} · v{document.version}{document.source_path ? ' · origen local' : ''}
-                              </div>
-                            </div>
-                            <span className={`badge badge--${pipeline.tone}`}>{pipeline.label}</span>
-                          </div>
-                          <div className="progress-track">
-                            <div className={`progress-fill progress-fill--${pipeline.tone}`} style={{ width: `${pipeline.progress}%` }} />
-                          </div>
-                          <div className="document-row__bottom">
-                            <span>{pipeline.detail}</span>
-                            <span>{document.status}</span>
-                          </div>
-                          {document.error_message ? (
-                            <p style={{ marginTop: 'var(--space-2)', color: 'var(--color-error)', fontSize: 'var(--font-sm)', lineHeight: 'var(--line-height-relaxed)' }}>
-                              {document.error_message}
-                            </p>
-                          ) : null}
-                        </div>
-                      );
-                    })}
-
-                    {collectionDocuments.length === 0 ? (
-                      <div className="empty-state" style={{ padding: 'var(--space-6) var(--space-4)' }}>
-                        <div className="empty-state__icon">📄</div>
-                        <div className="empty-state__title">Sin documentos todavía</div>
-                        <p>Sube el primer lote para construir memoria documental.</p>
+                        })}
                       </div>
-                    ) : null}
+                    </div>
+                  ) : null}
 
-                    {collectionDocuments.length > MAX_VISIBLE_DOCUMENTS ? (
-                      <p style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-sm)' }}>
-                        + {collectionDocuments.length - MAX_VISIBLE_DOCUMENTS} documentos más en esta colección.
-                      </p>
-                    ) : null}
-                  </div>
-
-                  <div className="card" style={{ background: 'var(--color-bg-primary)', borderColor: 'var(--color-border)', display: 'grid', gap: 'var(--space-4)' }}>
+                  <section className="collection-trace-panel card">
                     <div className="card__header">
                       <div>
                         <div className="card__title">Trazabilidad avanzada</div>
-                        <p style={{ color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>Selecciona un documento para ver sus auditorías, métricas y errores persistidos.</p>
+                        <p style={{ color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>Detalle de documento, estado y línea de eventos filtrable.</p>
                       </div>
-                      <span className="badge badge--accent">{selectedTraceDocument ? selectedTraceDocument.status : 'sin selección'}</span>
+                      <div className="collection-panel-actions">
+                        <span className="badge badge--accent">{selectedTraceDocument ? selectedTraceDocument.status : 'sin selección'}</span>
+                        <button
+                          className="btn btn-ghost panel-toggle-btn"
+                          onClick={() => setCollapsedTraceByCollection(current => ({ ...current, [collection.id]: !traceCollapsed }))}
+                          type="button"
+                        >
+                          {traceCollapsed ? 'Expandir' : 'Minimizar'}
+                        </button>
+                      </div>
                     </div>
 
-                    {selectedTraceDocument ? (
+                    {traceCollapsed ? null : selectedTraceDocument ? (
                       <>
-                        <div className="card" style={{ background: 'rgba(10,14,23,0.96)', borderColor: 'var(--color-border)' }}>
-                          <div style={{ display: 'grid', gap: 'var(--space-2)' }}>
-                            <div style={{ fontWeight: 'var(--font-weight-semibold)' }}>{selectedTraceDocument.title}</div>
-                            <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-xs)' }}>
-                              {selectedTraceDocument.mime_type} · v{selectedTraceDocument.version} · {selectedTraceDocument.status}
-                            </div>
-                            {selectedTraceDocument.error_message ? (
-                              <div style={{ padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.35)', color: 'var(--color-error)', lineHeight: 'var(--line-height-relaxed)' }}>
-                                {selectedTraceDocument.error_message}
-                              </div>
-                            ) : (
-                              <p style={{ color: 'var(--color-text-tertiary)' }}>El documento no reporta error persistido. Revisa la auditoría si algo no cuadra.</p>
-                            )}
+                        <div className="trace-detail-card">
+                          <div className="trace-detail-title">{getCollectionDisplayTitle(selectedTraceDocument)}</div>
+                          <div className="trace-detail-path">{normalizeCollectionPath(selectedTraceDocument.collection_path || selectedTraceDocument.title) || selectedTraceDocument.source_path || 'Ruta no disponible'}</div>
+                          <div style={{ display: 'inline-flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                            <span className="badge badge--info">{selectedTraceDocument.mime_type}</span>
+                            <span className="badge badge--accent">v{selectedTraceDocument.version}</span>
+                            <span className={`badge badge--${getDocumentPipeline(selectedTraceDocument.status).tone}`}>{selectedTraceDocument.status}</span>
                           </div>
+                          {selectedTraceDocument.error_message ? (
+                            <div style={{ padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', background: 'rgba(181, 66, 60, 0.12)', border: '1px solid rgba(181, 66, 60, 0.3)', color: 'var(--color-error)' }}>
+                              {selectedTraceDocument.error_message}
+                            </div>
+                          ) : null}
                         </div>
 
                         <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
                           <button className="btn btn-primary" type="button" onClick={() => void copyDocumentEvidence(selectedTraceDocument)} disabled={evidenceLoadingByDocument[selectedTraceDocument.id]}>
                             {evidenceLoadingByDocument[selectedTraceDocument.id] ? 'Copiando...' : 'Copiar evidencia JSON'}
                           </button>
-                          <span style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-xs)', alignSelf: 'center' }}>
-                            Incluye documento, jobs y auditoría para enviarlo a una IA o archivarlo.
-                          </span>
+                          <button
+                            className="btn btn-secondary"
+                            type="button"
+                            onClick={() => void refreshCollectionDocuments(collection.id)}
+                            disabled={refreshingDocumentsByCollection[collection.id]}
+                          >
+                            {refreshingDocumentsByCollection[collection.id] ? 'Refrescando...' : 'Refrescar inventario'}
+                          </button>
+                        </div>
+
+                        <div className="trace-toolbar">
+                          <input
+                            className="inventory-search"
+                            onChange={event => setTraceAuditSearchByCollection(current => ({ ...current, [collection.id]: event.target.value }))}
+                            placeholder="Buscar stage, pipeline, run..."
+                            value={traceAuditSearchByCollection[collection.id] ?? ''}
+                          />
+                          <div className="trace-toolbar__filters">
+                            <select
+                              className="trace-select"
+                              onChange={event => setTraceAuditStatusByCollection(current => ({ ...current, [collection.id]: event.target.value as AuditStatusFilter }))}
+                              value={traceAuditStatusByCollection[collection.id] ?? 'all'}
+                            >
+                              {AUDIT_STATUS_FILTERS.map(option => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                              ))}
+                            </select>
+                          </div>
                         </div>
 
                         {selectedTraceLoading ? (
                           <p style={{ color: 'var(--color-text-tertiary)' }}>Cargando auditoría del documento...</p>
                         ) : selectedTraceError ? (
-                          <div style={{ padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.25)', color: 'var(--color-error)' }}>
+                          <div style={{ padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', background: 'rgba(181, 66, 60, 0.1)', border: '1px solid rgba(181, 66, 60, 0.25)', color: 'var(--color-error)' }}>
                             {selectedTraceError}
                           </div>
-                        ) : selectedTraceAudit.length === 0 ? (
-                          <p style={{ color: 'var(--color-text-tertiary)' }}>Todavía no hay eventos de auditoría para este documento.</p>
+                        ) : visibleTraceAudit.length === 0 ? (
+                          <p style={{ color: 'var(--color-text-tertiary)' }}>Sin eventos para los filtros actuales.</p>
                         ) : (
-                          <div style={{ display: 'grid', gap: 'var(--space-3)' }}>
-                            {selectedTraceAudit.slice(0, 8).map(event => (
-                              <details key={event.id} className="card" style={{ background: 'rgba(10,14,23,0.96)', borderColor: 'var(--color-border)' }}>
-                                <summary style={{ cursor: 'pointer', listStyle: 'none', display: 'flex', justifyContent: 'space-between', gap: 'var(--space-3)', alignItems: 'center' }}>
-                                  <div style={{ display: 'grid', gap: 'var(--space-1)' }}>
-                                    <strong>{event.stage}</strong>
-                                    <span style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-xs)' }}>{event.pipeline} · {event.entity_type}/{event.entity_id}</span>
+                          <div className="trace-list trace-list--bounded">
+                            {visibleTraceAudit.slice(0, 20).map(event => (
+                              <article key={event.id} className="trace-entry">
+                                <div className="trace-entry__header">
+                                  <div>
+                                    <div className="trace-entry__title">{event.stage}</div>
+                                    <div className="trace-entry__meta">{event.pipeline} · {event.entity_type}/{event.entity_id}</div>
                                   </div>
-                                  <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                  <div style={{ display: 'inline-flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
                                     <span className={`badge badge--${event.status === 'failed' ? 'error' : event.status === 'succeeded' ? 'success' : 'warning'}`}>{event.status}</span>
                                     <span className="badge badge--info">{event.duration_ms !== null && event.duration_ms !== undefined ? `${event.duration_ms.toFixed(1)} ms` : 'sin duración'}</span>
                                   </div>
-                                </summary>
-                                <div style={{ display: 'grid', gap: 'var(--space-2)', marginTop: 'var(--space-3)' }}>
-                                  <div style={{ fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)' }}>Run: {event.run_id}</div>
-                                  <div style={{ fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)' }}>Inicio: {formatRelativeDate(event.started_at)}</div>
-                                  {event.completed_at ? <div style={{ fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)' }}>Fin: {formatRelativeDate(event.completed_at)}</div> : null}
-                                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap', background: 'rgba(255,255,255,0.03)', borderRadius: 'var(--radius-md)', padding: 'var(--space-3)', color: 'var(--color-text-secondary)', fontSize: 'var(--font-xs)', lineHeight: 'var(--line-height-relaxed)' }}>
-                                    métricas: {formatAuditValue(event.metrics)}
-{`\n`}contexto: {formatAuditValue(event.context)}
-                                  </pre>
                                 </div>
-                              </details>
+                                <div className="trace-entry__body">
+                                  <div>Run: {event.run_id}</div>
+                                  <div>Inicio: {formatRelativeDate(event.started_at)}</div>
+                                  {event.completed_at ? <div>Fin: {formatRelativeDate(event.completed_at)}</div> : null}
+                                  <pre className="trace-entry__json">métricas: {formatAuditValue(event.metrics)}{`\n`}contexto: {formatAuditValue(event.context)}</pre>
+                                </div>
+                              </article>
                             ))}
                           </div>
                         )}
@@ -1028,14 +1752,139 @@ export function CollectionsPage() {
                       <div className="empty-state" style={{ padding: 'var(--space-6) var(--space-4)' }}>
                         <div className="empty-state__icon">⌕</div>
                         <div className="empty-state__title">Sin documento seleccionado</div>
-                        <p>Selecciona una fila para inspeccionar su trail de auditoría.</p>
+                        <p>Selecciona una fila del inventario para abrir su detalle completo.</p>
                       </div>
                     )}
+                  </section>
+                </section>
+
+                <aside className="collection-doc-panel card">
+                  <div className="card__header">
+                    <div>
+                      <div className="card__title">Inventario documental escalable</div>
+                      <p style={{ color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>
+                        Busca, filtra, pagina y abre detalle sin saturar la vista cuando hay miles de archivos.
+                      </p>
+                    </div>
+                    <span className="badge badge--info">{filteredInventoryDocuments.length}</span>
                   </div>
 
-                  <button className="btn btn-secondary" type="button" onClick={() => refreshCollectionDocuments(collection.id)}>
-                    Refrescar inventario
-                  </button>
+                  <div className="inventory-toolbar">
+                    <div className="inventory-toolbar__row">
+                      <input
+                        className="inventory-search"
+                        onChange={event => {
+                          const value = event.target.value;
+                          setInventorySearchByCollection(current => ({ ...current, [collection.id]: value }));
+                          setInventoryPageByCollection(current => ({ ...current, [collection.id]: 1 }));
+                        }}
+                        placeholder="Buscar por nombre, tipo MIME o estado"
+                        value={inventorySearchByCollection[collection.id] ?? ''}
+                      />
+                      <select
+                        className="inventory-page-size"
+                        onChange={event => {
+                          setInventoryPageSizeByCollection(current => ({ ...current, [collection.id]: Number(event.target.value) }));
+                          setInventoryPageByCollection(current => ({ ...current, [collection.id]: 1 }));
+                        }}
+                        value={inventoryPageSizeByCollection[collection.id] ?? INVENTORY_PAGE_SIZE_OPTIONS[0]}
+                      >
+                        {INVENTORY_PAGE_SIZE_OPTIONS.map(size => (
+                          <option key={size} value={size}>{size} por página</option>
+                        ))}
+                      </select>
+                      <button
+                        className="btn btn-secondary"
+                        type="button"
+                        onClick={() => void refreshCollectionDocuments(collection.id)}
+                        disabled={refreshingDocumentsByCollection[collection.id]}
+                      >
+                        {refreshingDocumentsByCollection[collection.id] ? 'Refrescando...' : 'Actualizar'}
+                      </button>
+                    </div>
+                    <div className="inventory-filter-strip">
+                      {INVENTORY_STATUS_FILTERS.map(filter => (
+                        <button
+                          key={filter.value}
+                          className={`inventory-filter-chip${(inventoryStatusByCollection[collection.id] ?? 'all') === filter.value ? ' inventory-filter-chip--active' : ''}`}
+                          onClick={() => {
+                            setInventoryStatusByCollection(current => ({ ...current, [collection.id]: filter.value }));
+                            setInventoryPageByCollection(current => ({ ...current, [collection.id]: 1 }));
+                          }}
+                          type="button"
+                        >
+                          {filter.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="inventory-table" role="table" aria-label={`Inventario de ${collection.name}`}>
+                    <div className="inventory-table__head" role="row">
+                      <span>Documento</span>
+                      <span>Estado</span>
+                      <span>Tipo</span>
+                      <span>Actualizado</span>
+                    </div>
+                    {pagedInventoryDocuments.map(document => {
+                      const pipeline = getDocumentPipeline(document.status);
+                      const isSelected = selectedTraceDocument?.id === document.id;
+                      const collectionPath = normalizeCollectionPath(document.collection_path || document.title);
+                      const displayTitle = getCollectionDisplayTitle(document);
+                      return (
+                        <button
+                          key={document.id}
+                          className={`inventory-table__row${isSelected ? ' inventory-table__row--selected' : ''}`}
+                          onClick={() => {
+                            void loadDocumentAudit(collection.id, document);
+                          }}
+                          type="button"
+                        >
+                          <div style={{ minWidth: 0 }}>
+                            <div className="inventory-name" title={displayTitle}>{displayTitle}</div>
+                            <div className="inventory-meta" title={(collectionPath || document.source_path) ?? undefined}>{collectionPath || document.source_path || 'Ruta no disponible'}</div>
+                          </div>
+                          <span className={`badge badge--${pipeline.tone}`}>{pipeline.label}</span>
+                          <span className="inventory-meta">{document.mime_type}</span>
+                          <span className="inventory-meta">{formatRelativeDate(document.updated_at)}</span>
+                        </button>
+                      );
+                    })}
+                    {pagedInventoryDocuments.length === 0 ? (
+                      <div className="empty-state" style={{ padding: 'var(--space-6) var(--space-4)' }}>
+                        <div className="empty-state__icon">⌕</div>
+                        <div className="empty-state__title">Sin resultados</div>
+                        <p>Ajusta filtros o búsqueda para localizar documentos.</p>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="inventory-pagination">
+                    <span>
+                      Mostrando {(safeInventoryPage - 1) * inventoryPageSize + (pagedInventoryDocuments.length > 0 ? 1 : 0)}-
+                      {(safeInventoryPage - 1) * inventoryPageSize + pagedInventoryDocuments.length} de {filteredInventoryDocuments.length}
+                    </span>
+                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                      <button
+                        className="btn btn-secondary"
+                        disabled={safeInventoryPage <= 1}
+                        onClick={() => setInventoryPageByCollection(current => ({ ...current, [collection.id]: Math.max(1, safeInventoryPage - 1) }))}
+                        type="button"
+                      >
+                        Anterior
+                      </button>
+                      <span style={{ minWidth: 90, textAlign: 'center' }}>Página {safeInventoryPage}/{totalInventoryPages}</span>
+                      <button
+                        className="btn btn-secondary"
+                        disabled={safeInventoryPage >= totalInventoryPages}
+                        onClick={() => setInventoryPageByCollection(current => ({ ...current, [collection.id]: Math.min(totalInventoryPages, safeInventoryPage + 1) }))}
+                        type="button"
+                      >
+                        Siguiente
+                      </button>
+                    </div>
+                  </div>
+
                 </aside>
               </div>
             </article>
