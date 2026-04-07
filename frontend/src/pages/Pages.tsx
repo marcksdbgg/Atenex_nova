@@ -61,6 +61,8 @@ const DOCUMENT_PIPELINE = [
   { key: 'failed', label: 'Error', detail: 'Requiere revisión manual', tone: 'error', progress: 100 },
 ] as const;
 
+const AUDIT_ENTITY_TYPES = ['document', 'query', 'collection', 'answer', 'job'] as const;
+
 function createFileId(file: File): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
@@ -1502,6 +1504,324 @@ export function JobsPage() {
               <div className="empty-state__icon">⌕</div>
               <div className="empty-state__title">Selecciona un job</div>
               <p>Verás el error, los reintentos y las marcas temporales aquí.</p>
+            </div>
+          )}
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+export function ObservabilityPage() {
+  const [entityType, setEntityType] = useState('');
+  const [entityId, setEntityId] = useState('');
+  const [runId, setRunId] = useState('');
+  const [limit, setLimit] = useState('40');
+  const [auditEntries, setAuditEntries] = useState<PipelineAuditEntry[]>([]);
+  const [selectedAuditId, setSelectedAuditId] = useState('');
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditError, setAuditError] = useState('');
+  const [evidence, setEvidence] = useState<DocumentEvidenceResponse | null>(null);
+  const [evidenceLoading, setEvidenceLoading] = useState(false);
+  const [evidenceError, setEvidenceError] = useState('');
+  const [message, setMessage] = useState('');
+
+  const selectedAudit = auditEntries.find(entry => entry.id === selectedAuditId) ?? auditEntries[0] ?? null;
+
+  const refreshAudit = async () => {
+    setAuditLoading(true);
+    setAuditError('');
+    try {
+      const nextLimit = Math.max(1, Math.min(100, Number(limit) || 40));
+      const nextParams: { entityType?: string; entityId?: string; runId?: string; limit?: number } = { limit: nextLimit };
+
+      if (runId.trim()) {
+        nextParams.runId = runId.trim();
+      } else if (entityType.trim() && entityType !== 'all' && entityId.trim()) {
+        nextParams.entityType = entityType.trim();
+        nextParams.entityId = entityId.trim();
+      }
+
+      const items = await api.listPipelineAudit(nextParams);
+      setAuditEntries(items);
+      setSelectedAuditId(current => (items.some(entry => entry.id === current) ? current : items[0]?.id ?? ''));
+    } catch (error) {
+      setAuditError(error instanceof Error ? error.message : 'No se pudo cargar la observabilidad.');
+      setAuditEntries([]);
+      setSelectedAuditId('');
+    } finally {
+      setAuditLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshAudit();
+  }, []);
+
+  useEffect(() => {
+    if (!selectedAudit) {
+      setEvidence(null);
+      return;
+    }
+
+    if (selectedAudit.entity_type !== 'document') {
+      setEvidence(null);
+      setEvidenceError('');
+      return;
+    }
+
+    let active = true;
+    setEvidenceLoading(true);
+    setEvidenceError('');
+    api.getDocumentEvidence(selectedAudit.entity_id)
+      .then(result => {
+        if (!active) return;
+        setEvidence(result);
+      })
+      .catch(error => {
+        if (!active) return;
+        setEvidence(null);
+        setEvidenceError(error instanceof Error ? error.message : 'No se pudo cargar la evidencia del documento.');
+      })
+      .finally(() => {
+        if (active) setEvidenceLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [selectedAudit]);
+
+  const summary = useMemo(() => {
+    const total = auditEntries.length;
+    const failed = auditEntries.filter(entry => entry.status === 'failed').length;
+    const averageDuration = total === 0 ? 0 : auditEntries.reduce((acc, entry) => acc + (entry.duration_ms ?? 0), 0) / total;
+    const pipelines = new Set(auditEntries.map(entry => entry.pipeline));
+    return { total, failed, averageDuration, pipelines: pipelines.size };
+  }, [auditEntries]);
+
+  const copyEvidence = async () => {
+    if (!evidence) return;
+    await navigator.clipboard.writeText(JSON.stringify(evidence, null, 2));
+    setMessage(`Evidencia copiada para ${evidence.document.title}.`);
+  };
+
+  return (
+    <div className="animate-fade-in-up">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 'var(--space-4)', marginBottom: 'var(--space-6)', flexWrap: 'wrap' }}>
+        <div>
+          <h2 style={{ fontSize: 'var(--font-xl)', fontWeight: 'var(--font-weight-bold)' }}>Observabilidad</h2>
+          <p style={{ color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>Audita eventos del pipeline, revisa métricas y abre la evidencia de un documento desde una sola pantalla.</p>
+        </div>
+        <button className="btn btn-primary" type="button" onClick={() => void refreshAudit()} disabled={auditLoading}>
+          {auditLoading ? 'Actualizando...' : 'Refrescar'}
+        </button>
+      </div>
+
+      {message ? (
+        <div className="card" style={{ marginBottom: 'var(--space-5)' }}>
+          <p style={{ color: 'var(--color-text-secondary)' }}>{message}</p>
+        </div>
+      ) : null}
+
+      <div className="card" style={{ display: 'grid', gap: 'var(--space-4)', marginBottom: 'var(--space-6)' }}>
+        <div className="card__header">
+          <div>
+            <div className="card__title">Filtros</div>
+            <p style={{ color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>Puedes filtrar por `run_id` o por `entity_type` + `entity_id`.</p>
+          </div>
+          <span className="badge badge--accent">{summary.total} eventos</span>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 180px) minmax(220px, 1fr) minmax(220px, 1fr) minmax(120px, 140px)', gap: 'var(--space-3)' }}>
+          <select value={entityType} onChange={event => setEntityType(event.target.value)} style={{ width: '100%', padding: 'var(--space-4)', background: 'var(--color-bg-primary)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', color: 'var(--color-text-primary)' }}>
+            <option value="">Todos los tipos</option>
+            {AUDIT_ENTITY_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
+          </select>
+          <input value={entityId} onChange={event => setEntityId(event.target.value)} placeholder="entity_id" style={{ width: '100%', padding: 'var(--space-4)', background: 'var(--color-bg-primary)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', color: 'var(--color-text-primary)' }} />
+          <input value={runId} onChange={event => setRunId(event.target.value)} placeholder="run_id" style={{ width: '100%', padding: 'var(--space-4)', background: 'var(--color-bg-primary)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', color: 'var(--color-text-primary)' }} />
+          <input value={limit} onChange={event => setLimit(event.target.value)} type="number" min="1" max="100" style={{ width: '100%', padding: 'var(--space-4)', background: 'var(--color-bg-primary)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', color: 'var(--color-text-primary)' }} />
+        </div>
+
+        <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
+          <button className="btn btn-primary" type="button" onClick={() => void refreshAudit()} disabled={auditLoading}>Aplicar filtros</button>
+          <button
+            className="btn"
+            type="button"
+            onClick={() => {
+              setEntityType('');
+              setEntityId('');
+              setRunId('');
+              setLimit('40');
+              setMessage('');
+              void refreshAudit();
+            }}
+          >
+            Limpiar
+          </button>
+          <span style={{ color: 'var(--color-text-tertiary)', alignSelf: 'center', fontSize: 'var(--font-xs)' }}>
+            Si no rellenas `entity_id`, la vista mostrará los eventos recientes.
+          </span>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 'var(--space-4)', marginBottom: 'var(--space-6)' }}>
+        <div className="card">
+          <div className="card__title">Eventos</div>
+          <p style={{ marginTop: 'var(--space-2)', fontSize: 'var(--font-2xl)', fontWeight: 'var(--font-weight-bold)' }}>{summary.total}</p>
+        </div>
+        <div className="card">
+          <div className="card__title">Fallos</div>
+          <p style={{ marginTop: 'var(--space-2)', fontSize: 'var(--font-2xl)', fontWeight: 'var(--font-weight-bold)' }}>{summary.failed}</p>
+        </div>
+        <div className="card">
+          <div className="card__title">Pipelines</div>
+          <p style={{ marginTop: 'var(--space-2)', fontSize: 'var(--font-2xl)', fontWeight: 'var(--font-weight-bold)' }}>{summary.pipelines}</p>
+        </div>
+        <div className="card">
+          <div className="card__title">Duración media</div>
+          <p style={{ marginTop: 'var(--space-2)', fontSize: 'var(--font-2xl)', fontWeight: 'var(--font-weight-bold)' }}>{summary.averageDuration.toFixed(1)} ms</p>
+        </div>
+      </div>
+
+      {auditError ? (
+        <div className="card" style={{ marginBottom: 'var(--space-5)' }}>
+          <p style={{ color: 'var(--color-error)' }}>{auditError}</p>
+        </div>
+      ) : null}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.15fr) minmax(340px, 0.85fr)', gap: 'var(--space-5)' }}>
+        <section className="card" style={{ display: 'grid', gap: 'var(--space-3)' }}>
+          <div className="card__header">
+            <div>
+              <div className="card__title">Eventos recientes</div>
+              <p style={{ color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>Ordenados por hora de inicio, con el estado y las métricas capturadas.</p>
+            </div>
+            <span className="badge badge--accent">{auditEntries.length}</span>
+          </div>
+
+          {auditEntries.length === 0 ? (
+            <div className="empty-state" style={{ padding: 'var(--space-6) var(--space-4)' }}>
+              <div className="empty-state__icon">⌬</div>
+              <div className="empty-state__title">Sin eventos</div>
+              <p>Afina los filtros o espera a que el pipeline genere actividad.</p>
+            </div>
+          ) : (
+            auditEntries.map(entry => {
+              const isSelected = selectedAudit?.id === entry.id;
+              const tone = entry.status === 'failed' ? 'error' : entry.status === 'succeeded' ? 'success' : 'warning';
+              return (
+                <article
+                  key={entry.id}
+                  className="card"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setSelectedAuditId(entry.id)}
+                  onKeyDown={event => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      setSelectedAuditId(entry.id);
+                    }
+                  }}
+                  style={{
+                    cursor: 'pointer',
+                    background: isSelected ? 'linear-gradient(180deg, rgba(99,102,241,0.08), rgba(15,20,31,0.92))' : 'var(--color-bg-primary)',
+                    borderColor: isSelected ? 'rgba(99,102,241,0.55)' : 'var(--color-border)',
+                  }}
+                >
+                  <div className="card__header" style={{ marginBottom: 'var(--space-2)' }}>
+                    <div>
+                      <div className="card__title">{entry.stage}</div>
+                      <p style={{ color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>{entry.pipeline} · {entry.entity_type}/{entry.entity_id}</p>
+                    </div>
+                    <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                      <span className={`badge badge--${tone}`}>{entry.status}</span>
+                      <span className="badge badge--info">{entry.duration_ms !== null && entry.duration_ms !== undefined ? `${entry.duration_ms.toFixed(1)} ms` : 'sin duración'}</span>
+                    </div>
+                  </div>
+                  <div style={{ display: 'grid', gap: 'var(--space-2)' }}>
+                    <div style={{ fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)' }}>Run: {entry.run_id}</div>
+                    <div style={{ fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)' }}>Inicio: {formatRelativeDate(entry.started_at)}</div>
+                    <div style={{ fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)' }}>Fin: {entry.completed_at ? formatRelativeDate(entry.completed_at) : '—'}</div>
+                  </div>
+                </article>
+              );
+            })
+          )}
+        </section>
+
+        <aside className="card" style={{ display: 'grid', gap: 'var(--space-4)', background: 'var(--color-bg-primary)', borderColor: 'var(--color-border)' }}>
+          <div className="card__header">
+            <div>
+              <div className="card__title">Detalle</div>
+              <p style={{ color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>Métricas, contexto y evidencia vinculada al evento seleccionado.</p>
+            </div>
+            <span className="badge badge--accent">{selectedAudit ? selectedAudit.status : 'sin selección'}</span>
+          </div>
+
+          {selectedAudit ? (
+            <>
+              <div className="card" style={{ background: 'rgba(10,14,23,0.96)', borderColor: 'var(--color-border)' }}>
+                <div style={{ display: 'grid', gap: 'var(--space-2)' }}>
+                  <div style={{ fontWeight: 'var(--font-weight-semibold)' }}>{selectedAudit.pipeline} · {selectedAudit.stage}</div>
+                  <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-xs)' }}>{selectedAudit.entity_type}/{selectedAudit.entity_id}</div>
+                  <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-xs)' }}>Run ID: {selectedAudit.run_id}</div>
+                  <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-xs)' }}>Duración: {selectedAudit.duration_ms !== null && selectedAudit.duration_ms !== undefined ? `${selectedAudit.duration_ms.toFixed(1)} ms` : '—'}</div>
+                </div>
+              </div>
+
+              <div className="card" style={{ background: 'rgba(10,14,23,0.96)', borderColor: 'var(--color-border)' }}>
+                <div className="card__title">Métricas</div>
+                <pre style={{ margin: 'var(--space-3) 0 0', whiteSpace: 'pre-wrap', background: 'rgba(255,255,255,0.03)', borderRadius: 'var(--radius-md)', padding: 'var(--space-3)', color: 'var(--color-text-secondary)', fontSize: 'var(--font-xs)', lineHeight: 'var(--line-height-relaxed)' }}>
+                  {JSON.stringify(selectedAudit.metrics, null, 2)}
+                </pre>
+              </div>
+
+              <div className="card" style={{ background: 'rgba(10,14,23,0.96)', borderColor: 'var(--color-border)' }}>
+                <div className="card__title">Contexto</div>
+                <pre style={{ margin: 'var(--space-3) 0 0', whiteSpace: 'pre-wrap', background: 'rgba(255,255,255,0.03)', borderRadius: 'var(--radius-md)', padding: 'var(--space-3)', color: 'var(--color-text-secondary)', fontSize: 'var(--font-xs)', lineHeight: 'var(--line-height-relaxed)' }}>
+                  {JSON.stringify(selectedAudit.context, null, 2)}
+                </pre>
+              </div>
+
+              <div className="card" style={{ background: 'rgba(10,14,23,0.96)', borderColor: 'var(--color-border)' }}>
+                <div className="card__title">Evidencia del documento</div>
+                {selectedAudit.entity_type === 'document' ? (
+                  evidenceLoading ? (
+                    <p style={{ marginTop: 'var(--space-3)', color: 'var(--color-text-tertiary)' }}>Cargando evidencia...</p>
+                  ) : evidenceError ? (
+                    <p style={{ marginTop: 'var(--space-3)', color: 'var(--color-error)' }}>{evidenceError}</p>
+                  ) : evidence ? (
+                    <div style={{ display: 'grid', gap: 'var(--space-3)', marginTop: 'var(--space-3)' }}>
+                      <div>
+                        <div style={{ fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)' }}>Documento</div>
+                        <div style={{ fontWeight: 'var(--font-weight-semibold)' }}>{evidence.document.title}</div>
+                        <div style={{ fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)' }}>{evidence.document.status} · {evidence.document.mime_type}</div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                        <span className="badge badge--info">{evidence.jobs.length} jobs</span>
+                        <span className="badge badge--info">{evidence.audit_events.length} eventos</span>
+                      </div>
+                      <button className="btn btn-primary" type="button" onClick={() => void copyEvidence()}>
+                        Copiar evidencia JSON
+                      </button>
+                      <pre style={{ margin: 0, whiteSpace: 'pre-wrap', background: 'rgba(255,255,255,0.03)', borderRadius: 'var(--radius-md)', padding: 'var(--space-3)', color: 'var(--color-text-secondary)', fontSize: 'var(--font-xs)', lineHeight: 'var(--line-height-relaxed)', maxHeight: '260px', overflow: 'auto' }}>
+{JSON.stringify({ document: evidence.document, jobs: evidence.jobs.slice(0, 2), audit_events: evidence.audit_events.slice(0, 2) }, null, 2)}
+                      </pre>
+                    </div>
+                  ) : (
+                    <p style={{ marginTop: 'var(--space-3)', color: 'var(--color-text-tertiary)' }}>Selecciona un evento de documento para ver su paquete de evidencia.</p>
+                  )
+                ) : (
+                  <p style={{ marginTop: 'var(--space-3)', color: 'var(--color-text-tertiary)' }}>La evidencia detallada sólo se genera para eventos de documentos.</p>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="empty-state" style={{ padding: 'var(--space-8) var(--space-4)' }}>
+              <div className="empty-state__icon">⌬</div>
+              <div className="empty-state__title">Selecciona un evento</div>
+              <p>Verás métricas, contexto y la evidencia del documento asociado aquí.</p>
             </div>
           )}
         </aside>
