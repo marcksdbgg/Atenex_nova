@@ -2,9 +2,19 @@
 
 ## Source of Truth
 - Use [docs/plan.md](docs/plan.md) and [docs/baseline.md](docs/baseline.md) for architecture and product rationale.
+- Use [docs/plan_restante.md](docs/plan_restante.md) to understand the remaining implementation phases and current roadmap gaps.
 - Use [README.md](README.md) for quick start and runtime commands.
 - Do not duplicate those docs here; link to them instead.
 - [frontend/README.md](frontend/README.md) is the Vite template and is not operationally authoritative.
+
+## Documentation To Read First
+- For backend or architecture work, read [docs/plan.md](docs/plan.md) and [docs/plan_restante.md](docs/plan_restante.md) before editing code.
+- For backend implementation details, also read [docs/architecture-backend.md](docs/architecture-backend.md) and [docs/jobs-and-workers.md](docs/jobs-and-workers.md).
+- For product framing or tradeoff context, read [docs/baseline.md](docs/baseline.md).
+- For frontend structure and API contracts, also read [docs/architecture-frontend.md](docs/architecture-frontend.md) and [docs/api-endpoints.md](docs/api-endpoints.md).
+- For setup, run commands, and local services, read [README.md](README.md).
+- For UI work, check [design-system/atenex-nova/MASTER.md](design-system/atenex-nova/MASTER.md) first and then any page override under [design-system/atenex-nova/pages/](design-system/atenex-nova/pages/).
+- Keep in mind that `frontend/README.md` is only the scaffold template.
 
 ## Code Style
 - Preserve the modular monolith + hexagonal layering: `presentation` -> `application` -> `domain` -> `infrastructure` -> `workers` -> `evaluation` -> `shared`.

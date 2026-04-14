@@ -478,7 +478,7 @@ export function CollectionsPage() {
         if (!mounted) return;
         setCollections(items);
         const documentEntries = await Promise.all(
-          items.map(async collection => [collection.id, await api.listCollectionDocuments(collection.id)] as const),
+          items.map(async collection => [collection.id, await api.listAllCollectionDocuments(collection.id)] as const),
         );
         if (mounted) {
           setDocumentsByCollection(Object.fromEntries(documentEntries));
@@ -495,7 +495,7 @@ export function CollectionsPage() {
   const syncCollectionDocuments = async (collectionIds: string[]) => {
     if (collectionIds.length === 0) return;
     const entries = await Promise.all(
-      collectionIds.map(async collectionId => [collectionId, await api.listCollectionDocuments(collectionId)] as const),
+      collectionIds.map(async collectionId => [collectionId, await api.listAllCollectionDocuments(collectionId)] as const),
     );
     const nextDocuments = Object.fromEntries(entries);
     setDocumentsByCollection(current => ({
@@ -1936,7 +1936,7 @@ export function QueryPage() {
     if (!collectionId) return;
     let mounted = true;
     setLoadingContext(true);
-    Promise.all([api.listCollectionDocuments(collectionId), api.listQueryHistory(collectionId, 12)])
+    Promise.all([api.listAllCollectionDocuments(collectionId), api.listQueryHistory(collectionId, 12)])
       .then(([documents, history]) => {
         if (!mounted) return;
         setDocumentsByCollection(current => ({
@@ -1974,9 +1974,14 @@ export function QueryPage() {
     [collections, collectionId],
   );
 
-  const visibleDocuments = useMemo(
-    () => (documentsByCollection[collectionId] ?? []).slice(0, MAX_VISIBLE_DOCUMENTS),
+  const collectionDocuments = useMemo(
+    () => documentsByCollection[collectionId] ?? [],
     [collectionId, documentsByCollection],
+  );
+
+  const visibleDocuments = useMemo(
+    () => collectionDocuments.slice(0, MAX_VISIBLE_DOCUMENTS),
+    [collectionDocuments],
   );
 
   const recentMemory = useMemo(
@@ -2021,6 +2026,8 @@ export function QueryPage() {
   };
 
   const canSubmit = collectionId.length > 0 && query.trim().length > 0 && !loading && !loadingCollections;
+  const collectionDescription = currentCollection?.description?.trim()
+    || 'Chat con memoria por colección, respuestas fundamentadas y acceso rápido al corpus.';
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -2058,63 +2065,71 @@ export function QueryPage() {
   };
 
   return (
-    <div className="animate-fade-in-up" style={{ display: 'grid', gap: 'var(--space-6)' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 'var(--space-4)', flexWrap: 'wrap' }}>
-        <div>
-          <h2 style={{ fontSize: 'var(--font-xl)', fontWeight: 'var(--font-weight-bold)' }}>Espacio de consulta</h2>
-          <p style={{ color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>Chat con memoria por colección, respuestas fundamentadas y acceso rápido al corpus.</p>
+    <div className="query-page animate-fade-in-up">
+      <section className="query-hero card">
+        <div className="query-hero__copy">
+          <span className="query-hero__eyebrow">Workspace de consulta</span>
+          <h2 className="query-hero__title">Espacio de consulta</h2>
+          <p className="query-hero__description">{collectionDescription}</p>
         </div>
-        <span className="badge badge--accent">{currentCollection?.name ?? 'Sin colección'} · {visibleDocuments.length} docs visibles</span>
-      </div>
+        <div className="query-hero__meta" aria-label="Resumen de la consulta">
+          <span className="query-chip">{currentCollection?.name ?? 'Sin colección'}</span>
+          <span className="query-chip">{collectionDocuments.length} docs cargados</span>
+          <span className="query-chip">{turns.length} turnos</span>
+        </div>
+      </section>
 
-      <div className="card" style={{ display: 'grid', gap: 'var(--space-5)' }}>
-        <div style={{ display: 'grid', gap: 'var(--space-3)', gridTemplateColumns: 'minmax(240px, 280px) minmax(0, 1fr) minmax(220px, 240px)' }}>
-          <label style={{ display: 'grid', gap: 'var(--space-2)' }}>
-            <span style={{ fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Colección</span>
+      <section className="query-composer card" aria-label="Controles de consulta">
+        <div className="query-composer__grid">
+          <label className="query-field">
+            <span className="query-label">Colección</span>
             <select
               value={collectionId}
               onChange={event => setCollectionId(event.target.value)}
               disabled={loadingCollections}
-              style={{ width: '100%', padding: 'var(--space-4)', background: 'var(--color-bg-primary)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', color: 'var(--color-text-primary)', fontSize: 'var(--font-md)' }}
+              className="query-select"
             >
               {collections.length === 0 ? <option value="">No hay colecciones</option> : collections.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select>
           </label>
 
-          <label style={{ display: 'grid', gap: 'var(--space-2)' }}>
-            <span style={{ fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Modo de ruta</span>
+          <label className="query-field">
+            <span className="query-label">Modo de ruta</span>
             <select
               value={mode}
               onChange={event => setMode(event.target.value)}
-              style={{ width: '100%', padding: 'var(--space-4)', background: 'var(--color-bg-primary)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', color: 'var(--color-text-primary)', fontSize: 'var(--font-md)' }}
+              className="query-select"
             >
               {['auto', 'exact', 'factual_local', 'multi_hop', 'global', 'argumentative', 'visual'].map(item => <option key={item} value={item}>{item}</option>)}
             </select>
           </label>
 
-          <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'end', flexWrap: 'wrap' }}>
-            {(['search', 'answer'] as const).map(item => (
-              <button key={item} type="button" className={`btn ${action === item ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setAction(item)}>
-                {item === 'search' ? 'Buscar memoria' : 'Responder en chat'}
-              </button>
-            ))}
+          <div className="query-field">
+            <span className="query-label">Acción</span>
+            <div className="query-actions">
+              {(['search', 'answer'] as const).map(item => (
+                <button key={item} type="button" className={`btn ${action === item ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setAction(item)}>
+                  {item === 'search' ? 'Buscar memoria' : 'Responder en chat'}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
-        <form onSubmit={handleSubmit} style={{ display: 'grid', gap: 'var(--space-4)' }}>
-          <label style={{ display: 'grid', gap: 'var(--space-2)' }}>
-            <span style={{ fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Escribe en lenguaje natural</span>
+        <form onSubmit={handleSubmit} className="query-composer__form">
+          <label className="query-field">
+            <span className="query-label">Escribe en lenguaje natural</span>
             <textarea
               value={query}
               onChange={(event: ChangeEvent<HTMLTextAreaElement>) => setQuery(event.target.value)}
               rows={4}
               placeholder="Pregunta algo sobre tus documentos, como si fuera un chat."
-              style={{ width: '100%', padding: 'var(--space-4) var(--space-5)', background: 'var(--color-bg-primary)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', color: 'var(--color-text-primary)', fontSize: 'var(--font-md)', resize: 'vertical', lineHeight: 'var(--line-height-relaxed)' }}
+              className="query-textarea"
             />
           </label>
 
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-4)', flexWrap: 'wrap' }}>
-            <p style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-sm)' }}>
+          <div className="query-composer__footer">
+            <p className="query-composer__hint">
               {action === 'search'
                 ? 'Buscar memoria devuelve evidencias ordenadas sin sintetizar la respuesta.'
                 : 'Responder en chat devuelve una respuesta fundamentada con citas y evidencia.'}
@@ -2124,115 +2139,131 @@ export function QueryPage() {
             </button>
           </div>
         </form>
-      </div>
+      </section>
 
       {error ? (
-        <div className="card" style={{ borderColor: 'rgba(239,68,68,0.35)' }}>
-          <p style={{ color: 'var(--color-error)' }}>{error}</p>
+        <div className="card query-alert">
+          <p>{error}</p>
         </div>
       ) : null}
 
-      <div className="query-workspace" style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 320px) minmax(0, 1fr) minmax(320px, 380px)', gap: 'var(--space-6)', alignItems: 'start' }}>
-        <aside className="card" style={{ display: 'grid', gap: 'var(--space-4)', position: 'sticky', top: 'calc(var(--topbar-height) + var(--space-6))' }}>
+      <div className="query-workspace">
+        <aside className="query-rail card">
           <div className="card__header">
             <div className="card__title">Memoria</div>
             <span className="badge badge--accent">{recentMemory.length}</span>
           </div>
-          <div style={{ display: 'grid', gap: 'var(--space-2)' }}>
-            {recentMemory.length === 0 ? (
-              <p style={{ color: 'var(--color-text-tertiary)' }}>Esta colección todavía no tiene memoria registrada.</p>
-            ) : recentMemory.map(item => (
-              <button key={item.query_id} type="button" className="card" style={{ textAlign: 'left', padding: 'var(--space-3)', background: 'var(--color-bg-primary)', borderColor: 'var(--color-border)' }} onClick={() => setQuery(item.query)}>
-                <div style={{ fontSize: 'var(--font-sm)', fontWeight: 'var(--font-weight-medium)' }}>{item.query}</div>
-                <div style={{ marginTop: 'var(--space-1)', color: 'var(--color-text-tertiary)', fontSize: 'var(--font-xs)' }}>{formatRelativeDate(item.created_at)}</div>
-              </button>
-            ))}
-          </div>
 
-          <div className="card" style={{ background: 'var(--color-bg-primary)', borderColor: 'var(--color-border)' }}>
-            <div className="card__title">Documentos del contexto</div>
-            <div style={{ display: 'grid', gap: 'var(--space-2)', marginTop: 'var(--space-3)' }}>
-              {loadingContext ? <p style={{ color: 'var(--color-text-tertiary)' }}>Cargando documentos...</p> : null}
-              {visibleDocuments.length === 0 && !loadingContext ? <p style={{ color: 'var(--color-text-tertiary)' }}>No hay documentos cargados en esta colección.</p> : null}
-              {visibleDocuments.map(document => (
-                <div key={document.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-3)', alignItems: 'center', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', background: 'rgba(15,20,31,0.8)', border: '1px solid var(--color-border)' }}>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 'var(--font-weight-medium)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{document.title}</div>
-                    <div style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-xs)' }}>{document.mime_type} · {document.status}</div>
+          <section className="query-rail__section">
+            <div className="query-panel-heading">Turnos recientes</div>
+            <div className="query-rail__list">
+              {recentMemory.length === 0 ? (
+                <p className="query-panel-note">Esta colección todavía no tiene memoria registrada.</p>
+              ) : recentMemory.map(item => (
+                <button key={item.query_id} type="button" className="query-rail__item query-rail__item--button" onClick={() => setQuery(item.query)}>
+                  <div className="query-rail__item-title">{item.query}</div>
+                  <div className="query-rail__item-meta">{formatRelativeDate(item.created_at)} · {item.route_mode}</div>
+                  <div className="query-rail__tags">
+                    <span className="badge badge--info">{item.intent}</span>
+                    {item.verdict ? <span className="badge badge--success">{item.verdict}</span> : null}
+                    {item.grounding_score !== null && item.grounding_score !== undefined ? <span className="query-chip">{item.grounding_score.toFixed(3)}</span> : null}
+                    <span className="query-chip">{item.citations_count} citas</span>
                   </div>
-                  <span className="badge badge--info">v{document.version}</span>
-                </div>
+                </button>
               ))}
             </div>
-          </div>
+          </section>
+
+          <section className="query-rail__section">
+            <div className="query-panel-heading">Documentos del contexto</div>
+            <p className="query-panel-note">Vista previa de {visibleDocuments.length} de {collectionDocuments.length} documentos cargados.</p>
+            <div className="query-rail__list">
+              {loadingContext ? <p className="query-panel-note">Cargando documentos...</p> : null}
+              {visibleDocuments.length === 0 && !loadingContext ? <p className="query-panel-note">No hay documentos cargados en esta colección.</p> : null}
+              {visibleDocuments.map(document => {
+                const pipeline = getDocumentPipeline(document.status);
+                const collectionPath = normalizeCollectionPath(document.collection_path || document.title);
+                return (
+                  <div key={document.id} className="query-rail__item">
+                    <div className="query-rail__item-top">
+                      <div className="query-rail__item-title" title={getCollectionDisplayTitle(document)}>{getCollectionDisplayTitle(document)}</div>
+                      <span className={`badge badge--${pipeline.tone}`}>{pipeline.label}</span>
+                    </div>
+                    <div className="query-rail__item-meta" title={(collectionPath || document.source_path) ?? undefined}>{collectionPath || document.source_path || 'Ruta no disponible'}</div>
+                    <div className="query-rail__item-meta">{document.mime_type} · v{document.version}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
         </aside>
 
-        <section className="card" style={{ display: 'grid', gap: 'var(--space-4)' }}>
+        <section className="query-thread card">
           <div className="card__header">
-            <div className="card__title">Conversación</div>
+            <div>
+              <div className="card__title">Conversación</div>
+              <p className="query-panel-note">{turns.length === 0 ? 'Aún no hay turnos en esta colección.' : 'Selecciona un turno para ver su respuesta, sus citas y su evidencia.'}</p>
+            </div>
             <span className="badge badge--accent">{turns.length} turnos</span>
           </div>
 
-          <div style={{ display: 'grid', gap: 'var(--space-4)' }}>
+          <div className="query-thread__list">
             {turns.length === 0 ? (
-              <div className="empty-state" style={{ padding: 'var(--space-12) var(--space-4)' }}>
-                <div className="empty-state__icon">💬</div>
+              <div className="empty-state query-empty-state">
+                <div className="empty-state__icon">⌕</div>
                 <div className="empty-state__title">Empieza una conversación</div>
                 <p>Haz una pregunta para abrir la memoria de la colección.</p>
               </div>
             ) : (
               turns.map(turn => (
-                <article
+                <button
                   key={turn.id}
-                  className="card"
-                  style={{
-                    padding: 'var(--space-4)',
-                    borderColor: activeTurnId === turn.id ? 'rgba(99,102,241,0.55)' : 'var(--color-border)',
-                    background: activeTurnId === turn.id ? 'linear-gradient(180deg, rgba(99,102,241,0.08), rgba(15,20,31,0.92))' : 'var(--color-bg-primary)',
-                    cursor: 'pointer',
-                  }}
+                  type="button"
+                  className={`query-turn${activeTurnId === turn.id ? ' query-turn--active' : ''}`}
+                  aria-pressed={activeTurnId === turn.id}
                   onClick={() => {
                     void hydrateTurn(turn);
                   }}
                 >
-                  <div style={{ display: 'grid', gap: 'var(--space-3)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
-                      <div>
-                        <div style={{ fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{turn.kind === 'answer' ? 'Usuario + asistente' : 'Recuperación de memoria'}</div>
-                        <p style={{ marginTop: 'var(--space-1)', fontWeight: 'var(--font-weight-semibold)' }}>{turn.query}</p>
+                  <div className="query-turn__header">
+                    <div className="query-turn__title-wrap">
+                      <div className="query-turn__eyebrow">{turn.kind === 'answer' ? 'Usuario + asistente' : 'Recuperación de memoria'}</div>
+                      <p className="query-turn__query">{turn.query}</p>
+                    </div>
+                    <div className="query-turn__badges">
+                      <span className="badge badge--accent">{turn.routeMode}</span>
+                      <span className="badge badge--info">{turn.intent}</span>
+                    </div>
+                  </div>
+
+                  {turn.kind === 'answer' ? (
+                    <div className="query-turn__summary">
+                      <div className="chat-bubble chat-bubble--assistant query-turn__bubble">
+                        <p className="query-turn__snippet">{turn.answer || 'La respuesta completa se puede abrir desde el panel derecho.'}</p>
                       </div>
-                      <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-                        <span className="badge badge--accent">{turn.routeMode}</span>
-                        <span className="badge badge--info">{turn.intent}</span>
+                      <div className="query-turn__stats">
+                        <span className="badge badge--success">{turn.groundingScore?.toFixed(3) ?? '—'}</span>
+                        <span className="badge badge--warning">{turn.citationsCount ?? 0} citas</span>
+                        <span className="query-chip">{turn.language}</span>
                       </div>
                     </div>
-
-                    {turn.kind === 'answer' ? (
-                      <div className="chat-bubble chat-bubble--assistant" style={{ display: 'grid', gap: 'var(--space-3)' }}>
-                        <p style={{ whiteSpace: 'pre-wrap', lineHeight: 'var(--line-height-relaxed)' }}>{turn.answer || 'La respuesta completa se puede abrir desde el panel derecho.'}</p>
-                        <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-                          <span className="badge badge--success">{turn.groundingScore?.toFixed(3) ?? '—'}</span>
-                          <span className="badge badge--warning">{turn.citationsCount ?? 0} citas</span>
+                  ) : (
+                    <div className="query-turn__summary">
+                      <p className="query-panel-note">El router devolvió {turn.totalHits ?? 0} evidencias para esta búsqueda.</p>
+                      {turn.hits && turn.hits.length > 0 ? (
+                        <div className="query-turn__evidence-list">
+                          {turn.hits.slice(0, 3).map(hit => <EvidenceCard key={hit.id} evidence={hit} />)}
                         </div>
-                      </div>
-                    ) : (
-                      <div className="chat-bubble chat-bubble--assistant" style={{ display: 'grid', gap: 'var(--space-3)' }}>
-                        <p style={{ color: 'var(--color-text-secondary)' }}>El router devolvió {turn.totalHits ?? 0} evidencias para esta búsqueda.</p>
-                        {turn.hits && turn.hits.length > 0 ? (
-                          <div style={{ display: 'grid', gap: 'var(--space-3)' }}>
-                            {turn.hits.slice(0, 3).map(hit => <EvidenceCard key={hit.id} evidence={hit} />)}
-                          </div>
-                        ) : null}
-                      </div>
-                    )}
-                  </div>
-                </article>
+                      ) : null}
+                    </div>
+                  )}
+                </button>
               ))
             )}
           </div>
         </section>
 
-        <aside className="card" style={{ display: 'grid', gap: 'var(--space-4)', position: 'sticky', top: 'calc(var(--topbar-height) + var(--space-6))' }}>
+        <aside className="query-rail card">
           <div className="card__header">
             <div className="card__title">Evidencia</div>
             <span className="badge badge--accent">{activeTurn?.kind === 'answer' ? 'respuesta' : 'búsqueda'}</span>
@@ -2240,10 +2271,13 @@ export function QueryPage() {
 
           {activeTurn ? (
             <>
-              <div className="card" style={{ background: 'var(--color-bg-primary)', borderColor: 'var(--color-border)' }}>
-                <div style={{ display: 'grid', gap: 'var(--space-2)' }}>
-                  <div style={{ fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Consulta activa</div>
-                  <div style={{ fontWeight: 'var(--font-weight-semibold)' }}>{activeTurn.query}</div>
+              <div className="query-entity-card query-active-turn">
+                <div className="query-panel-heading">Consulta activa</div>
+                <div className="query-turn__query">{activeTurn.query}</div>
+                <div className="query-turn__stats">
+                  <span className="query-chip">{activeTurn.routeMode}</span>
+                  <span className="query-chip">{activeTurn.intent}</span>
+                  <span className="query-chip">{activeTurn.language}</span>
                 </div>
               </div>
 
@@ -2252,21 +2286,21 @@ export function QueryPage() {
                   <AnswerPanel answer={activeAnswer} />
                   <PageViewer evidence={activeAnswer.evidence} />
                   <CitationSidebar citations={activeAnswer.citations} />
-                  <div className="card" style={{ background: 'var(--color-bg-primary)', borderColor: 'var(--color-border)', display: 'grid', gap: 'var(--space-3)' }}>
-                    <div className="card__title">Exportar respuesta</div>
-                    <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
+                  <div className="query-entity-card query-export">
+                    <div className="query-panel-heading">Exportar respuesta</div>
+                    <div className="query-export__actions">
                       <a className="btn btn-primary" href={api.exportAnswerMarkdown(activeAnswer.answer_id)} target="_blank" rel="noreferrer">Markdown</a>
                       <a className="btn btn-secondary" href={api.exportAnswerPdf(activeAnswer.answer_id)} target="_blank" rel="noreferrer">PDF</a>
                     </div>
                   </div>
                 </>
               ) : (
-                <div className="card" style={{ background: 'var(--color-bg-primary)', borderColor: 'var(--color-border)', display: 'grid', gap: 'var(--space-3)' }}>
-                  <div className="card__title">Resultados de memoria</div>
+                <div className="query-entity-card query-search-results">
+                  <div className="query-panel-heading">Resultados de memoria</div>
                   {activeSearchHits.length === 0 ? (
-                    <p style={{ color: 'var(--color-text-tertiary)' }}>No hay evidencias detalladas para este turno todavía.</p>
+                    <p className="query-panel-note">No hay evidencias detalladas para este turno todavía.</p>
                   ) : (
-                    <div style={{ display: 'grid', gap: 'var(--space-3)' }}>
+                    <div className="query-turn__evidence-list">
                       {activeSearchHits.slice(0, 5).map(hit => <EvidenceCard key={hit.id} evidence={hit} />)}
                     </div>
                   )}
@@ -2274,7 +2308,7 @@ export function QueryPage() {
               )}
             </>
           ) : (
-            <div className="empty-state" style={{ padding: 'var(--space-8) var(--space-4)' }}>
+            <div className="empty-state query-empty-state">
               <div className="empty-state__icon">⌕</div>
               <div className="empty-state__title">Selecciona un turno</div>
               <p>Abre una respuesta o búsqueda para ver sus citas y evidencias.</p>

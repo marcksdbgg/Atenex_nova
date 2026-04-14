@@ -6,22 +6,25 @@ interface EvidenceCardProps {
 
 export function EvidenceCard({ evidence }: EvidenceCardProps) {
   return (
-    <article className="card" style={{ background: 'var(--color-bg-primary)', borderColor: 'var(--color-border)' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap' }}>
+    <article className="query-evidence">
+      <div className="query-evidence__top">
+        <div className="query-evidence__title-wrap">
           <span className="badge badge--accent">#{evidence.rank}</span>
           <span className="badge badge--info">{evidence.source_type}</span>
-          <span style={{ color: 'var(--color-text-secondary)' }}>{evidence.title || 'Fuente sin título'}</span>
+          <span className="query-evidence__title" title={evidence.title || 'Fuente sin título'}>{evidence.title || 'Fuente sin título'}</span>
         </div>
-        <span style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--font-sm)' }}>Puntuación {evidence.score.toFixed(3)}</span>
+        <span className="query-evidence__score">Puntuación {evidence.score.toFixed(3)}</span>
       </div>
-      <p style={{ color: 'var(--color-text-primary)', lineHeight: 'var(--line-height-relaxed)', marginTop: 'var(--space-3)' }}>
-        {evidence.snippet}
-      </p>
-      <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap', marginTop: 'var(--space-3)', fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)' }}>
-        {evidence.document_id ? <span>Documento {evidence.document_id}</span> : null}
-        {evidence.page_number !== null && evidence.page_number !== undefined ? <span>Página {evidence.page_number}</span> : null}
-        <span>Origen {evidence.source_id}</span>
+
+      <p className="query-evidence__snippet">{evidence.snippet}</p>
+
+      <div className="query-evidence__footer">
+        {evidence.document_id ? <span className="query-chip">Documento {evidence.document_id}</span> : null}
+        {evidence.page_number !== null && evidence.page_number !== undefined ? <span className="query-chip">Página {evidence.page_number}</span> : null}
+        <span className="query-chip">Origen {evidence.source_id}</span>
+        {evidence.metadata ? Object.entries(evidence.metadata).slice(0, 2).map(([key, value]) => (
+          <span key={key} className="query-chip">{key}: {value}</span>
+        )) : null}
       </div>
     </article>
   );

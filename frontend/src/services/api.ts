@@ -73,8 +73,34 @@ class ApiClient {
     if (!res.ok) throw new Error(`API error: ${res.status}`);
     return res.json();
   };
-  listCollectionDocuments = (collectionId: string) =>
-    this.request<Document[]>(`/collections/${collectionId}/documents`);
+  listCollectionDocuments = (
+    collectionId: string,
+    params: { offset?: number; limit?: number; status?: string } = {},
+  ) => {
+    const query = new URLSearchParams();
+    if (params.offset !== undefined) query.set('offset', String(params.offset));
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    if (params.status) query.set('status', params.status);
+    const suffix = query.toString() ? `?${query.toString()}` : '';
+    return this.request<Document[]>(`/collections/${collectionId}/documents${suffix}`);
+  };
+  listAllCollectionDocuments = async (collectionId: string, pageSize = 500): Promise<Document[]> => {
+    const normalizedPageSize = Math.max(1, Math.min(pageSize, 2000));
+    const all: Document[] = [];
+    let offset = 0;
+
+    while (true) {
+      const batch = await this.listCollectionDocuments(collectionId, {
+        offset,
+        limit: normalizedPageSize,
+      });
+      all.push(...batch);
+      if (batch.length < normalizedPageSize) break;
+      offset += batch.length;
+    }
+
+    return all;
+  };
   importLocalDocument = (collectionId: string, sourcePath: string, title?: string, mimeType?: string) =>
     this.request<Document>(`/collections/${collectionId}/documents/import`, {
       method: 'POST',

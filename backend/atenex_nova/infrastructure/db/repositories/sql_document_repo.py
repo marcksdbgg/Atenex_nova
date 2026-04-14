@@ -65,7 +65,7 @@ class SqlDocumentRepository:
         stmt = select(DocumentModel).where(DocumentModel.collection_id == collection_id)
         if status:
             stmt = stmt.where(DocumentModel.status == status.value)
-        stmt = stmt.offset(offset).limit(limit)
+        stmt = stmt.order_by(DocumentModel.updated_at.desc(), DocumentModel.id.desc()).offset(offset).limit(limit)
         r = await self._session.execute(stmt)
         return [self._to_entity(m) for m in r.scalars().all()]
 

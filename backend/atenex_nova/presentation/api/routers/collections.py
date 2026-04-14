@@ -8,7 +8,7 @@ from atenex_nova.application.services.document_service import DocumentService
 from atenex_nova.application.services.rebuild_service import RebuildService
 from atenex_nova.dependencies import get_blob_store, get_document_service
 from atenex_nova.domain.entities.collection import Collection
-from atenex_nova.domain.value_objects.identifiers import new_id
+from atenex_nova.domain.value_objects.identifiers import DocumentStatus, new_id
 from atenex_nova.infrastructure.db.repositories.sql_collection_repo import SqlCollectionRepository
 from atenex_nova.infrastructure.db.session import get_session
 from atenex_nova.infrastructure.files.blob_store import BlobStore
@@ -106,9 +106,12 @@ async def delete_collection(
 @router.get("/{collection_id}/documents", response_model=list[DocumentResponse])
 async def list_collection_documents(
     collection_id: str,
+    offset: int = 0,
+    limit: int = 50,
+    status: DocumentStatus | None = None,
     doc_service: DocumentService = Depends(get_document_service),
 ) -> list[DocumentResponse]:
-    items = await doc_service.list_by_collection(collection_id)
+    items = await doc_service.list_by_collection(collection_id, offset=offset, limit=limit, status=status)
     return [
         DocumentResponse(
             id=item.id,
