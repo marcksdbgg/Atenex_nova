@@ -7,13 +7,14 @@ from types import SimpleNamespace
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from qdrant_client import AsyncQdrantClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 
 from atenex_nova.dependencies import get_blob_store
 from atenex_nova.domain.entities.document_node import DocumentNode
-from atenex_nova.domain.value_objects.identifiers import JobType, NodeType, new_id
+from atenex_nova.domain.value_objects.identifiers import JobType
 from atenex_nova.infrastructure.db.models import tables as _tables  # noqa: F401
 from atenex_nova.infrastructure.db.models.tables import (
     AnswerModel,
@@ -62,6 +63,14 @@ async def e2e_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     blob_root = tmp_path / "uploads"
     visual_root = tmp_path / "visual_pages"
     blob_store = BlobStore(blob_root)
+    test_settings = SimpleNamespace(
+        visual_pages_path=visual_root,
+        qdrant_url="http://localhost:6333",
+        embedding_dimensions=384,
+        embeddings_required=False,
+        qdrant_required=False,
+        visual_required=False,
+    )
 
     async def override_get_session():
         async with session_factory() as session:
@@ -74,23 +83,11 @@ async def e2e_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(
         "atenex_nova.infrastructure.visual.colpali_adapter.get_settings",
-        lambda: SimpleNamespace(visual_pages_path=visual_root),
+        lambda: test_settings,
     )
     monkeypatch.setattr(
         "atenex_nova.application.services.collection_cleanup_service.get_settings",
         lambda: SimpleNamespace(visual_pages_path=visual_root),
-    )
-
-    def fake_embedding_init(self, model_name: str = "google/embeddinggemma-300m", dim: int = 384) -> None:
-        self._model_name = model_name or "google/embeddinggemma-300m"
-        self._dim = dim
-        self.model = None
-        self._fallback_only = True
-
-    monkeypatch.setattr(
-        "atenex_nova.infrastructure.embeddings.embedding_adapter.EmbeddingGemmaAdapter.__init__",
-        fake_embedding_init,
-        raising=True,
     )
 
     app.dependency_overrides[get_session] = override_get_session
@@ -189,64 +186,45 @@ async def test_end_to_end_upload_ingestion_reaches_queryable_state(e2e_env, tmp_
         encoding="utf-8",
     )
 
-    async def fake_parse(self, file_path: str, document_id: str) -> list[DocumentNode]:
-        text = Path(file_path).read_text(encoding="utf-8").strip()
-        lines = [line.strip() for line in text.splitlines() if line.strip()] or [text]
-        return [
-            DocumentNode(
-                id=new_id(),
-                document_id=document_id,
-                node_type=NodeType.HEADING if index == 0 else NodeType.PARAGRAPH,
-                raw_text=line,
-                normalized_text="",
-                page_number=index + 1,
-                order_index=index,
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        collection_id = await _create_collection(client, "Upload E2E")
+        with source_file.open("rb") as handle:
+            response = await client.post(
+                f"/collections/{collection_id}/documents",
+                files={"file": (source_file.name, handle, "text/plain")},
             )
-            for index, line in enumerate(lines)
-        ]
 
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(DoclingParserAdapter, "parse", fake_parse, raising=True)
+        assert response.status_code == 201
+        document = response.json()
+        assert document["source_path"] != str(source_file.resolve())
+        assert str(blob_root) in document["source_path"]
+        assert blob_root.exists()
+        assert any(blob_root.rglob(source_file.name))
 
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            collection_id = await _create_collection(client, "Upload E2E")
-            with source_file.open("rb") as handle:
-                response = await client.post(
-                    f"/collections/{collection_id}/documents",
-                    files={"file": (source_file.name, handle, "text/plain")},
-                )
+        await _run_jobs_to_completion(session_factory)
 
-            assert response.status_code == 201
-            document = response.json()
-            assert document["source_path"] != str(source_file.resolve())
-            assert str(blob_root) in document["source_path"]
-            assert blob_root.exists()
-            assert any(blob_root.rglob(source_file.name))
+        audit_response = await client.get(
+            "/observability/audit",
+            params={"entity_type": "document", "entity_id": document["id"]},
+        )
+        assert audit_response.status_code == 200
+        audit_events = audit_response.json()
+        stages = {event["stage"] for event in audit_events}
+        assert {"parse", "normalize", "segment", "embed_index", "index_visual_pages"}.issubset(stages)
+        assert all("duration_ms" in event for event in audit_events)
 
-            await _run_jobs_to_completion(session_factory)
+        query_result = await _search(client, collection_id, "What does EmbeddingGemma support?")
+        assert query_result["total_hits"] > 0
+        assert any("EmbeddingGemma" in hit["snippet"] for hit in query_result["hits"])
 
-            audit_response = await client.get(
-                "/observability/audit",
-                params={"entity_type": "document", "entity_id": document["id"]},
-            )
-            assert audit_response.status_code == 200
-            audit_events = audit_response.json()
-            stages = {event["stage"] for event in audit_events}
-            assert {"parse", "normalize", "segment", "embed_index", "index_visual_pages"}.issubset(stages)
-            assert all("duration_ms" in event for event in audit_events)
-
-            query_result = await _search(client, collection_id, "What does EmbeddingGemma support?")
-            assert query_result["total_hits"] > 0
-            assert any("EmbeddingGemma" in hit["snippet"] for hit in query_result["hits"])
-
-            query_audit = await client.get(
-                "/observability/audit",
-                params={"entity_type": "query", "entity_id": query_result["query_id"]},
-            )
-            assert query_audit.status_code == 200
-            query_events = query_audit.json()
-            assert any(event["stage"] == "search" for event in query_events)
-            assert any(event["stage"] == "score_chunks" for event in query_events)
+        query_audit = await client.get(
+            "/observability/audit",
+            params={"entity_type": "query", "entity_id": query_result["query_id"]},
+        )
+        assert query_audit.status_code == 200
+        query_events = query_audit.json()
+        assert any(event["stage"] == "search" for event in query_events)
+        assert any(event["stage"] == "score_chunks" for event in query_events)
 
     async with session_factory() as session:
         document_repo = SqlDocumentRepository(session)
@@ -275,60 +253,41 @@ async def test_end_to_end_local_path_import_keeps_original_file_reference(e2e_en
         encoding="utf-8",
     )
 
-    async def fake_parse(self, file_path: str, document_id: str) -> list[DocumentNode]:
-        text = Path(file_path).read_text(encoding="utf-8").strip()
-        lines = [line.strip() for line in text.splitlines() if line.strip()] or [text]
-        return [
-            DocumentNode(
-                id=new_id(),
-                document_id=document_id,
-                node_type=NodeType.HEADING if index == 0 else NodeType.PARAGRAPH,
-                raw_text=line,
-                normalized_text="",
-                page_number=index + 1,
-                order_index=index,
-            )
-            for index, line in enumerate(lines)
-        ]
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        collection_id = await _create_collection(client, "Local Import E2E")
+        response = await client.post(
+            f"/collections/{collection_id}/documents/import",
+            json={"source_path": str(source_file), "title": "Local Source"},
+        )
 
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(DoclingParserAdapter, "parse", fake_parse, raising=True)
+        assert response.status_code == 201
+        document = response.json()
+        assert document["source_path"] == str(source_file.resolve())
+        assert not blob_root.exists() or not any(blob_root.iterdir())
 
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            collection_id = await _create_collection(client, "Local Import E2E")
-            response = await client.post(
-                f"/collections/{collection_id}/documents/import",
-                json={"source_path": str(source_file), "title": "Local Source"},
-            )
+        await _run_jobs_to_completion(session_factory)
 
-            assert response.status_code == 201
-            document = response.json()
-            assert document["source_path"] == str(source_file.resolve())
-            assert not blob_root.exists() or not any(blob_root.iterdir())
+        audit_response = await client.get(
+            "/observability/audit",
+            params={"entity_type": "document", "entity_id": document["id"]},
+        )
+        assert audit_response.status_code == 200
+        audit_events = audit_response.json()
+        assert {"parse", "normalize", "segment", "embed_index", "index_visual_pages"}.issubset(
+            {event["stage"] for event in audit_events}
+        )
 
-            await _run_jobs_to_completion(session_factory)
+        query_result = await _search(client, collection_id, "What does EmbeddingGemma support?")
+        assert query_result["total_hits"] > 0
+        assert any("EmbeddingGemma" in hit["snippet"] for hit in query_result["hits"])
 
-            audit_response = await client.get(
-                "/observability/audit",
-                params={"entity_type": "document", "entity_id": document["id"]},
-            )
-            assert audit_response.status_code == 200
-            audit_events = audit_response.json()
-            assert {"parse", "normalize", "segment", "embed_index", "index_visual_pages"}.issubset(
-                {event["stage"] for event in audit_events}
-            )
-
-            query_result = await _search(client, collection_id, "What does EmbeddingGemma support?")
-            assert query_result["total_hits"] > 0
-            assert any("EmbeddingGemma" in hit["snippet"] for hit in query_result["hits"])
-
-            query_audit = await client.get(
-                "/observability/audit",
-                params={"entity_type": "query", "entity_id": query_result["query_id"]},
-            )
-            assert query_audit.status_code == 200
-            query_events = query_audit.json()
-            assert any(event["stage"] == "search" for event in query_events)
+        query_audit = await client.get(
+            "/observability/audit",
+            params={"entity_type": "query", "entity_id": query_result["query_id"]},
+        )
+        assert query_audit.status_code == 200
+        query_events = query_audit.json()
+        assert any(event["stage"] == "search" for event in query_events)
 
     async with session_factory() as session:
         document_repo = SqlDocumentRepository(session)
@@ -393,45 +352,28 @@ async def test_end_to_end_upload_preserves_collection_folder_path(e2e_env, tmp_p
     source_file = tmp_path / "folder-upload.txt"
     source_file.write_text("Folder uploads should keep collection path metadata.", encoding="utf-8")
 
-    async def fake_parse(self, file_path: str, document_id: str) -> list[DocumentNode]:
-        text = Path(file_path).read_text(encoding="utf-8").strip()
-        return [
-            DocumentNode(
-                id=new_id(),
-                document_id=document_id,
-                node_type=NodeType.PARAGRAPH,
-                raw_text=text,
-                normalized_text="",
-                page_number=1,
-                order_index=0,
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        collection_id = await _create_collection(client, "Folder Upload E2E")
+        with source_file.open("rb") as handle:
+            response = await client.post(
+                f"/collections/{collection_id}/documents",
+                data={
+                    "collection_path": "lote-a/subcarpeta/folder-upload.txt",
+                    "display_title": "lote-a/subcarpeta/folder-upload.txt",
+                },
+                files={"file": (source_file.name, handle, "text/plain")},
             )
-        ]
 
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(DoclingParserAdapter, "parse", fake_parse, raising=True)
+        assert response.status_code == 201
+        document = response.json()
+        assert document["collection_path"] == "lote-a/subcarpeta/folder-upload.txt"
+        assert document["title"] == "lote-a/subcarpeta/folder-upload.txt"
 
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            collection_id = await _create_collection(client, "Folder Upload E2E")
-            with source_file.open("rb") as handle:
-                response = await client.post(
-                    f"/collections/{collection_id}/documents",
-                    data={
-                        "collection_path": "lote-a/subcarpeta/folder-upload.txt",
-                        "display_title": "lote-a/subcarpeta/folder-upload.txt",
-                    },
-                    files={"file": (source_file.name, handle, "text/plain")},
-                )
+        stored_path = Path(document["source_path"])
+        assert stored_path.exists()
+        assert (blob_root / collection_id / document["id"] / "lote-a" / "subcarpeta" / "folder-upload.txt").exists()
 
-            assert response.status_code == 201
-            document = response.json()
-            assert document["collection_path"] == "lote-a/subcarpeta/folder-upload.txt"
-            assert document["title"] == "lote-a/subcarpeta/folder-upload.txt"
-
-            stored_path = Path(document["source_path"])
-            assert stored_path.exists()
-            assert (blob_root / collection_id / document["id"] / "lote-a" / "subcarpeta" / "folder-upload.txt").exists()
-
-            await _run_jobs_to_completion(session_factory)
+        await _run_jobs_to_completion(session_factory)
 
     async with session_factory() as session:
         docs = await SqlDocumentRepository(session).list_by_collection(collection_id)
@@ -450,49 +392,32 @@ async def test_end_to_end_local_folder_import_registers_all_files(e2e_env, tmp_p
     file_a.write_text("archivo a", encoding="utf-8")
     file_b.write_text("archivo b", encoding="utf-8")
 
-    async def fake_parse(self, file_path: str, document_id: str) -> list[DocumentNode]:
-        text = Path(file_path).read_text(encoding="utf-8").strip()
-        return [
-            DocumentNode(
-                id=new_id(),
-                document_id=document_id,
-                node_type=NodeType.PARAGRAPH,
-                raw_text=text,
-                normalized_text="",
-                page_number=1,
-                order_index=0,
-            )
-        ]
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        collection_id = await _create_collection(client, "Folder Import E2E")
+        response = await client.post(
+            f"/collections/{collection_id}/documents/import-folder",
+            json={
+                "source_folder": str(source_folder),
+                "collection_path": "batch-local",
+                "recursive": True,
+            },
+        )
+        assert response.status_code == 201
+        payload = response.json()
+        assert payload["imported"] == 2
 
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(DoclingParserAdapter, "parse", fake_parse, raising=True)
+        await _run_jobs_to_completion(session_factory)
 
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            collection_id = await _create_collection(client, "Folder Import E2E")
-            response = await client.post(
-                f"/collections/{collection_id}/documents/import-folder",
-                json={
-                    "source_folder": str(source_folder),
-                    "collection_path": "batch-local",
-                    "recursive": True,
-                },
-            )
-            assert response.status_code == 201
-            payload = response.json()
-            assert payload["imported"] == 2
-
-            await _run_jobs_to_completion(session_factory)
-
-            documents_response = await client.get(f"/collections/{collection_id}/documents")
-            assert documents_response.status_code == 200
-            documents = documents_response.json()
-            assert len(documents) == 2
-            collection_paths = {item["collection_path"] for item in documents}
-            assert "batch-local/uno/a.txt" in collection_paths
-            assert "batch-local/dos/b.md" in collection_paths
-            source_paths = {item["source_path"] for item in documents}
-            assert str(file_a.resolve()) in source_paths
-            assert str(file_b.resolve()) in source_paths
+        documents_response = await client.get(f"/collections/{collection_id}/documents")
+        assert documents_response.status_code == 200
+        documents = documents_response.json()
+        assert len(documents) == 2
+        collection_paths = {item["collection_path"] for item in documents}
+        assert "batch-local/uno/a.txt" in collection_paths
+        assert "batch-local/dos/b.md" in collection_paths
+        source_paths = {item["source_path"] for item in documents}
+        assert str(file_a.resolve()) in source_paths
+        assert str(file_b.resolve()) in source_paths
 
 
 @pytest.mark.asyncio
@@ -506,99 +431,42 @@ async def test_delete_collection_cleans_indexes_without_deleting_source_files(e2
         encoding="utf-8",
     )
 
-    deleted_collections: list[str] = []
-    deleted_filters: list[tuple[str, dict[str, str]]] = []
+    qdrant_client = AsyncQdrantClient(host="localhost", port=6333)
+    try:
+        await qdrant_client.get_collections()
+    except Exception as exc:
+        pytest.skip(f"Qdrant unavailable for real e2e cleanup test: {exc}")
+    finally:
+        await qdrant_client.close()
 
-    async def fake_parse(self, file_path: str, document_id: str) -> list[DocumentNode]:
-        text = Path(file_path).read_text(encoding="utf-8").strip()
-        return [
-            DocumentNode(
-                id=new_id(),
-                document_id=document_id,
-                node_type=NodeType.PARAGRAPH,
-                raw_text=text,
-                normalized_text="",
-                page_number=1,
-                order_index=0,
-            )
-        ]
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        collection_id = await _create_collection(client, "Delete E2E")
 
-    def fake_qdrant_init(self, host: str = "localhost", port: int = 6333) -> None:
-        self.client = None
-        self._available = True
-
-    async def fake_qdrant_init_collection(self, collection_name: str, vector_size: int) -> None:
-        del collection_name, vector_size
-
-    async def fake_qdrant_upsert(self, collection_name: str, documents: list) -> None:
-        del collection_name, documents
-
-    async def fake_qdrant_delete_collection(self, collection_name: str) -> None:
-        deleted_collections.append(collection_name)
-
-    async def fake_qdrant_delete_by_filter(self, collection_name: str, filter_dict: dict[str, str]) -> None:
-        deleted_filters.append((collection_name, dict(filter_dict)))
-
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(DoclingParserAdapter, "parse", fake_parse, raising=True)
-        patch.setattr(
-            "atenex_nova.infrastructure.qdrant.qdrant_adapter.QdrantAdapter.__init__",
-            fake_qdrant_init,
-            raising=True,
+        register_response = await client.post(
+            f"/collections/{collection_id}/documents/import",
+            json={"source_path": str(source_file), "title": "Delete Source"},
         )
-        patch.setattr(
-            "atenex_nova.infrastructure.qdrant.qdrant_adapter.QdrantAdapter.init_collection",
-            fake_qdrant_init_collection,
-            raising=True,
-        )
-        patch.setattr(
-            "atenex_nova.infrastructure.qdrant.qdrant_adapter.QdrantAdapter.upsert",
-            fake_qdrant_upsert,
-            raising=True,
-        )
-        patch.setattr(
-            "atenex_nova.infrastructure.qdrant.qdrant_adapter.QdrantAdapter.delete_collection",
-            fake_qdrant_delete_collection,
-            raising=True,
-        )
-        patch.setattr(
-            "atenex_nova.infrastructure.qdrant.qdrant_adapter.QdrantAdapter.delete_by_filter",
-            fake_qdrant_delete_by_filter,
-            raising=True,
-        )
+        assert register_response.status_code == 201
+        document_id = register_response.json()["id"]
 
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            collection_id = await _create_collection(client, "Delete E2E")
+        await _run_jobs_to_completion(session_factory)
+        assert (visual_root / f"{collection_id}.json").exists()
 
-            register_response = await client.post(
-                f"/collections/{collection_id}/documents/import",
-                json={"source_path": str(source_file), "title": "Delete Source"},
-            )
-            assert register_response.status_code == 201
-            document_id = register_response.json()["id"]
+        query_result = await _search(client, collection_id, "¿Qué se debe preservar?")
+        assert query_result["query_id"]
 
-            await _run_jobs_to_completion(session_factory)
-            assert (visual_root / f"{collection_id}.json").exists()
+        delete_response = await client.delete(f"/collections/{collection_id}")
+        assert delete_response.status_code == 204
 
-            query_result = await _search(client, collection_id, "¿Qué se debe preservar?")
-            assert query_result["query_id"]
+        list_response = await client.get("/collections")
+        assert list_response.status_code == 200
+        assert all(item["id"] != collection_id for item in list_response.json())
 
-            delete_response = await client.delete(f"/collections/{collection_id}")
-            assert delete_response.status_code == 204
-
-            list_response = await client.get("/collections")
-            assert list_response.status_code == 200
-            assert all(item["id"] != collection_id for item in list_response.json())
-
-            document_response = await client.get(f"/documents/{document_id}")
-            assert document_response.status_code == 404
+        document_response = await client.get(f"/documents/{document_id}")
+        assert document_response.status_code == 404
 
     assert source_file.exists()
     assert not (visual_root / f"{collection_id}.json").exists()
-    assert f"collection_{collection_id}" in deleted_collections
-    assert f"collection_{collection_id}_propositions" in deleted_collections
-    assert f"collection_{collection_id}_summaries" in deleted_collections
-    assert ("pages_visual", {"collection_id": collection_id}) in deleted_filters
 
     async with session_factory() as session:
         doc_repo = SqlDocumentRepository(session)

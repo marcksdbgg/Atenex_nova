@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import httpx
 import pytest
+from qdrant_client import AsyncQdrantClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 
-from atenex_nova.application.services.answer_service import AnswerService
 from atenex_nova.application.orchestrators.retrieval_orchestrator import RetrievalOrchestrator
+from atenex_nova.application.services.answer_service import AnswerService
 from atenex_nova.domain.entities.chunk import Chunk
 from atenex_nova.domain.entities.collection import Collection
 from atenex_nova.domain.entities.document import Document
@@ -20,6 +22,7 @@ from atenex_nova.infrastructure.db.repositories.sql_chunk_repo import SqlChunkRe
 from atenex_nova.infrastructure.db.repositories.sql_collection_repo import SqlCollectionRepository
 from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocumentRepository
 from atenex_nova.infrastructure.db.repositories.sql_node_repo import SqlDocumentNodeRepository
+from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
 from atenex_nova.workers.jobs.memory_enrichment_job import (
     BuildGraphJobHandler,
     EmbedPropositionsJobHandler,
@@ -28,6 +31,35 @@ from atenex_nova.workers.jobs.memory_enrichment_job import (
     GenerateSummariesJobHandler,
 )
 from atenex_nova.workers.jobs.visual_index_job import IndexVisualPagesJobHandler
+
+
+async def _require_qdrant_or_skip() -> None:
+    client = AsyncQdrantClient(host="localhost", port=6333)
+    try:
+        await client.get_collections()
+    except Exception as exc:
+        pytest.skip(f"Qdrant unavailable for integration test: {exc}")
+    finally:
+        await client.close()
+
+
+async def _require_llm_or_skip() -> None:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get("http://localhost:11434/api/tags")
+            response.raise_for_status()
+    except Exception as exc:
+        pytest.skip(f"LLM runtime unavailable for integration test: {exc}")
+
+
+async def _require_embeddings_or_skip() -> None:
+    try:
+        embedder = EmbeddingGemmaAdapter(required=True)
+        vectors = await embedder.embed(["embedding readiness probe"])
+        if not vectors or not vectors[0]:
+            pytest.skip("Embedding model returned empty vectors")
+    except Exception as exc:
+        pytest.skip(f"Embedding model unavailable for integration test: {exc}")
 
 
 @pytest.fixture()
@@ -112,6 +144,10 @@ async def _run_enrichment(factory, document_id: str) -> None:
 
 @pytest.mark.asyncio
 async def test_phase6_answer_generation_and_persistence(session_factory) -> None:
+    await _require_llm_or_skip()
+    await _require_embeddings_or_skip()
+    await _require_qdrant_or_skip()
+
     collection_id, document_id = await _seed_text_corpus(session_factory)
     await _run_enrichment(session_factory, document_id)
 
@@ -125,6 +161,13 @@ async def test_phase6_answer_generation_and_persistence(session_factory) -> None
         )
 
         assert bundle.answer.text
+        assert bundle.draft_text.strip()
+        assert not bundle.draft_text.startswith((
+            "I could not find grounded evidence",
+            "Corpus-level synthesis:",
+            "Hierarchical synthesis:",
+            "Visual grounding:",
+        ))
         assert bundle.citations
         assert bundle.verification.grounding_score >= 0.0
 
@@ -196,6 +239,9 @@ async def _seed_visual_corpus(factory) -> tuple[str, str]:
 
 @pytest.mark.asyncio
 async def test_phase7_visual_index_and_visual_retrieval(session_factory) -> None:
+    await _require_qdrant_or_skip()
+    await _require_embeddings_or_skip()
+
     collection_id, document_id = await _seed_visual_corpus(session_factory)
 
     await IndexVisualPagesJobHandler(session_factory).execute(

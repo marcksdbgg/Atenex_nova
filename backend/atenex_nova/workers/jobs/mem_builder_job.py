@@ -1,17 +1,20 @@
 """Job handlers for memory building (chunking, embedding, indexing)."""
 
 import logging
+from collections.abc import Callable
+from typing import Any
+from urllib.parse import urlparse
 
 from atenex_nova.domain.entities.chunk import Chunk
 from atenex_nova.domain.entities.job import Job
 from atenex_nova.domain.value_objects.identifiers import JobType, new_id
-from atenex_nova.infrastructure.db.repositories.sql_collection_repo import SqlCollectionRepository
 from atenex_nova.infrastructure.db.repositories.sql_chunk_repo import SqlChunkRepository
+from atenex_nova.infrastructure.db.repositories.sql_collection_repo import SqlCollectionRepository
 from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocumentRepository
 from atenex_nova.infrastructure.db.repositories.sql_job_repo import SqlJobRepository
+from atenex_nova.infrastructure.db.repositories.sql_node_repo import SqlDocumentNodeRepository
 from atenex_nova.infrastructure.db.repositories.sql_proposition_repo import SqlPropositionRepository
 from atenex_nova.infrastructure.db.repositories.sql_relation_repo import SqlRelationRepository
-from atenex_nova.infrastructure.db.repositories.sql_node_repo import SqlDocumentNodeRepository
 from atenex_nova.infrastructure.db.repositories.sql_summary_repo import SqlSummaryRepository
 from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
 from atenex_nova.infrastructure.qdrant.qdrant_adapter import QdrantAdapter, QdrantDocument
@@ -23,10 +26,10 @@ logger = logging.getLogger(__name__)
 
 
 class SegmentDocumentJobHandler(BaseJobHandler):
-    def __init__(self, session_factory) -> None:
+    def __init__(self, session_factory: Callable[[], Any]) -> None:
         self.session_factory = session_factory
 
-    async def execute(self, job: Job) -> dict | None:
+    async def execute(self, job: Job) -> dict[str, object] | None:
         document_id = job.target_id
 
         async with self.session_factory() as session:
@@ -51,7 +54,7 @@ class SegmentDocumentJobHandler(BaseJobHandler):
             ) as step:
                 chunks: list[Chunk] = []
                 current_text = ""
-                current_nodes = []
+                current_nodes: list[str] = []
                 max_chars = 1000
 
                 for node in nodes:
@@ -96,10 +99,10 @@ class SegmentDocumentJobHandler(BaseJobHandler):
 
 
 class EmbedDocumentJobHandler(BaseJobHandler):
-    def __init__(self, session_factory) -> None:
+    def __init__(self, session_factory: Callable[[], Any]) -> None:
         self.session_factory = session_factory
 
-    async def execute(self, job: Job) -> dict | None:
+    async def execute(self, job: Job) -> dict[str, object] | None:
         document_id = job.target_id
 
         async with self.session_factory() as session:
@@ -127,17 +130,29 @@ class EmbedDocumentJobHandler(BaseJobHandler):
                 context={"chunk_count": len(chunks), "chunks_to_embed": len(chunks_to_embed)},
             ) as step:
                 if chunks_to_embed:
-                    embedder = EmbeddingGemmaAdapter(dim=384)
+                    settings = get_settings()
+                    qdrant_endpoint = urlparse(settings.qdrant_url)
+                    qdrant_host = qdrant_endpoint.hostname or "localhost"
+                    qdrant_port = qdrant_endpoint.port or 6333
+
+                    embedder = EmbeddingGemmaAdapter(
+                        dim=settings.embedding_dimensions,
+                        required=settings.embeddings_required,
+                    )
                     texts = [c.text for c in chunks_to_embed]
                     vectors = await embedder.embed(texts)
 
                     import uuid
 
-                    qdrant = QdrantAdapter(host="localhost", port=6333)
+                    qdrant = QdrantAdapter(
+                        host=qdrant_host,
+                        port=qdrant_port,
+                        required=settings.qdrant_required,
+                    )
                     collection_name = f"collection_{doc.collection_id}"
                     await qdrant.init_collection(collection_name, embedder.embedding_dim)
 
-                    vector_docs = []
+                    vector_docs: list[QdrantDocument] = []
                     for chunk, vector in zip(chunks_to_embed, vectors, strict=False):
                         point_id = str(uuid.uuid4())
                         chunk.embedding_ref = point_id
@@ -168,12 +183,17 @@ class EmbedDocumentJobHandler(BaseJobHandler):
 
             doc.mark_embedded()
             doc.mark_indexed()
-            doc.mark_ready() # End of Phase 3 pipeline
+            # In strict mode the document becomes READY only after enrichment jobs complete.
+            if not get_settings().strict_mode_enabled:
+                doc.mark_ready()
             await doc_repo.update(doc)
 
             # Phase 4 starts once the textual memory is ready.
-            from atenex_nova.domain.value_objects.identifiers import JobType as NextJobType, new_id as next_new_id
-            from atenex_nova.infrastructure.db.repositories.sql_job_repo import SqlJobRepository as NextJobRepo
+            from atenex_nova.domain.value_objects.identifiers import JobType as NextJobType
+            from atenex_nova.domain.value_objects.identifiers import new_id as next_new_id
+            from atenex_nova.infrastructure.db.repositories.sql_job_repo import (
+                SqlJobRepository as NextJobRepo,
+            )
 
             next_job = Job(id=next_new_id(), job_type=NextJobType.EXTRACT_PROPOSITIONS, target_id=document_id)
             await NextJobRepo(session).create(next_job)
@@ -183,10 +203,10 @@ class EmbedDocumentJobHandler(BaseJobHandler):
 
 
 class RebuildCollectionJobHandler(BaseJobHandler):
-    def __init__(self, session_factory) -> None:
+    def __init__(self, session_factory: Callable[[], Any]) -> None:
         self.session_factory = session_factory
 
-    async def execute(self, job: Job) -> dict | None:
+    async def execute(self, job: Job) -> dict[str, object] | None:
         collection_id = job.target_id
         async with self.session_factory() as session:
             collection_repo = SqlCollectionRepository(session)

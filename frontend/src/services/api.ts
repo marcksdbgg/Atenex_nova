@@ -19,7 +19,54 @@ import type {
   QuerySearchResponse,
 } from '../types/api';
 
-export const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const DEFAULT_TIMEOUT_MS = 15_000;
+const SEARCH_TIMEOUT_MS = 60_000;
+const ANSWER_TIMEOUT_MS = 180_000;
+const EVALUATION_TIMEOUT_MS = 180_000;
+
+type RequestConfig = RequestInit & {
+  timeoutMs?: number;
+  timeoutMessage?: string;
+};
+
+function resolveApiBase(): string {
+  const configured = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
+  if (configured) {
+    return configured;
+  }
+
+  if (typeof window !== 'undefined') {
+    const protocol = window.location.protocol || 'http:';
+    const hostname = window.location.hostname || 'localhost';
+    return `${protocol}//${hostname}:8000`;
+  }
+
+  return 'http://localhost:8000';
+}
+
+export const API_BASE = resolveApiBase();
+
+function formatApiError(status: number, payload: unknown): string {
+  if (payload && typeof payload === 'object') {
+    const data = payload as { message?: unknown; detail?: unknown };
+    if (typeof data.message === 'string' && data.message.trim()) {
+      return data.message;
+    }
+    if (typeof data.detail === 'string' && data.detail.trim()) {
+      return data.detail;
+    }
+    if (data.detail && typeof data.detail === 'object') {
+      const detail = data.detail as { message?: unknown; code?: unknown };
+      if (typeof detail.message === 'string' && detail.message.trim()) {
+        return detail.message;
+      }
+      if (typeof detail.code === 'string' && detail.code.trim()) {
+        return `Error ${detail.code}`;
+      }
+    }
+  }
+  return `API error: ${status}`;
+}
 
 class ApiClient {
   private base: string;
@@ -28,16 +75,65 @@ class ApiClient {
     this.base = base;
   }
 
-  private async request<T>(path: string, options?: RequestInit): Promise<T> {
-    const res = await fetch(`${this.base}${path}`, {
-      ...options,
-      headers: { 'Content-Type': 'application/json', ...options?.headers },
-    });
+  private async request<T>(path: string, options?: RequestConfig): Promise<T> {
+    const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+
+    const timeoutMessage = options?.timeoutMessage;
+    const requestOptions: RequestInit = { ...(options ?? {}) };
+    delete (requestOptions as RequestConfig).timeoutMs;
+    delete (requestOptions as RequestConfig).timeoutMessage;
+
+    let res: Response;
+    try {
+      res = await fetch(`${this.base}${path}`, {
+        ...requestOptions,
+        headers: { 'Content-Type': 'application/json', ...requestOptions.headers },
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        const fallbackSeconds = Math.round(timeoutMs / 1000);
+        throw new Error(timeoutMessage ?? `La API tardó demasiado en responder (${fallbackSeconds}s).`);
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timeout);
+    }
+
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ message: res.statusText }));
-      throw new Error(err.message || `API error: ${res.status}`);
+      const err = await res.json().catch(() => null);
+      throw new Error(formatApiError(res.status, err));
     }
     if (res.status === 204) return undefined as T;
+    return res.json();
+  }
+
+  private async uploadForm<T>(path: string, formData: FormData): Promise<T> {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+
+    let res: Response;
+    try {
+      res = await fetch(`${this.base}${path}`, {
+        method: 'POST',
+        body: formData,
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw new Error('La subida tardó demasiado en responder.');
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timeout);
+    }
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      throw new Error(formatApiError(res.status, err));
+    }
     return res.json();
   }
 
@@ -66,12 +162,7 @@ class ApiClient {
     if (options.displayTitle) {
       formData.append('display_title', options.displayTitle);
     }
-    const res = await fetch(`${this.base}/collections/${collectionId}/documents`, {
-      method: 'POST',
-      body: formData,
-    });
-    if (!res.ok) throw new Error(`API error: ${res.status}`);
-    return res.json();
+    return this.uploadForm<Document>(`/collections/${collectionId}/documents`, formData);
   };
   listCollectionDocuments = (
     collectionId: string,
@@ -147,12 +238,16 @@ class ApiClient {
     this.request<QuerySearchResponse>('/queries/search', {
       method: 'POST',
       body: JSON.stringify(data),
+      timeoutMs: SEARCH_TIMEOUT_MS,
+      timeoutMessage: 'La búsqueda tardó demasiado en responder. Intenta de nuevo o reduce el alcance de la consulta.',
     });
 
   answerQuery = (data: AnswerRequest) =>
     this.request<AnswerResponse>('/queries/answer', {
       method: 'POST',
       body: JSON.stringify(data),
+      timeoutMs: ANSWER_TIMEOUT_MS,
+      timeoutMessage: 'La generación de respuesta tardó demasiado. El modelo local puede requerir más tiempo o estar saturado.',
     });
   getAnswer = (answerId: string) => this.request<AnswerResponse>(`/answers/${answerId}`);
   listQueryHistory = (collectionId: string, limit = 20) =>
@@ -173,6 +268,8 @@ class ApiClient {
     this.request<EvaluationRunResponse>('/evaluation/runs', {
       method: 'POST',
       body: JSON.stringify(data),
+      timeoutMs: EVALUATION_TIMEOUT_MS,
+      timeoutMessage: 'La evaluación sigue en proceso y tardó más de lo esperado en responder.',
     });
   listEvaluationRuns = () => this.request<EvaluationRunResponse[]>('/evaluation/runs');
   getEvaluationReport = (id: string) => this.request<EvaluationRunResponse>(`/evaluation/reports/${id}`);

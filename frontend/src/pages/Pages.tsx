@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent 
 
 import { AnswerPanel } from '../components/AnswerPanel';
 import { CitationSidebar } from '../components/CitationSidebar';
+import { ConversationThread } from '../components/ConversationThread';
 import { EvidenceCard } from '../components/EvidenceCard';
 import { PageViewer } from '../components/PageViewer';
 import { api } from '../services/api';
@@ -315,33 +316,117 @@ function mapAnswerResultToTurn(response: AnswerResponse): ChatTurn {
   };
 }
 
-export function DashboardPage() {
+type DashboardGlyphName = 'collections' | 'documents' | 'queries' | 'jobs';
+
+function DashboardGlyph({ name }: { name: DashboardGlyphName }) {
+  if (name === 'collections') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M4 4h7v7H4V4Zm9 0h7v7h-7V4ZM4 13h7v7H4v-7Zm9 0h7v7h-7v-7Z" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+
+  if (name === 'documents') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M7 3h7l5 5v13H7V3Zm7 0v5h5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+
+  if (name === 'queries') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="m21 21-4.4-4.4M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Z" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+
   return (
-    <div className="animate-fade-in-up">
-      <h2 style={{ fontSize: 'var(--font-2xl)', fontWeight: 'var(--font-weight-bold)', marginBottom: 'var(--space-6)' }}>
-        Bienvenido a <span style={{ background: 'var(--color-gradient-accent)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Atenex Nova</span>
-      </h2>
-      <p style={{ color: 'var(--color-text-secondary)', maxWidth: '600px', lineHeight: 'var(--line-height-relaxed)' }}>
-        Plataforma local de memoria documental y RAG de nueva generación.
-        Carga documentos, construye memoria y obtén respuestas con grounding real.
-      </p>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: 'var(--space-6)', marginTop: 'var(--space-8)' }}>
-        {[
-          { title: 'Colecciones', value: '—', icon: '▦', desc: 'Corpus documentales' },
-          { title: 'Documentos', value: '—', icon: '📄', desc: 'Documentos indexados' },
-          { title: 'Consultas', value: '—', icon: '⌕', desc: 'Consultas realizadas' },
-          { title: 'Tareas', value: '—', icon: '⟳', desc: 'Trabajos procesados' },
-        ].map(stat => (
-          <div key={stat.title} className="card">
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M21 12a9 9 0 1 1-2.6-6.3M21 4v6h-6" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+type EmptyStateGlyphName = 'grid' | 'refresh' | 'search' | 'target' | 'pulse';
+
+function EmptyStateGlyph({ name }: { name: EmptyStateGlyphName }) {
+  if (name === 'grid') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M4 4h7v7H4V4Zm9 0h7v7h-7V4ZM4 13h7v7H4v-7Zm9 0h7v7h-7v-7Z" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+
+  if (name === 'refresh') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M21 12a9 9 0 1 1-2.6-6.3M21 4v6h-6" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+
+  if (name === 'search') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="m21 21-4.4-4.4M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Z" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+
+  if (name === 'target') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="12" cy="12" r="8" stroke="currentColor" strokeWidth="1.7" />
+        <circle cx="12" cy="12" r="4" stroke="currentColor" strokeWidth="1.7" />
+        <circle cx="12" cy="12" r="1.6" fill="currentColor" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="8" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M12 6v6l4 2" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function DashboardPage() {
+  const stats: Array<{ title: string; value: string; icon: DashboardGlyphName; desc: string }> = [
+    { title: 'Colecciones', value: '—', icon: 'collections', desc: 'Corpus documentales activos' },
+    { title: 'Documentos', value: '—', icon: 'documents', desc: 'Inventario indexado por colección' },
+    { title: 'Consultas', value: '—', icon: 'queries', desc: 'Turnos de búsqueda y respuesta' },
+    { title: 'Tareas', value: '—', icon: 'jobs', desc: 'Pipeline de procesamiento en segundo plano' },
+  ];
+
+  return (
+    <div className="dashboard-page animate-fade-in-up">
+      <section className="dashboard-hero card">
+        <span className="dashboard-hero__eyebrow">Atenex Nova Workspace</span>
+        <h2 className="dashboard-hero__title">Centro operativo documental</h2>
+        <p className="dashboard-hero__description">
+          Organiza colecciones, ejecuta consultas con grounding y monitoriza el pipeline completo desde una sola superficie.
+        </p>
+      </section>
+
+      <section className="dashboard-stats" aria-label="Estado general">
+        {stats.map(stat => (
+          <article key={stat.title} className="card dashboard-stat">
             <div className="card__header">
-              <span style={{ fontSize: '1.5rem' }}>{stat.icon}</span>
+              <span className="dashboard-stat__icon">
+                <DashboardGlyph name={stat.icon} />
+              </span>
               <span className="badge badge--accent">{stat.value}</span>
             </div>
             <div className="card__title">{stat.title}</div>
-            <p style={{ fontSize: 'var(--font-sm)', color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>{stat.desc}</p>
-          </div>
+            <p className="dashboard-stat__desc">{stat.desc}</p>
+          </article>
         ))}
-      </div>
+      </section>
     </div>
   );
 }
@@ -1212,7 +1297,7 @@ export function CollectionsPage() {
       ) : null}
       {collections.length === 0 ? (
         <div className="empty-state">
-          <div className="empty-state__icon">▦</div>
+          <div className="empty-state__icon" aria-hidden="true"><EmptyStateGlyph name="grid" /></div>
           <div className="empty-state__title">Todavía no hay colecciones</div>
           <p>Crea la primera colección para empezar a construir memoria documental.</p>
         </div>
@@ -1359,7 +1444,7 @@ export function CollectionsPage() {
                     </div>
                     {collectionAuditLoading ? (
                       <div className="empty-state" style={{ padding: 'var(--space-4)' }}>
-                        <div className="empty-state__icon">⟲</div>
+                        <div className="empty-state__icon" aria-hidden="true"><EmptyStateGlyph name="refresh" /></div>
                         <div className="empty-state__title">Cargando logs</div>
                         <p>Actualizando eventos de la colección.</p>
                       </div>
@@ -1750,7 +1835,7 @@ export function CollectionsPage() {
                       </>
                     ) : (
                       <div className="empty-state" style={{ padding: 'var(--space-6) var(--space-4)' }}>
-                        <div className="empty-state__icon">⌕</div>
+                        <div className="empty-state__icon" aria-hidden="true"><EmptyStateGlyph name="search" /></div>
                         <div className="empty-state__title">Sin documento seleccionado</div>
                         <p>Selecciona una fila del inventario para abrir su detalle completo.</p>
                       </div>
@@ -1852,7 +1937,7 @@ export function CollectionsPage() {
                     })}
                     {pagedInventoryDocuments.length === 0 ? (
                       <div className="empty-state" style={{ padding: 'var(--space-6) var(--space-4)' }}>
-                        <div className="empty-state__icon">⌕</div>
+                        <div className="empty-state__icon" aria-hidden="true"><EmptyStateGlyph name="search" /></div>
                         <div className="empty-state__title">Sin resultados</div>
                         <p>Ajusta filtros o búsqueda para localizar documentos.</p>
                       </div>
@@ -1909,6 +1994,8 @@ export function QueryPage() {
   const [loading, setLoading] = useState(false);
   const [loadingCollections, setLoadingCollections] = useState(true);
   const [loadingContext, setLoadingContext] = useState(false);
+  const [hydratingTurnId, setHydratingTurnId] = useState('');
+  const [contextMobileOpen, setContextMobileOpen] = useState(false);
   const [error, setError] = useState('');
   const [activeAnswer, setActiveAnswer] = useState<AnswerResponse | null>(null);
   const [activeSearchHits, setActiveSearchHits] = useState<QueryHit[]>([]);
@@ -1933,37 +2020,67 @@ export function QueryPage() {
   }, []);
 
   useEffect(() => {
-    if (!collectionId) return;
+    if (!collectionId) {
+      setTurns([]);
+      setActiveTurnId('');
+      setActiveAnswer(null);
+      setActiveSearchHits([]);
+      return;
+    }
+
     let mounted = true;
     setLoadingContext(true);
-    Promise.all([api.listAllCollectionDocuments(collectionId), api.listQueryHistory(collectionId, 12)])
-      .then(([documents, history]) => {
+
+    Promise.allSettled([api.listAllCollectionDocuments(collectionId), api.listQueryHistory(collectionId, 20)])
+      .then(async ([documentsResult, historyResult]) => {
         if (!mounted) return;
-        setDocumentsByCollection(current => ({
-          ...current,
-          [collectionId]: documents,
-        }));
-        setHistoryByCollection(current => ({
-          ...current,
-          [collectionId]: history,
-        }));
-        const historyTurns = history.slice().reverse().map(mapHistoryToTurn);
+
+        if (documentsResult.status === 'fulfilled') {
+          setDocumentsByCollection(current => ({
+            ...current,
+            [collectionId]: documentsResult.value,
+          }));
+        } else {
+          setDocumentsByCollection(current => ({
+            ...current,
+            [collectionId]: [],
+          }));
+        }
+
+        if (historyResult.status === 'fulfilled') {
+          setHistoryByCollection(current => ({
+            ...current,
+            [collectionId]: historyResult.value,
+          }));
+        } else {
+          setHistoryByCollection(current => ({
+            ...current,
+            [collectionId]: [],
+          }));
+        }
+
+        const historyTurns = historyResult.status === 'fulfilled'
+          ? historyResult.value.slice().reverse().map(mapHistoryToTurn)
+          : [];
         setTurns(historyTurns);
         const lastTurn = historyTurns.at(-1);
         setActiveTurnId(lastTurn?.id ?? '');
+
         if (lastTurn) {
-          void hydrateTurn(lastTurn);
+          await hydrateTurn(lastTurn);
         } else {
           setActiveAnswer(null);
           setActiveSearchHits([]);
         }
-      })
-      .catch(() => {
-        if (mounted) setError('No se pudo cargar la memoria de la colección.');
+
+        if (documentsResult.status === 'rejected' || historyResult.status === 'rejected') {
+          setError('No se pudieron cargar completamente los datos de contexto de la colección.');
+        }
       })
       .finally(() => {
         if (mounted) setLoadingContext(false);
       });
+
     return () => {
       mounted = false;
     };
@@ -1995,9 +2112,11 @@ export function QueryPage() {
   );
 
   const hydrateTurn = async (turn: ChatTurn) => {
+    setHydratingTurnId(turn.id);
     setActiveTurnId(turn.id);
-    if (turn.kind === 'answer' && turn.answerId) {
-      try {
+
+    try {
+      if (turn.kind === 'answer' && turn.answerId) {
         const detail = await api.getAnswer(turn.answerId);
         setActiveAnswer(detail);
         setActiveSearchHits(detail.evidence);
@@ -2016,16 +2135,24 @@ export function QueryPage() {
             : item
         )));
         return;
-      } catch {
-        // fallback below
       }
-    }
 
-    setActiveAnswer(null);
-    setActiveSearchHits(turn.hits ?? []);
+      setActiveAnswer(null);
+      setActiveSearchHits(turn.hits ?? []);
+    } finally {
+      setHydratingTurnId('');
+    }
   };
 
   const canSubmit = collectionId.length > 0 && query.trim().length > 0 && !loading && !loadingCollections;
+  const composerStatus = loading
+    ? (action === 'search' ? 'Ejecutando búsqueda...' : 'Generando respuesta...')
+    : loadingContext
+      ? 'Cargando contexto de colección...'
+      : 'Listo para consultar';
+
+  const routeModes = ['auto', 'exact', 'factual_local', 'multi_hop', 'global', 'argumentative', 'visual'];
+
   const collectionDescription = currentCollection?.description?.trim()
     || 'Chat con memoria por colección, respuestas fundamentadas y acceso rápido al corpus.';
 
@@ -2036,15 +2163,16 @@ export function QueryPage() {
     setError('');
     const prompt = query.trim();
     try {
+      let submittedTurn: ChatTurn;
+
       if (action === 'search') {
         const response = await api.searchQuery({
           collection_id: collectionId,
           query: prompt,
           mode,
         });
-        const turn = mapSearchResultToTurn(response);
-        setTurns(current => [...current, turn]);
-        await hydrateTurn(turn);
+
+        submittedTurn = mapSearchResultToTurn(response);
       } else {
         const response = await api.answerQuery({
           collection_id: collectionId,
@@ -2052,10 +2180,33 @@ export function QueryPage() {
           mode,
           generation_profile: 'standard',
         });
-        const turn = mapAnswerResultToTurn(response);
-        setTurns(current => [...current, turn]);
-        await hydrateTurn(turn);
+
+        submittedTurn = mapAnswerResultToTurn(response);
       }
+
+      setTurns(current => [...current, submittedTurn]);
+      await hydrateTurn(submittedTurn);
+
+      const historyEntry: QueryHistoryResponse = {
+        query_id: submittedTurn.queryId,
+        collection_id: collectionId,
+        query: submittedTurn.query,
+        answer_id: submittedTurn.answerId ?? null,
+        answer: submittedTurn.answer ?? null,
+        route_mode: submittedTurn.routeMode,
+        intent: submittedTurn.intent,
+        language: submittedTurn.language,
+        verdict: submittedTurn.verdict ?? null,
+        grounding_score: submittedTurn.groundingScore ?? null,
+        created_at: submittedTurn.createdAt,
+        citations_count: submittedTurn.citationsCount ?? 0,
+      };
+
+      setHistoryByCollection(current => ({
+        ...current,
+        [collectionId]: [historyEntry, ...(current[collectionId] ?? [])].slice(0, 20),
+      }));
+
       setQuery('');
     } catch (submissionError) {
       setError(submissionError instanceof Error ? submissionError.message : 'La consulta falló.');
@@ -2065,21 +2216,21 @@ export function QueryPage() {
   };
 
   return (
-    <div className="query-page animate-fade-in-up">
+    <div className="query-page query-page--v2 animate-fade-in-up">
       <section className="query-hero card">
         <div className="query-hero__copy">
-          <span className="query-hero__eyebrow">Workspace de consulta</span>
-          <h2 className="query-hero__title">Espacio de consulta</h2>
+          <span className="query-hero__eyebrow">Conversación documentada</span>
+          <h2 className="query-hero__title">Workspace conversacional</h2>
           <p className="query-hero__description">{collectionDescription}</p>
         </div>
         <div className="query-hero__meta" aria-label="Resumen de la consulta">
           <span className="query-chip">{currentCollection?.name ?? 'Sin colección'}</span>
-          <span className="query-chip">{collectionDocuments.length} docs cargados</span>
+          <span className="query-chip">{collectionDocuments.length} documentos</span>
           <span className="query-chip">{turns.length} turnos</span>
         </div>
       </section>
 
-      <section className="query-composer card" aria-label="Controles de consulta">
+      <section className="query-composer query-composer--v2 card" aria-label="Controles de consulta">
         <div className="query-composer__grid">
           <label className="query-field">
             <span className="query-label">Colección</span>
@@ -2100,192 +2251,141 @@ export function QueryPage() {
               onChange={event => setMode(event.target.value)}
               className="query-select"
             >
-              {['auto', 'exact', 'factual_local', 'multi_hop', 'global', 'argumentative', 'visual'].map(item => <option key={item} value={item}>{item}</option>)}
+              {routeModes.map(item => <option key={item} value={item}>{item}</option>)}
             </select>
           </label>
 
           <div className="query-field">
             <span className="query-label">Acción</span>
-            <div className="query-actions">
-              {(['search', 'answer'] as const).map(item => (
-                <button key={item} type="button" className={`btn ${action === item ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setAction(item)}>
-                  {item === 'search' ? 'Buscar memoria' : 'Responder en chat'}
-                </button>
-              ))}
+            <div className="query-action-switch" role="tablist" aria-label="Modo de ejecución">
+              <button
+                type="button"
+                className={`query-action-btn${action === 'search' ? ' query-action-btn--active' : ''}`}
+                aria-selected={action === 'search'}
+                onClick={() => setAction('search')}
+              >
+                Buscar memoria
+              </button>
+              <button
+                type="button"
+                className={`query-action-btn${action === 'answer' ? ' query-action-btn--active' : ''}`}
+                aria-selected={action === 'answer'}
+                onClick={() => setAction('answer')}
+              >
+                Responder en chat
+              </button>
             </div>
           </div>
         </div>
 
         <form onSubmit={handleSubmit} className="query-composer__form">
           <label className="query-field">
-            <span className="query-label">Escribe en lenguaje natural</span>
+            <span className="query-label">Tu pregunta</span>
             <textarea
               value={query}
               onChange={(event: ChangeEvent<HTMLTextAreaElement>) => setQuery(event.target.value)}
               rows={4}
-              placeholder="Pregunta algo sobre tus documentos, como si fuera un chat."
-              className="query-textarea"
+              maxLength={1200}
+              placeholder="Pregunta con lenguaje natural para explorar o responder con evidencia."
+              className="query-textarea query-textarea--chat"
             />
           </label>
 
           <div className="query-composer__footer">
-            <p className="query-composer__hint">
+            <p className="query-composer__hint" aria-live="polite">
               {action === 'search'
-                ? 'Buscar memoria devuelve evidencias ordenadas sin sintetizar la respuesta.'
-                : 'Responder en chat devuelve una respuesta fundamentada con citas y evidencia.'}
+                ? 'Buscar memoria prioriza evidencia recuperada; no sintetiza texto final.'
+                : 'Responder en chat sintetiza con grounding, citas y trazabilidad de evidencia.'}
             </p>
-            <button className="btn btn-primary" type="submit" disabled={!canSubmit}>
-              {loading ? (action === 'search' ? 'Buscando...' : 'Generando...') : action === 'search' ? 'Buscar' : 'Responder'}
-            </button>
+
+            <div className="query-composer__actions">
+              <span className="query-char-counter">{query.length}/1200</span>
+              <button className="btn btn-primary" type="submit" disabled={!canSubmit}>
+                {loading ? (action === 'search' ? 'Buscando...' : 'Generando...') : action === 'search' ? 'Buscar' : 'Responder'}
+              </button>
+            </div>
           </div>
+          <p className="query-composer__status" aria-live="polite">{composerStatus}</p>
         </form>
       </section>
 
       {error ? (
-        <div className="card query-alert">
+        <div className="card query-alert" role="alert">
           <p>{error}</p>
         </div>
       ) : null}
 
-      <div className="query-workspace">
-        <aside className="query-rail card">
-          <div className="card__header">
-            <div className="card__title">Memoria</div>
-            <span className="badge badge--accent">{recentMemory.length}</span>
-          </div>
-
-          <section className="query-rail__section">
-            <div className="query-panel-heading">Turnos recientes</div>
-            <div className="query-rail__list">
-              {recentMemory.length === 0 ? (
-                <p className="query-panel-note">Esta colección todavía no tiene memoria registrada.</p>
-              ) : recentMemory.map(item => (
-                <button key={item.query_id} type="button" className="query-rail__item query-rail__item--button" onClick={() => setQuery(item.query)}>
-                  <div className="query-rail__item-title">{item.query}</div>
-                  <div className="query-rail__item-meta">{formatRelativeDate(item.created_at)} · {item.route_mode}</div>
-                  <div className="query-rail__tags">
-                    <span className="badge badge--info">{item.intent}</span>
-                    {item.verdict ? <span className="badge badge--success">{item.verdict}</span> : null}
-                    {item.grounding_score !== null && item.grounding_score !== undefined ? <span className="query-chip">{item.grounding_score.toFixed(3)}</span> : null}
-                    <span className="query-chip">{item.citations_count} citas</span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </section>
-
-          <section className="query-rail__section">
-            <div className="query-panel-heading">Documentos del contexto</div>
-            <p className="query-panel-note">Vista previa de {visibleDocuments.length} de {collectionDocuments.length} documentos cargados.</p>
-            <div className="query-rail__list">
-              {loadingContext ? <p className="query-panel-note">Cargando documentos...</p> : null}
-              {visibleDocuments.length === 0 && !loadingContext ? <p className="query-panel-note">No hay documentos cargados en esta colección.</p> : null}
-              {visibleDocuments.map(document => {
-                const pipeline = getDocumentPipeline(document.status);
-                const collectionPath = normalizeCollectionPath(document.collection_path || document.title);
-                return (
-                  <div key={document.id} className="query-rail__item">
-                    <div className="query-rail__item-top">
-                      <div className="query-rail__item-title" title={getCollectionDisplayTitle(document)}>{getCollectionDisplayTitle(document)}</div>
-                      <span className={`badge badge--${pipeline.tone}`}>{pipeline.label}</span>
-                    </div>
-                    <div className="query-rail__item-meta" title={(collectionPath || document.source_path) ?? undefined}>{collectionPath || document.source_path || 'Ruta no disponible'}</div>
-                    <div className="query-rail__item-meta">{document.mime_type} · v{document.version}</div>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        </aside>
-
-        <section className="query-thread card">
+      <div className="query-layout">
+        <section className="query-conversation card">
           <div className="card__header">
             <div>
               <div className="card__title">Conversación</div>
-              <p className="query-panel-note">{turns.length === 0 ? 'Aún no hay turnos en esta colección.' : 'Selecciona un turno para ver su respuesta, sus citas y su evidencia.'}</p>
+              <p className="query-panel-note">Estructura chat-first: pregunta del usuario, respuesta o búsqueda, y trazabilidad de contexto.</p>
             </div>
-            <span className="badge badge--accent">{turns.length} turnos</span>
+            <div className="query-conversation__header-actions">
+              <span className="badge badge--accent">{turns.length} turnos</span>
+              <button
+                type="button"
+                className="btn btn-secondary query-context-toggle"
+                onClick={() => setContextMobileOpen(current => !current)}
+              >
+                {contextMobileOpen ? 'Ocultar contexto' : 'Ver contexto'}
+              </button>
+            </div>
           </div>
 
-          <div className="query-thread__list">
-            {turns.length === 0 ? (
-              <div className="empty-state query-empty-state">
-                <div className="empty-state__icon">⌕</div>
-                <div className="empty-state__title">Empieza una conversación</div>
-                <p>Haz una pregunta para abrir la memoria de la colección.</p>
-              </div>
-            ) : (
-              turns.map(turn => (
-                <button
-                  key={turn.id}
-                  type="button"
-                  className={`query-turn${activeTurnId === turn.id ? ' query-turn--active' : ''}`}
-                  aria-pressed={activeTurnId === turn.id}
-                  onClick={() => {
-                    void hydrateTurn(turn);
-                  }}
-                >
-                  <div className="query-turn__header">
-                    <div className="query-turn__title-wrap">
-                      <div className="query-turn__eyebrow">{turn.kind === 'answer' ? 'Usuario + asistente' : 'Recuperación de memoria'}</div>
-                      <p className="query-turn__query">{turn.query}</p>
-                    </div>
-                    <div className="query-turn__badges">
-                      <span className="badge badge--accent">{turn.routeMode}</span>
-                      <span className="badge badge--info">{turn.intent}</span>
-                    </div>
-                  </div>
+          {loadingContext ? <p className="query-panel-note">Cargando contexto de colección...</p> : null}
 
-                  {turn.kind === 'answer' ? (
-                    <div className="query-turn__summary">
-                      <div className="chat-bubble chat-bubble--assistant query-turn__bubble">
-                        <p className="query-turn__snippet">{turn.answer || 'La respuesta completa se puede abrir desde el panel derecho.'}</p>
-                      </div>
-                      <div className="query-turn__stats">
-                        <span className="badge badge--success">{turn.groundingScore?.toFixed(3) ?? '—'}</span>
-                        <span className="badge badge--warning">{turn.citationsCount ?? 0} citas</span>
-                        <span className="query-chip">{turn.language}</span>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="query-turn__summary">
-                      <p className="query-panel-note">El router devolvió {turn.totalHits ?? 0} evidencias para esta búsqueda.</p>
-                      {turn.hits && turn.hits.length > 0 ? (
-                        <div className="query-turn__evidence-list">
-                          {turn.hits.slice(0, 3).map(hit => <EvidenceCard key={hit.id} evidence={hit} />)}
-                        </div>
-                      ) : null}
-                    </div>
-                  )}
-                </button>
-              ))
-            )}
-          </div>
+          <ConversationThread
+            turns={turns}
+            activeTurnId={activeTurnId}
+            hydratingTurnId={hydratingTurnId}
+            onSelectTurn={(turnId: string) => {
+              const selected = turns.find(turn => turn.id === turnId);
+              if (!selected) return;
+              void hydrateTurn(selected);
+            }}
+          />
         </section>
 
-        <aside className="query-rail card">
+        <aside className={`query-context card${contextMobileOpen ? ' query-context--open' : ''}`}>
           <div className="card__header">
-            <div className="card__title">Evidencia</div>
-            <span className="badge badge--accent">{activeTurn?.kind === 'answer' ? 'respuesta' : 'búsqueda'}</span>
+            <div>
+              <div className="card__title">Contexto activo</div>
+              <p className="query-panel-note">Estado del turno, evidencia, fuentes y exportación.</p>
+            </div>
+            <span className="badge badge--info">{activeTurn?.kind === 'answer' ? 'respuesta' : 'búsqueda'}</span>
           </div>
 
           {activeTurn ? (
             <>
-              <div className="query-entity-card query-active-turn">
-                <div className="query-panel-heading">Consulta activa</div>
-                <div className="query-turn__query">{activeTurn.query}</div>
+              <section className="query-context__block query-active-turn">
+                <div className="query-panel-heading">Turno activo</div>
+                <p className="query-turn__query">{activeTurn.query}</p>
                 <div className="query-turn__stats">
                   <span className="query-chip">{activeTurn.routeMode}</span>
                   <span className="query-chip">{activeTurn.intent}</span>
                   <span className="query-chip">{activeTurn.language}</span>
                 </div>
-              </div>
+              </section>
 
               {activeAnswer ? (
                 <>
                   <AnswerPanel answer={activeAnswer} />
+                  <section className="query-context__block">
+                    <div className="query-panel-heading">Evidencia prioritaria</div>
+                    {activeAnswer.evidence.length === 0 ? (
+                      <p className="query-panel-note">No hay evidencia recuperada para este turno.</p>
+                    ) : (
+                      <div className="query-turn__evidence-list">
+                        {activeAnswer.evidence.slice(0, 5).map(hit => <EvidenceCard key={hit.id} evidence={hit} />)}
+                      </div>
+                    )}
+                  </section>
+
                   <PageViewer evidence={activeAnswer.evidence} />
                   <CitationSidebar citations={activeAnswer.citations} />
+
                   <div className="query-entity-card query-export">
                     <div className="query-panel-heading">Exportar respuesta</div>
                     <div className="query-export__actions">
@@ -2295,23 +2395,72 @@ export function QueryPage() {
                   </div>
                 </>
               ) : (
-                <div className="query-entity-card query-search-results">
+                <section className="query-context__block">
                   <div className="query-panel-heading">Resultados de memoria</div>
                   {activeSearchHits.length === 0 ? (
-                    <p className="query-panel-note">No hay evidencias detalladas para este turno todavía.</p>
+                    <p className="query-panel-note">No hay evidencias detalladas para este turno.</p>
                   ) : (
                     <div className="query-turn__evidence-list">
-                      {activeSearchHits.slice(0, 5).map(hit => <EvidenceCard key={hit.id} evidence={hit} />)}
+                      {activeSearchHits.slice(0, 6).map(hit => <EvidenceCard key={hit.id} evidence={hit} />)}
                     </div>
                   )}
-                </div>
+                </section>
               )}
+
+              <section className="query-context__block">
+                <div className="query-panel-heading">Memoria reciente</div>
+                <div className="query-rail__list">
+                  {recentMemory.length === 0 ? (
+                    <p className="query-panel-note">No hay consultas previas para reutilizar contexto.</p>
+                  ) : (
+                    recentMemory.map(item => (
+                      <button
+                        key={item.query_id}
+                        type="button"
+                        className="query-rail__item query-rail__item--button"
+                        onClick={() => setQuery(item.query)}
+                      >
+                        <div className="query-rail__item-title">{item.query}</div>
+                        <div className="query-rail__item-meta">{formatRelativeDate(item.created_at)} · {item.route_mode}</div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </section>
+
+              <section className="query-context__block">
+                <div className="query-panel-heading">Documentos en contexto</div>
+                <p className="query-panel-note">Mostrando {visibleDocuments.length} de {collectionDocuments.length} documentos.</p>
+                <div className="query-rail__list">
+                  {visibleDocuments.length === 0 ? (
+                    <p className="query-panel-note">No hay documentos disponibles en esta colección.</p>
+                  ) : (
+                    visibleDocuments.map(document => {
+                      const pipeline = getDocumentPipeline(document.status);
+                      const collectionPath = normalizeCollectionPath(document.collection_path || document.title);
+                      return (
+                        <article key={document.id} className="query-rail__item">
+                          <div className="query-rail__item-top">
+                            <div className="query-rail__item-title" title={getCollectionDisplayTitle(document)}>{getCollectionDisplayTitle(document)}</div>
+                            <span className={`badge badge--${pipeline.tone}`}>{pipeline.label}</span>
+                          </div>
+                          <div className="query-rail__item-meta" title={(collectionPath || document.source_path) ?? undefined}>{collectionPath || document.source_path || 'Ruta no disponible'}</div>
+                        </article>
+                      );
+                    })
+                  )}
+                </div>
+              </section>
             </>
           ) : (
-            <div className="empty-state query-empty-state">
-              <div className="empty-state__icon">⌕</div>
-              <div className="empty-state__title">Selecciona un turno</div>
-              <p>Abre una respuesta o búsqueda para ver sus citas y evidencias.</p>
+            <div className="query-empty-state" role="status" aria-live="polite">
+              <div className="query-empty-state__icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none">
+                  <path d="m21 21-4.4-4.4M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </div>
+              <h3 className="query-empty-state__title">Selecciona un turno</h3>
+              <p>Cuando actives un turno, aquí verás la evidencia, citas y exportación.</p>
             </div>
           )}
         </aside>
@@ -2384,7 +2533,7 @@ export function JobsPage() {
           <div style={{ display: 'grid', gap: 'var(--space-3)' }}>
             {jobs.length === 0 ? (
               <div className="empty-state" style={{ padding: 'var(--space-6) var(--space-4)' }}>
-                <div className="empty-state__icon">⟳</div>
+                <div className="empty-state__icon" aria-hidden="true"><EmptyStateGlyph name="refresh" /></div>
                 <div className="empty-state__title">No hay tareas todavía</div>
                 <p>Cuando un documento entra en el pipeline, aparecerá aquí con su estado real.</p>
               </div>
@@ -2477,7 +2626,7 @@ export function JobsPage() {
             </>
           ) : (
             <div className="empty-state" style={{ padding: 'var(--space-8) var(--space-4)' }}>
-              <div className="empty-state__icon">⌕</div>
+              <div className="empty-state__icon" aria-hidden="true"><EmptyStateGlyph name="search" /></div>
               <div className="empty-state__title">Selecciona un job</div>
               <p>Verás el error, los reintentos y las marcas temporales aquí.</p>
             </div>
@@ -2678,7 +2827,7 @@ export function ObservabilityPage() {
 
           {auditEntries.length === 0 ? (
             <div className="empty-state" style={{ padding: 'var(--space-6) var(--space-4)' }}>
-              <div className="empty-state__icon">⌬</div>
+              <div className="empty-state__icon" aria-hidden="true"><EmptyStateGlyph name="target" /></div>
               <div className="empty-state__title">Sin eventos</div>
               <p>Afina los filtros o espera a que el pipeline genere actividad.</p>
             </div>
@@ -2795,7 +2944,7 @@ export function ObservabilityPage() {
             </>
           ) : (
             <div className="empty-state" style={{ padding: 'var(--space-8) var(--space-4)' }}>
-              <div className="empty-state__icon">⌬</div>
+              <div className="empty-state__icon" aria-hidden="true"><EmptyStateGlyph name="target" /></div>
               <div className="empty-state__title">Selecciona un evento</div>
               <p>Verás métricas, contexto y la evidencia del documento asociado aquí.</p>
             </div>
@@ -2813,6 +2962,7 @@ export function EvaluationPage() {
   const [selectedCollectionId, setSelectedCollectionId] = useState('');
   const [selectedDataset, setSelectedDataset] = useState('baseline');
   const [report, setReport] = useState<EvaluationRunResponse | null>(null);
+  const [bootstrapping, setBootstrapping] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -2827,22 +2977,61 @@ export function EvaluationPage() {
 
   useEffect(() => {
     let mounted = true;
-    Promise.all([api.listCollections(), api.listEvaluationDatasets(), api.listEvaluationRuns()])
-      .then(async ([collectionItems, datasetItems, runItems]) => {
-        if (!mounted) return;
-        setCollections(collectionItems);
-        setDatasets(datasetItems);
-        setSelectedCollectionId(collectionItems[0]?.id ?? '');
-        setSelectedDataset(datasetItems[0] ?? 'baseline');
+
+    const bootstrap = async () => {
+      setBootstrapping(true);
+      setError('');
+
+      const [collectionsResult, datasetsResult, runsResult] = await Promise.allSettled([
+        api.listCollections(),
+        api.listEvaluationDatasets(),
+        api.listEvaluationRuns(),
+      ]);
+
+      if (!mounted) return;
+
+      const errors: string[] = [];
+
+      if (collectionsResult.status === 'fulfilled') {
+        setCollections(collectionsResult.value);
+        setSelectedCollectionId(current => current || collectionsResult.value[0]?.id || '');
+      } else {
+        errors.push('colecciones');
+      }
+
+      if (datasetsResult.status === 'fulfilled') {
+        setDatasets(datasetsResult.value);
+        setSelectedDataset(current => current || datasetsResult.value[0] || 'baseline');
+      } else {
+        errors.push('datasets');
+      }
+
+      if (runsResult.status === 'fulfilled') {
+        const runItems = runsResult.value;
         setRuns(runItems);
         if (runItems[0]) {
-          const detail = await api.getEvaluationReport(runItems[0].id);
-          if (mounted) setReport(detail);
+          try {
+            const detail = await api.getEvaluationReport(runItems[0].id);
+            if (mounted) setReport(detail);
+          } catch {
+            if (mounted) setReport(null);
+          }
+        } else {
+          setReport(null);
         }
-      })
-      .catch(() => {
-        if (mounted) setError('No se pudieron cargar los recursos de evaluación.');
-      });
+      } else {
+        errors.push('ejecuciones');
+      }
+
+      if (errors.length > 0) {
+        setError(`No se pudieron cargar: ${errors.join(', ')}.`);
+      }
+
+      setBootstrapping(false);
+    };
+
+    void bootstrap();
+
     return () => {
       mounted = false;
     };
@@ -2874,12 +3063,18 @@ export function EvaluationPage() {
           <select value={selectedDataset} onChange={event => setSelectedDataset(event.target.value)} style={{ width: '100%', padding: 'var(--space-4)', background: 'var(--color-bg-primary)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-lg)', color: 'var(--color-text-primary)' }}>
             {datasets.map(dataset => <option key={dataset} value={dataset}>{dataset}</option>)}
           </select>
-          <button className="btn btn-primary" onClick={handleRun} disabled={!selectedCollectionId || loading}>{loading ? 'Ejecutando...' : 'Ejecutar evaluación'}</button>
+          <button className="btn btn-primary" onClick={handleRun} disabled={!selectedCollectionId || loading || bootstrapping}>{loading ? 'Ejecutando...' : 'Ejecutar evaluación'}</button>
         </div>
         {error ? <p style={{ color: 'var(--color-error)' }}>{error}</p> : null}
       </div>
 
-      {report ? (
+      {bootstrapping ? (
+        <div className="empty-state">
+          <div className="empty-state__icon" aria-hidden="true"><EmptyStateGlyph name="pulse" /></div>
+          <div className="empty-state__title">Cargando evaluación</div>
+          <p>Consultando colecciones, datasets y ejecuciones recientes.</p>
+        </div>
+      ) : report ? (
         <div style={{ display: 'grid', gap: 'var(--space-6)' }}>
           <div className="card" style={{ display: 'grid', gap: 'var(--space-4)' }}>
             <div className="card__header">
@@ -2920,7 +3115,7 @@ export function EvaluationPage() {
         </div>
       ) : (
         <div className="empty-state">
-          <div className="empty-state__icon">◌</div>
+          <div className="empty-state__icon" aria-hidden="true"><EmptyStateGlyph name="pulse" /></div>
           <div className="empty-state__title">Aún no hay ejecuciones</div>
           <p>Elige una colección y ejecuta el dataset base.</p>
         </div>

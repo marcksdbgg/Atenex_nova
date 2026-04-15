@@ -3,19 +3,25 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel.ext.asyncio.session import AsyncSession
 
-from atenex_nova.application.policies.context_packing_policy import ContextPackingPolicy, EvidencePack
+from atenex_nova.application.policies.context_packing_policy import (
+    ContextPackingPolicy,
+    EvidencePack,
+)
 from atenex_nova.application.policies.query_routing_policy import QueryRoutingPolicy
+from atenex_nova.domain.entities.chunk import Chunk
 from atenex_nova.domain.entities.evidence_item import EvidenceItem
 from atenex_nova.domain.entities.proposition import Proposition
 from atenex_nova.domain.entities.query import Query
 from atenex_nova.domain.entities.summary_node import SummaryNode
+from atenex_nova.domain.repositories.vector_index import HybridIndex
 from atenex_nova.domain.value_objects.identifiers import new_id
-from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocumentRepository
 from atenex_nova.infrastructure.db.repositories.sql_chunk_repo import SqlChunkRepository
+from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocumentRepository
 from atenex_nova.infrastructure.db.repositories.sql_proposition_repo import SqlPropositionRepository
 from atenex_nova.infrastructure.db.repositories.sql_query_repo import SqlQueryRepository
 from atenex_nova.infrastructure.db.repositories.sql_relation_repo import SqlRelationRepository
@@ -23,8 +29,9 @@ from atenex_nova.infrastructure.db.repositories.sql_summary_repo import SqlSumma
 from atenex_nova.infrastructure.embeddings.bm25_encoder import BM25SparseEncoder
 from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
 from atenex_nova.infrastructure.visual.colpali_adapter import ColPaliAdapter
+from atenex_nova.shared.config.settings import get_settings
+from atenex_nova.shared.exceptions.base import StrictModeViolationError
 from atenex_nova.shared.observability.pipeline_audit import PipelineAuditService
-
 
 _TOKEN_RE = re.compile(r"[\w\-]+", re.UNICODE)
 
@@ -56,14 +63,18 @@ class RetrievalOrchestrator:
     def __init__(
         self,
         session: AsyncSession,
-        qdrant_adapter=None,
+        qdrant_adapter: HybridIndex | None = None,
         embedder: EmbeddingGemmaAdapter | None = None,
         visual_adapter: ColPaliAdapter | None = None,
         audit: PipelineAuditService | None = None,
     ) -> None:
         self._session = session
         self._qdrant = qdrant_adapter
-        self._embedder = embedder or EmbeddingGemmaAdapter(dim=384)
+        self._settings = get_settings()
+        self._embedder = embedder or EmbeddingGemmaAdapter(
+            dim=self._settings.embedding_dimensions,
+            required=self._settings.embeddings_required,
+        )
         self._visual = visual_adapter or ColPaliAdapter()
         self._router = QueryRoutingPolicy()
         self._packer = ContextPackingPolicy()
@@ -214,13 +225,40 @@ class RetrievalOrchestrator:
             for index, hit in enumerate(ranked_hits)
         ]
         evidence_pack = self._packer.build(query.id, query.route_mode, evidence_items)
+        self._enforce_strict_evidence(route_mode_name, evidence_pack.items)
         return SearchResult(query=query, hits=ranked_hits, evidence_pack=evidence_pack)
 
-    async def _score_chunks(self, query: Query, chunks, document_titles: dict[str, str]) -> list[SearchHit]:
+    def _enforce_strict_evidence(self, route_mode: str, evidence_items: list[EvidenceItem]) -> None:
+        if not self._settings.strict_mode_enabled:
+            return
+
+        minimum_items = max(1, int(self._settings.min_evidence_items))
+        if len(evidence_items) < minimum_items:
+            raise StrictModeViolationError(
+                message=(
+                    f"strict mode requires at least {minimum_items} evidence items, "
+                    f"got {len(evidence_items)}"
+                ),
+                code="INSUFFICIENT_EVIDENCE",
+            )
+
+        if route_mode == "visual" and self._settings.visual_required:
+            has_visual = any(item.source_type == "visual_page" for item in evidence_items)
+            if not has_visual:
+                raise StrictModeViolationError(
+                    message="strict visual mode requires at least one visual evidence item",
+                    code="VISUAL_EVIDENCE_REQUIRED",
+                )
+
+    async def _score_chunks(
+        self,
+        query: Query,
+        chunks: list[Chunk],
+        document_titles: dict[str, str],
+    ) -> list[SearchHit]:
         texts = [chunk.text for chunk in chunks]
         sparse_scores = BM25SparseEncoder().score(query.normalized_text or query.text, texts) if texts else []
         query_vector = (await self._embedder.embed([query.normalized_text or query.text]))[0]
-        query_text = query.normalized_text or query.text
         candidate_hits: list[SearchHit] = []
         for index, chunk in enumerate(chunks):
             dense_score = self._cosine(query_vector, (await self._embedder.embed([chunk.text]))[0])
@@ -285,11 +323,8 @@ class RetrievalOrchestrator:
             )
         return hits
 
-    def _rank_hits(self, hits: list[SearchHit], route_mode) -> list[SearchHit]:
-        if hasattr(route_mode, "value"):
-            route = route_mode.value
-        else:
-            route = str(route_mode)
+    def _rank_hits(self, hits: list[SearchHit], route_mode: object) -> list[SearchHit]:
+        route = route_mode.value if hasattr(route_mode, "value") else str(route_mode)
         boosts = {
             "exact": {"chunk": 1.15, "proposition": 1.1, "summary": 0.9},
             "factual_local": {"chunk": 1.1, "proposition": 1.15, "summary": 0.85},
@@ -331,7 +366,7 @@ class RetrievalOrchestrator:
         return hits
 
     @staticmethod
-    def _cosine(left: list[float], right: list[float]) -> float:
+    def _cosine(left: Sequence[float], right: Sequence[float]) -> float:
         if not left or not right:
             return 0.0
         limit = min(len(left), len(right))
@@ -340,7 +375,7 @@ class RetrievalOrchestrator:
         right_norm = sum(value * value for value in right[:limit]) ** 0.5
         if not left_norm or not right_norm:
             return 0.0
-        return numerator / (left_norm * right_norm)
+        return float(numerator / (left_norm * right_norm))
 
 
 def query_has_phrase(snippet: str, title: str) -> bool:

@@ -1,12 +1,13 @@
 """Vector Index protocol."""
 
-from typing import Protocol
+from collections.abc import Mapping, Sequence
+from typing import Any, Protocol
 
 
 class VectorDocument(Protocol):
     id: str
     vector: list[float]
-    payload: dict
+    payload: Mapping[str, Any]
 
 
 class HybridIndex(Protocol):
@@ -14,5 +15,11 @@ class HybridIndex(Protocol):
 
     async def init_collection(self, collection_name: str, vector_size: int) -> None: ...
     async def delete_collection(self, collection_name: str) -> None: ...
-    async def upsert(self, collection_name: str, documents: list[VectorDocument]) -> None: ...
-    async def search(self, collection_name: str, query_vector: list[float], limit: int = 10, filter_dict: dict | None = None) -> list[dict]: ...
+    async def upsert(self, collection_name: str, documents: Sequence[VectorDocument]) -> None: ...
+    async def search(
+        self,
+        collection_name: str,
+        query_vector: list[float],
+        limit: int = 10,
+        filter_dict: Mapping[str, str] | None = None,
+    ) -> list[dict[str, Any]]: ...

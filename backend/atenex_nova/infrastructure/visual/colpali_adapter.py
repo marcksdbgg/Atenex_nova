@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from textwrap import wrap
+from typing import Any, cast
+from urllib.parse import urlparse
 
+from atenex_nova.domain.value_objects.identifiers import new_id
 from atenex_nova.infrastructure.embeddings.bm25_encoder import BM25SparseEncoder
 from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
 from atenex_nova.infrastructure.qdrant.qdrant_adapter import QdrantAdapter, QdrantDocument
 from atenex_nova.shared.config.settings import get_settings
-from atenex_nova.domain.value_objects.identifiers import new_id
+from atenex_nova.shared.exceptions.base import ServiceUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -27,27 +30,40 @@ class VisualPage:
     text: str
     is_complex: bool = False
     image_path: str | None = None
-    metadata: dict | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class ColPaliAdapter:
     """Visual retriever for page-level evidence."""
 
     def __init__(self, storage_dir: Path | None = None) -> None:
-        self._storage_dir = storage_dir or get_settings().visual_pages_path
+        settings = get_settings()
+        qdrant_endpoint = urlparse(settings.qdrant_url)
+        qdrant_host = qdrant_endpoint.hostname or "localhost"
+        qdrant_port = qdrant_endpoint.port or 6333
+
+        self._strict_visual = settings.visual_required
+        self._storage_dir = storage_dir or settings.visual_pages_path
         self._storage_dir.mkdir(parents=True, exist_ok=True)
-        self._embedder = EmbeddingGemmaAdapter(dim=384)
-        self._qdrant = QdrantAdapter(host="localhost", port=6333)
+        self._embedder = EmbeddingGemmaAdapter(
+            dim=settings.embedding_dimensions,
+            required=settings.embeddings_required,
+        )
+        self._qdrant = QdrantAdapter(
+            host=qdrant_host,
+            port=qdrant_port,
+            required=(settings.qdrant_required or self._strict_visual),
+        )
         logger.info("ColPaliAdapter initialized")
 
-    async def upsert_pages(self, collection_id: str, pages: list[dict]) -> list[dict]:
+    async def upsert_pages(self, collection_id: str, pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         records = [self._normalize_page(collection_id, page) for page in pages]
         if not records:
             return []
 
         await self._persist_local(collection_id, records)
         vectors = await self._embedder.embed([record.text for record in records])
-        await self._qdrant.init_collection("pages_visual", 384)
+        await self._qdrant.init_collection("pages_visual", self._embedder.embedding_dim)
         await self._qdrant.upsert(
             "pages_visual",
             [
@@ -64,7 +80,7 @@ class ColPaliAdapter:
         )
         return [asdict(record) for record in records]
 
-    async def search(self, collection_id: str, query: str, limit: int = 5) -> list[dict]:
+    async def search(self, collection_id: str, query: str, limit: int = 5) -> list[dict[str, Any]]:
         query = query.strip()
         if not query:
             return []
@@ -79,25 +95,29 @@ class ColPaliAdapter:
         if qdrant_hits:
             return [self._from_payload(hit) for hit in qdrant_hits[:limit]]
 
+        if self._strict_visual:
+            return []
+
         local_records = await self._load_local(collection_id)
         if not local_records:
             return []
 
-        texts = [record["text"] for record in local_records]
+        texts = [str(record.get("text") or "") for record in local_records]
         sparse_scores = BM25SparseEncoder().score(query, texts)
         query_tokens = set(query.lower().split())
-        ranked: list[dict] = []
+        ranked: list[dict[str, Any]] = []
         for index, record in enumerate(local_records):
-            vector = (await self._embedder.embed([record["text"]]))[0]
+            record_text = str(record.get("text") or "")
+            vector = (await self._embedder.embed([record_text]))[0]
             dense_score = self._cosine(query_vector, vector)
             lexical_score = sparse_scores[index] if index < len(sparse_scores) else 0.0
-            bonus = 0.1 if query_tokens.intersection(set(record["text"].lower().split())) else 0.0
+            bonus = 0.1 if query_tokens.intersection(set(record_text.lower().split())) else 0.0
             ranked.append({**record, "score": round((dense_score * 0.65) + (lexical_score * 0.35) + bonus, 4)})
 
         ranked.sort(key=lambda item: item.get("score", 0.0), reverse=True)
         return ranked[:limit]
 
-    def _normalize_page(self, collection_id: str, page: dict) -> VisualPage:
+    def _normalize_page(self, collection_id: str, page: dict[str, Any]) -> VisualPage:
         page_number = int(page.get("page_number") or 1)
         source_page_id = str(page.get("id") or f"{page.get('document_id', 'doc')}:{page_number}")
         page_id = str(page.get("id") or new_id())
@@ -112,7 +132,7 @@ class ColPaliAdapter:
             text=text or str(page.get("title") or "Visual page"),
             is_complex=bool(page.get("is_complex", False)),
             image_path=str(image_path) if image_path else None,
-            metadata={**(page.get("metadata") or {}), "source_page_id": source_page_id},
+            metadata={**cast(dict[str, Any], page.get("metadata") or {}), "source_page_id": source_page_id},
         )
 
     def _render_page_image(self, collection_id: str, page_id: str, title: str, text: str) -> Path | None:
@@ -137,7 +157,12 @@ class ColPaliAdapter:
                 cursor_y += 38
             image.save(image_path)
             return image_path
-        except Exception:
+        except Exception as exc:
+            if self._strict_visual:
+                raise ServiceUnavailableError(
+                    service="visual-render",
+                    message=f"page rendering failed in strict mode: {exc}",
+                ) from exc
             placeholder = image_path.with_suffix(".txt")
             placeholder.write_text(f"{title}\n\n{text}", encoding="utf-8")
             return placeholder
@@ -149,20 +174,23 @@ class ColPaliAdapter:
         merged.extend(asdict(record) for record in records)
         path.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    async def _load_local(self, collection_id: str) -> list[dict]:
+    async def _load_local(self, collection_id: str) -> list[dict[str, Any]]:
         path = self._storage_dir / f"{collection_id}.json"
         if not path.exists():
             return []
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, list):
+                return [item for item in loaded if isinstance(item, dict)]
+            return []
         except Exception:
             return []
 
     @staticmethod
-    def _from_payload(hit: dict) -> dict:
+    def _from_payload(hit: dict[str, Any]) -> dict[str, Any]:
         payload = hit.get("payload") or hit
-        payload = dict(payload)
-        payload["score"] = float(hit.get("score", payload.get("score", 0.0)))
+        payload = dict(cast(dict[str, Any], payload))
+        payload["score"] = float(hit.get("score") or payload.get("score") or 0.0)
         return payload
 
     @staticmethod
@@ -175,4 +203,4 @@ class ColPaliAdapter:
         right_norm = sum(value * value for value in right[:limit]) ** 0.5
         if not left_norm or not right_norm:
             return 0.0
-        return numerator / (left_norm * right_norm)
+        return float(numerator / (left_norm * right_norm))

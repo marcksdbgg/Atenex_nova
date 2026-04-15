@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import itertools
 import re
 from collections import Counter
+from collections.abc import Callable
+from typing import Any
+from urllib.parse import urlparse
 
+from atenex_nova.domain.entities.job import Job
 from atenex_nova.domain.entities.proposition import Proposition
 from atenex_nova.domain.entities.relation_edge import RelationEdge
 from atenex_nova.domain.entities.summary_node import SummaryNode
-from atenex_nova.domain.entities.job import Job
 from atenex_nova.domain.value_objects.identifiers import JobType, RelationType, new_id
 from atenex_nova.infrastructure.db.repositories.sql_chunk_repo import SqlChunkRepository
 from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocumentRepository
@@ -17,9 +21,10 @@ from atenex_nova.infrastructure.db.repositories.sql_proposition_repo import SqlP
 from atenex_nova.infrastructure.db.repositories.sql_summary_repo import SqlSummaryRepository
 from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
 from atenex_nova.infrastructure.graph.graph_store import GraphStore
+from atenex_nova.infrastructure.qdrant.qdrant_adapter import QdrantAdapter, QdrantDocument
+from atenex_nova.shared.config.settings import get_settings
 from atenex_nova.shared.observability.pipeline_audit import PipelineAuditService
 from atenex_nova.workers.runner import BaseJobHandler
-
 
 SENTENCE_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 
@@ -45,7 +50,7 @@ def classify_proposition(text: str) -> str:
 
 
 def summarize_texts(texts: list[str], max_sentences: int = 3) -> str:
-    words = Counter()
+    words: Counter[str] = Counter()
     for text in texts:
         for token in re.findall(r"[\w\-]+", text.lower()):
             if len(token) > 3:
@@ -60,10 +65,10 @@ def summarize_texts(texts: list[str], max_sentences: int = 3) -> str:
 
 
 class ExtractPropositionsJobHandler(BaseJobHandler):
-    def __init__(self, session_factory) -> None:
+    def __init__(self, session_factory: Callable[[], Any]) -> None:
         self.session_factory = session_factory
 
-    async def execute(self, job: Job) -> dict | None:
+    async def execute(self, job: Job) -> dict[str, object] | None:
         document_id = job.target_id
         async with self.session_factory() as session:
             doc_repo = SqlDocumentRepository(session)
@@ -124,10 +129,10 @@ class ExtractPropositionsJobHandler(BaseJobHandler):
 
 
 class EmbedPropositionsJobHandler(BaseJobHandler):
-    def __init__(self, session_factory) -> None:
+    def __init__(self, session_factory: Callable[[], Any]) -> None:
         self.session_factory = session_factory
 
-    async def execute(self, job: Job) -> dict | None:
+    async def execute(self, job: Job) -> dict[str, object] | None:
         document_id = job.target_id
         async with self.session_factory() as session:
             doc_repo = SqlDocumentRepository(session)
@@ -150,13 +155,23 @@ class EmbedPropositionsJobHandler(BaseJobHandler):
                 stage="embed_propositions",
                 context={"proposition_count": len(propositions)},
             ) as step:
-                embedder = EmbeddingGemmaAdapter(dim=384)
+                settings = get_settings()
+                qdrant_endpoint = urlparse(settings.qdrant_url)
+                qdrant_host = qdrant_endpoint.hostname or "localhost"
+                qdrant_port = qdrant_endpoint.port or 6333
+
+                embedder = EmbeddingGemmaAdapter(
+                    dim=settings.embedding_dimensions,
+                    required=settings.embeddings_required,
+                )
                 vectors = await embedder.embed([prop.text for prop in propositions])
                 qdrant = None
                 try:
-                    from atenex_nova.infrastructure.qdrant.qdrant_adapter import QdrantAdapter, QdrantDocument
-
-                    qdrant = QdrantAdapter(host="localhost", port=6333)
+                    qdrant = QdrantAdapter(
+                        host=qdrant_host,
+                        port=qdrant_port,
+                        required=settings.qdrant_required,
+                    )
                     collection_name = f"collection_{document.collection_id}_propositions"
                     await qdrant.init_collection(collection_name, embedder.embedding_dim)
                     await qdrant.upsert(
@@ -177,6 +192,8 @@ class EmbedPropositionsJobHandler(BaseJobHandler):
                         ],
                     )
                 except Exception:
+                    if settings.strict_mode_enabled:
+                        raise
                     qdrant = None
 
                 step.metrics(
@@ -195,10 +212,10 @@ class EmbedPropositionsJobHandler(BaseJobHandler):
 
 
 class GenerateSummariesJobHandler(BaseJobHandler):
-    def __init__(self, session_factory) -> None:
+    def __init__(self, session_factory: Callable[[], Any]) -> None:
         self.session_factory = session_factory
 
-    async def execute(self, job: Job) -> dict | None:
+    async def execute(self, job: Job) -> dict[str, object] | None:
         document_id = job.target_id
         async with self.session_factory() as session:
             doc_repo = SqlDocumentRepository(session)
@@ -248,7 +265,7 @@ class GenerateSummariesJobHandler(BaseJobHandler):
                     text=summarize_texts([document_summary.text] + [chunk.summary or chunk.text for chunk in chunks]),
                 )
 
-                summaries = section_summaries + [document_summary, collection_summary]
+                summaries = [*section_summaries, document_summary, collection_summary]
                 await summary_repo.create_many(summaries)
                 step.metrics(summaries_created=len(summaries), summary_scopes=[summary.scope_type for summary in summaries])
 
@@ -258,10 +275,10 @@ class GenerateSummariesJobHandler(BaseJobHandler):
 
 
 class EmbedSummariesJobHandler(BaseJobHandler):
-    def __init__(self, session_factory) -> None:
+    def __init__(self, session_factory: Callable[[], Any]) -> None:
         self.session_factory = session_factory
 
-    async def execute(self, job: Job) -> dict | None:
+    async def execute(self, job: Job) -> dict[str, object] | None:
         document_id = job.target_id
         async with self.session_factory() as session:
             doc_repo = SqlDocumentRepository(session)
@@ -288,14 +305,24 @@ class EmbedSummariesJobHandler(BaseJobHandler):
                 stage="embed_summaries",
                 context={"summary_count": len(summaries)},
             ) as step:
-                embedder = EmbeddingGemmaAdapter(dim=384)
+                settings = get_settings()
+                qdrant_endpoint = urlparse(settings.qdrant_url)
+                qdrant_host = qdrant_endpoint.hostname or "localhost"
+                qdrant_port = qdrant_endpoint.port or 6333
+
+                embedder = EmbeddingGemmaAdapter(
+                    dim=settings.embedding_dimensions,
+                    required=settings.embeddings_required,
+                )
                 vectors = await embedder.embed([summary.text for summary in summaries])
                 qdrant_unavailable = False
 
                 try:
-                    from atenex_nova.infrastructure.qdrant.qdrant_adapter import QdrantAdapter, QdrantDocument
-
-                    qdrant = QdrantAdapter(host="localhost", port=6333)
+                    qdrant = QdrantAdapter(
+                        host=qdrant_host,
+                        port=qdrant_port,
+                        required=settings.qdrant_required,
+                    )
                     collection_name = f"collection_{document.collection_id}_summaries"
                     await qdrant.init_collection(collection_name, embedder.embedding_dim)
                     await qdrant.upsert(
@@ -315,6 +342,8 @@ class EmbedSummariesJobHandler(BaseJobHandler):
                         ],
                     )
                 except Exception:
+                    if settings.strict_mode_enabled:
+                        raise
                     qdrant_unavailable = True
                     step.metrics(embedded_summaries=len(summaries), qdrant_available=False)
                 else:
@@ -333,10 +362,10 @@ class EmbedSummariesJobHandler(BaseJobHandler):
 
 
 class BuildGraphJobHandler(BaseJobHandler):
-    def __init__(self, session_factory) -> None:
+    def __init__(self, session_factory: Callable[[], Any]) -> None:
         self.session_factory = session_factory
 
-    async def execute(self, job: Job) -> dict | None:
+    async def execute(self, job: Job) -> dict[str, object] | None:
         document_id = job.target_id
         async with self.session_factory() as session:
             doc_repo = SqlDocumentRepository(session)
@@ -371,7 +400,7 @@ class BuildGraphJobHandler(BaseJobHandler):
                             weight=1.0,
                         )
                     )
-                for left, right in zip(propositions, propositions[1:], strict=False):
+                for left, right in itertools.pairwise(propositions):
                     relation = RelationType.ELABORATES.value
                     lower = f"{left.text} {right.text}".lower()
                     if any(marker in lower for marker in ("however", "but", "sin embargo")):

@@ -104,10 +104,11 @@ Handler: `SegmentDocumentJobHandler`
 
 Handler: `EmbedDocumentJobHandler`
 
-- embeds chunks with EmbeddingGemma at 384 dimensions
+- embeds chunks with EmbeddingGemma using configured profile dimensions
 - initializes the Qdrant collection for the current corpus
 - stores vector payloads
-- marks the document embedded, indexed, and ready
+- marks the document embedded and indexed
+- marks the document ready immediately only when strict mode is disabled
 - enqueues `EXTRACT_PROPOSITIONS`
 
 ## Memory Enrichment Pipeline
@@ -126,7 +127,8 @@ Handler: `ExtractPropositionsJobHandler`
 Handler: `EmbedPropositionsJobHandler`
 
 - embeds proposition text with EmbeddingGemma
-- writes vectors to Qdrant when available
+- writes vectors to Qdrant
+- in strict mode, Qdrant/embedding failures propagate as explicit job failures
 
 ### Summaries
 
@@ -143,7 +145,8 @@ Handler: `GenerateSummariesJobHandler`
 Handler: `EmbedSummariesJobHandler`
 
 - embeds section, document, and collection summaries
-- writes them to the collection summaries index when Qdrant is available
+- writes them to the collection summaries index
+- in strict mode, Qdrant/embedding failures propagate as explicit job failures
 
 ### Graph Building
 
@@ -161,6 +164,7 @@ Handler: `IndexVisualPagesJobHandler`
 - flags complex pages based on node types, text length, and node count
 - prepares page payloads for the ColPali adapter
 - upserts page representations for later visual retrieval
+- transitions the document to `ready` at the end of the enrichment chain
 
 ## Rebuild Flow
 

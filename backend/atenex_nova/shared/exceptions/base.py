@@ -80,3 +80,19 @@ class BlobStoreError(InfrastructureError):
 
     def __init__(self, message: str) -> None:
         super().__init__(message=message, code="BLOB_STORE_ERROR")
+
+
+class ServiceUnavailableError(ExternalServiceError):
+    """Raised when a required service is unavailable in strict mode."""
+
+    def __init__(self, service: str, message: str) -> None:
+        super().__init__(service=service, message=message)
+        self.code = "SERVICE_UNAVAILABLE"
+
+
+class StrictModeViolationError(ValidationError):
+    """Raised when strict runtime constraints are not met."""
+
+    def __init__(self, message: str, code: str = "STRICT_MODE_VIOLATION") -> None:
+        super().__init__(message=message)
+        self.code = code

@@ -7,8 +7,8 @@ from atenex_nova.application.services.answer_service import AnswerService
 from atenex_nova.application.services.query_service import QueryService
 from atenex_nova.dependencies import get_answer_service, get_query_service
 from atenex_nova.infrastructure.db.repositories.sql_answer_repo import SqlAnswerRepository
-from atenex_nova.infrastructure.db.repositories.sql_collection_repo import SqlCollectionRepository
 from atenex_nova.infrastructure.db.repositories.sql_citation_repo import SqlCitationRepository
+from atenex_nova.infrastructure.db.repositories.sql_collection_repo import SqlCollectionRepository
 from atenex_nova.infrastructure.db.repositories.sql_query_repo import SqlQueryRepository
 from atenex_nova.infrastructure.db.session import get_session
 from atenex_nova.presentation.api.dto.schemas import (
@@ -20,6 +20,7 @@ from atenex_nova.presentation.api.dto.schemas import (
     QuerySearchResponse,
     SearchRequest,
 )
+from atenex_nova.shared.exceptions.base import ServiceUnavailableError, StrictModeViolationError
 
 router = APIRouter(prefix="/queries", tags=["queries"])
 
@@ -78,11 +79,16 @@ async def search_queries(
     if collection is None:
         raise HTTPException(status_code=404, detail="Collection not found")
 
-    result = await query_service.search_only(
-        collection_id=body.collection_id,
-        query=body.query,
-        mode=body.mode,
-    )
+    try:
+        result = await query_service.search_only(
+            collection_id=body.collection_id,
+            query=body.query,
+            mode=body.mode,
+        )
+    except StrictModeViolationError as exc:
+        raise HTTPException(status_code=422, detail={"code": exc.code, "message": exc.message}) from exc
+    except ServiceUnavailableError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
     return QuerySearchResponse(
         query_id=result.query.id,
         collection_id=result.query.collection_id,
@@ -121,12 +127,17 @@ async def answer_query(
     if collection is None:
         raise HTTPException(status_code=404, detail="Collection not found")
 
-    result = await answer_service.answer(
-        collection_id=body.collection_id,
-        query=body.query,
-        mode=body.mode,
-        generation_profile=body.generation_profile,
-    )
+    try:
+        result = await answer_service.answer(
+            collection_id=body.collection_id,
+            query=body.query,
+            mode=body.mode,
+            generation_profile=body.generation_profile,
+        )
+    except StrictModeViolationError as exc:
+        raise HTTPException(status_code=422, detail={"code": exc.code, "message": exc.message}) from exc
+    except ServiceUnavailableError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
     return AnswerResponse(
         answer_id=result.answer.id,
         query_id=result.query_id,

@@ -133,6 +133,17 @@ The query subsystem first classifies the request, then chooses a routing mode, t
 
 Answer generation then selects a synthesis plan, builds a prompt, calls the local LLM adapter, binds citations, computes grounding, and persists the answer.
 
+### 5. Strict runtime mode
+
+The backend now supports strict runtime guards through settings:
+
+- strict mode defaults to enabled in `prod` profile unless explicitly overridden
+- per-subsystem requirements are configurable for embeddings, LLM, Qdrant, and visual retrieval
+- retrieval can enforce a minimum number of evidence items
+- answering can enforce a minimum grounding score
+
+In strict mode, missing evidence, empty LLM outputs, or unavailable required services are surfaced as typed errors and returned by the query endpoints as explicit `422` or `503` responses.
+
 ## Data Model Notes
 
 - Document lifecycle is stateful: `registered -> parsed -> normalized -> segmented -> embedded -> indexed -> ready`

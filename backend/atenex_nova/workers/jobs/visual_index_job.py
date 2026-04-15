@@ -3,21 +3,24 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Callable
+from typing import Any
 
+from atenex_nova.domain.entities.document_node import DocumentNode
 from atenex_nova.domain.entities.job import Job
-from atenex_nova.domain.value_objects.identifiers import JobType, NodeType, new_id
-from atenex_nova.infrastructure.db.repositories.sql_node_repo import SqlDocumentNodeRepository
+from atenex_nova.domain.value_objects.identifiers import DocumentStatus, NodeType, new_id
 from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocumentRepository
+from atenex_nova.infrastructure.db.repositories.sql_node_repo import SqlDocumentNodeRepository
 from atenex_nova.infrastructure.visual.colpali_adapter import ColPaliAdapter
 from atenex_nova.shared.observability.pipeline_audit import PipelineAuditService
 from atenex_nova.workers.runner import BaseJobHandler
 
 
 class IndexVisualPagesJobHandler(BaseJobHandler):
-    def __init__(self, session_factory) -> None:
+    def __init__(self, session_factory: Callable[[], Any]) -> None:
         self.session_factory = session_factory
 
-    async def execute(self, job: Job) -> dict | None:
+    async def execute(self, job: Job) -> dict[str, object] | None:
         document_id = job.target_id
         async with self.session_factory() as session:
             doc_repo = SqlDocumentRepository(session)
@@ -29,6 +32,10 @@ class IndexVisualPagesJobHandler(BaseJobHandler):
 
             nodes = await node_repo.get_by_document(document_id)
             if not nodes:
+                if document.status != DocumentStatus.READY:
+                    document.mark_ready()
+                    await doc_repo.update(document)
+                    await session.commit()
                 return {"visual_pages_indexed": 0}
 
             async with audit.step(
@@ -39,11 +46,11 @@ class IndexVisualPagesJobHandler(BaseJobHandler):
                 stage="index_visual_pages",
                 context={"node_count": len(nodes), "collection_id": document.collection_id},
             ) as step:
-                pages: dict[int, list] = defaultdict(list)
+                pages: dict[int, list[DocumentNode]] = defaultdict(list)
                 for node in nodes:
                     pages[int(node.page_number or 1)].append(node)
 
-                payloads: list[dict] = []
+                payloads: list[dict[str, Any]] = []
                 complex_pages = 0
                 for page_number, page_nodes in sorted(pages.items()):
                     text = " ".join(node.normalized_text or node.raw_text for node in page_nodes).strip()
@@ -78,7 +85,11 @@ class IndexVisualPagesJobHandler(BaseJobHandler):
                     pages=len(payloads),
                     qdrant_available=getattr(adapter._qdrant, "is_available", False),
                 )
-                result = {"visual_pages_indexed": len(indexed)}
+                result: dict[str, object] = {"visual_pages_indexed": len(indexed)}
+
+            if document.status != DocumentStatus.READY:
+                document.mark_ready()
+                await doc_repo.update(document)
 
             await session.commit()
             return result

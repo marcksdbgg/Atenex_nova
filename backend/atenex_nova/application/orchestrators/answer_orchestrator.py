@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
-import re
 
 from atenex_nova.application.orchestrators.retrieval_orchestrator import SearchResult
 from atenex_nova.application.policies.answer_planning_policy import AnswerPlanningPolicy
@@ -14,7 +14,7 @@ from atenex_nova.domain.entities.evidence_item import EvidenceItem
 from atenex_nova.domain.value_objects.identifiers import AnswerVerdict, new_id
 from atenex_nova.infrastructure.llm.llm_gateway import LlamaCppAdapter, LLMGateway, OllamaAdapter
 from atenex_nova.shared.config.settings import get_settings
-
+from atenex_nova.shared.exceptions.base import StrictModeViolationError
 
 TOKEN_RE = re.compile(r"[\w\-]+", re.UNICODE)
 PROMPT_FILES = {
@@ -67,6 +67,7 @@ class AnswerOrchestrator:
         citations = self._bind_citations(search_result.evidence_pack.items, draft_text)
         answer_text = self._finalize_text(draft_text, citations, search_result.evidence_pack.route_mode, plan_type)
         verification = self._verify(answer_text, search_result.evidence_pack.items, search_result.evidence_pack.contradictions, plan_type, citations)
+        self._enforce_strict_answer(answer_text, citations, verification)
         answer = Answer(
             id=new_id(),
             query_id=search_result.query.id,
@@ -93,7 +94,6 @@ class AnswerOrchestrator:
         )
 
     async def _generate(self, prompt: str, plan_type: str, search_result: SearchResult) -> str:
-        settings = self._settings
         max_tokens = 1024 if plan_type in {"direct_answer", "visual_grounded_synthesis"} else 1536
         temperature = 0.15 if plan_type == "direct_answer" else 0.25
         text = await self._generator.generate(
@@ -104,6 +104,11 @@ class AnswerOrchestrator:
         )
         if text.strip():
             return text.strip()
+        if self._settings.llm_required or self._settings.strict_mode_enabled:
+            raise StrictModeViolationError(
+                message="LLM returned empty draft text in strict mode",
+                code="EMPTY_LLM_OUTPUT",
+            )
         return self._fallback_answer(search_result, plan_type)
 
     def _build_prompt(self, search_result: SearchResult, plan_type: str, generation_profile: str) -> str:
@@ -224,6 +229,11 @@ class AnswerOrchestrator:
     def _finalize_text(self, draft_text: str, citations: list[Citation], route_mode: str, plan_type: str) -> str:
         text = draft_text.strip()
         if not text:
+            if self._settings.strict_mode_enabled:
+                raise StrictModeViolationError(
+                    message="strict mode cannot finalize an empty answer",
+                    code="EMPTY_FINAL_ANSWER",
+                )
             return "I could not produce a grounded answer."
         if plan_type == "visual_grounded_synthesis" and route_mode == "visual":
             return text
@@ -231,6 +241,27 @@ class AnswerOrchestrator:
             suffix = " ".join(f"[{index}]" for index in range(1, min(len(citations), 3) + 1))
             text = f"{text} {suffix}".strip()
         return text
+
+    def _enforce_strict_answer(
+        self,
+        answer_text: str,
+        citations: list[Citation],
+        verification: VerificationResult,
+    ) -> None:
+        if not self._settings.strict_mode_enabled:
+            return
+        if not answer_text.strip():
+            raise StrictModeViolationError("strict mode requires non-empty answer text", code="EMPTY_ANSWER")
+        if not citations:
+            raise StrictModeViolationError("strict mode requires at least one citation", code="MISSING_CITATIONS")
+        if verification.grounding_score < float(self._settings.min_grounding_score):
+            raise StrictModeViolationError(
+                message=(
+                    "strict mode requires grounding_score >= "
+                    f"{self._settings.min_grounding_score}, got {verification.grounding_score}"
+                ),
+                code="LOW_GROUNDING_SCORE",
+            )
 
     def _verify(
         self,
@@ -268,8 +299,8 @@ class AnswerOrchestrator:
     def _build_generator(self, backend: str) -> LLMGateway:
         settings = self._settings
         if backend == "llamacpp":
-            return LlamaCppAdapter(url=settings.llm_url)
-        return OllamaAdapter(url=settings.llm_url, model=settings.llm_model)
+            return LlamaCppAdapter(url=settings.llm_url, required=settings.llm_required)
+        return OllamaAdapter(url=settings.llm_url, model=settings.llm_model, required=settings.llm_required)
 
 
 def normalize_citation_answer_ids(answer_id: str, citations: list[Citation]) -> list[Citation]:
