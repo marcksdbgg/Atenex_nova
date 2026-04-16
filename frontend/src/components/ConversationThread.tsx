@@ -14,16 +14,18 @@ export interface ConversationThreadTurn {
   totalHits?: number;
   hits?: QueryHit[];
   createdAt: string;
+  isPending?: boolean;
 }
 
 interface ConversationThreadProps {
   turns: ConversationThreadTurn[];
   activeTurnId: string;
   hydratingTurnId: string;
+  pendingTurnId: string;
   onSelectTurn: (id: string) => void;
 }
 
-export function ConversationThread({ turns, activeTurnId, hydratingTurnId, onSelectTurn }: ConversationThreadProps) {
+export function ConversationThread({ turns, activeTurnId, hydratingTurnId, pendingTurnId, onSelectTurn }: ConversationThreadProps) {
   if (turns.length === 0) {
     return (
       <div className="query-empty-state" role="status" aria-live="polite">
@@ -45,7 +47,7 @@ export function ConversationThread({ turns, activeTurnId, hydratingTurnId, onSel
           key={turn.id}
           id={turn.id}
           active={activeTurnId === turn.id}
-          loading={hydratingTurnId === turn.id}
+          loading={hydratingTurnId === turn.id || pendingTurnId === turn.id || turn.isPending === true}
           kind={turn.kind}
           query={turn.query}
           answer={turn.answer}

@@ -41,7 +41,13 @@ class QueryRoutingPolicy:
         has_contradiction = any(marker in normalized for marker in self.contradiction_markers)
         has_global_terms = any(marker in normalized for marker in self.global_markers)
         has_visual_terms = any(marker in normalized for marker in self.visual_markers)
-        multi_clause = normalized.count(" and ") + normalized.count(",") >= 1 or normalized.count("?") > 0
+        multi_clause = (
+            normalized.count(" and ")
+            + normalized.count(" y ")
+            + normalized.count(",")
+            >= 1
+            or normalized.count("?") > 0
+        )
         return QueryFeatures(
             text=text,
             normalized_text=normalized,
@@ -86,8 +92,67 @@ class QueryRoutingPolicy:
 
     @staticmethod
     def detect_language(text: str) -> str:
-        lower = text.lower()
-        spanish_markers = {"qué", "como", "cuál", "dónde", "resumen", "pregunta", "tabla", "documento"}
-        if any(marker in lower for marker in spanish_markers):
+        lower = text.lower().strip()
+        if not lower:
+            return "en"
+
+        # Strong hints first.
+        if any(char in lower for char in "áéíóúñ¿¡"):
             return "es"
-        return "en"
+
+        tokens = TOKEN_RE.findall(lower)
+        spanish_markers = {
+            "que",
+            "qué",
+            "como",
+            "cuál",
+            "donde",
+            "dónde",
+            "explica",
+            "resume",
+            "analiza",
+            "compara",
+            "porque",
+            "porqué",
+            "por",
+            "qué",
+            "cita",
+            "citas",
+            "documento",
+            "documentos",
+            "respuesta",
+            "evidencia",
+            "evidencias",
+            "idioma",
+        }
+        english_markers = {
+            "what",
+            "why",
+            "how",
+            "which",
+            "where",
+            "explain",
+            "summarize",
+            "summarise",
+            "analyze",
+            "analyse",
+            "compare",
+            "because",
+            "citation",
+            "citations",
+            "document",
+            "documents",
+            "answer",
+            "evidence",
+            "language",
+        }
+
+        spanish_score = sum(1 for token in tokens if token in spanish_markers)
+        english_score = sum(1 for token in tokens if token in english_markers)
+
+        if re.search(r"\b(?:ción|ciones|mente|idad|ario|aria)\b", lower):
+            spanish_score += 1
+
+        if spanish_score == english_score == 0:
+            return "en"
+        return "es" if spanish_score >= english_score else "en"

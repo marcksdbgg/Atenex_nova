@@ -122,9 +122,26 @@ npm run dev
 docker run -d --name qdrant -p 6333:6333 -p 6334:6334 \
   -v qdrant_storage:/qdrant/storage qdrant/qdrant
 
-# LLM runtime (ejemplo con llama.cpp)
+# LLM runtime (default: Ollama + Gemma4)
+ollama serve
+ollama pull gemma4:e4b
+
+# Verificar modelo disponible
+ollama list
+
+# Alternativa: llama.cpp
 llama-server -m models/gemma-4-e4b.gguf --port 8080 --ctx-size 8192
 ```
+
+### 4.1 Verificación rápida de dependencias activas
+
+Con backend levantado, valida estado de runtime antes de ejecutar pruebas e2e:
+
+```bash
+curl http://127.0.0.1:8000/health/dependencies
+```
+
+Debe incluir `llm.available=true` cuando Ollama y `gemma4:e4b` estén listos.
 
 ### 5. Ejecutar
 

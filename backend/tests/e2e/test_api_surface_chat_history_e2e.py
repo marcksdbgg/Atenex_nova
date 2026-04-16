@@ -33,6 +33,19 @@ async def test_api_surface_ingestion_to_chat_history(e2e_env, tmp_path: Path) ->
         assert health.status_code == 200
         assert health.json()["status"] == "ok"
 
+        dependency_health = await client.get("/health/dependencies")
+        assert dependency_health.status_code == 200
+        dependency_payload = dependency_health.json()
+        llm_dependency = next(
+            (item for item in dependency_payload["dependencies"] if item["name"] == "llm"),
+            None,
+        )
+        assert llm_dependency is not None
+        assert llm_dependency["available"], (
+            "LLM runtime is not active; start Ollama and verify model availability before running e2e tests. "
+            f"Detail: {llm_dependency.get('detail')}"
+        )
+
         collection_id = await _create_collection(client, "API Surface E2E")
 
         imported = await client.post(

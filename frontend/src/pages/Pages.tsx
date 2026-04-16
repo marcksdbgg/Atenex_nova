@@ -1,11 +1,9 @@
 /* Page stubs for routing */
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from 'react';
 
-import { AnswerPanel } from '../components/AnswerPanel';
-import { CitationSidebar } from '../components/CitationSidebar';
 import { ConversationThread } from '../components/ConversationThread';
+import { normalizeAssistantText } from '../components/ChatMessage';
 import { EvidenceCard } from '../components/EvidenceCard';
-import { PageViewer } from '../components/PageViewer';
 import { api } from '../services/api';
 import type {
   AnswerResponse,
@@ -82,6 +80,7 @@ type ChatTurn = {
   hits?: QueryHit[];
   citations?: Citation[];
   totalHits?: number;
+  isPending?: boolean;
 };
 
 const MAX_VISIBLE_DOCUMENTS = 6;
@@ -278,6 +277,7 @@ function mapHistoryToTurn(item: QueryHistoryResponse): ChatTurn {
     verdict: item.verdict ?? undefined,
     groundingScore: item.grounding_score ?? undefined,
     citationsCount: item.citations_count,
+    isPending: false,
   };
 }
 
@@ -293,6 +293,7 @@ function mapSearchResultToTurn(response: QuerySearchResponse): ChatTurn {
     kind: 'search',
     totalHits: response.total_hits,
     hits: response.hits,
+    isPending: false,
   };
 }
 
@@ -313,6 +314,23 @@ function mapAnswerResultToTurn(response: AnswerResponse): ChatTurn {
     citationsCount: response.citations.length,
     hits: response.evidence,
     citations: response.citations,
+    isPending: false,
+  };
+}
+
+function createPendingTurn(prompt: string, mode: string, action: 'search' | 'answer'): ChatTurn {
+  const now = new Date().toISOString();
+  return {
+    id: `pending-${now}-${Math.random().toString(36).slice(2)}`,
+    queryId: `pending-${now}`,
+    query: prompt,
+    routeMode: mode,
+    intent: action === 'answer' ? 'response_pendiente' : 'evidencia_pendiente',
+    language: 'es',
+    createdAt: now,
+    kind: action,
+    totalHits: 0,
+    isPending: true,
   };
 }
 
@@ -763,7 +781,7 @@ export function CollectionsPage() {
     }
   };
 
-  const loadDocumentAudit = async (collectionId: string, document: Document) => {
+  const loadDocumentAudit = useCallback(async (collectionId: string, document: Document) => {
     if (auditLoadingByDocument[document.id]) return;
 
     setSelectedTraceDocumentIds(current => ({ ...current, [collectionId]: document.id }));
@@ -785,7 +803,7 @@ export function CollectionsPage() {
     } finally {
       setAuditLoadingByDocument(current => ({ ...current, [document.id]: false }));
     }
-  };
+  }, [auditLoadingByDocument]);
 
   const copyDocumentEvidence = async (document: Document) => {
     if (evidenceLoadingByDocument[document.id]) return;
@@ -1209,6 +1227,7 @@ export function CollectionsPage() {
     auditEventsByDocument,
     auditLoadingByDocument,
     auditErrorByDocument,
+    loadDocumentAudit,
   ]);
 
   return (
@@ -1991,14 +2010,21 @@ export function QueryPage() {
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState('auto');
   const [action, setAction] = useState<'search' | 'answer'>('answer');
+  const [showAdvancedControls, setShowAdvancedControls] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingCollections, setLoadingCollections] = useState(true);
   const [loadingContext, setLoadingContext] = useState(false);
   const [hydratingTurnId, setHydratingTurnId] = useState('');
   const [contextMobileOpen, setContextMobileOpen] = useState(false);
+  const [pendingQuery, setPendingQuery] = useState('');
+  const [pendingTurnId, setPendingTurnId] = useState('');
   const [error, setError] = useState('');
   const [activeAnswer, setActiveAnswer] = useState<AnswerResponse | null>(null);
   const [activeSearchHits, setActiveSearchHits] = useState<QueryHit[]>([]);
+  const answerDetailByTurnIdRef = useRef<Record<string, AnswerResponse>>({});
+  const composerFormRef = useRef<HTMLFormElement | null>(null);
+  const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const threadViewportRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -2019,12 +2045,61 @@ export function QueryPage() {
     };
   }, []);
 
+  const hydrateTurn = useCallback(async (turn: ChatTurn) => {
+    setHydratingTurnId(turn.id);
+    setActiveTurnId(turn.id);
+    setError('');
+
+    try {
+      if (turn.kind === 'answer' && turn.answerId) {
+        const cachedDetail = answerDetailByTurnIdRef.current[turn.id];
+        if (cachedDetail) {
+          setActiveAnswer(cachedDetail);
+          setActiveSearchHits(cachedDetail.evidence);
+          return;
+        }
+
+        try {
+          const detail = await api.getAnswer(turn.answerId);
+          setActiveAnswer(detail);
+          setActiveSearchHits(detail.evidence);
+          answerDetailByTurnIdRef.current[turn.id] = detail;
+          setTurns(current => current.map(item => (
+            item.id === turn.id
+              ? {
+                  ...item,
+                  answer: detail.answer,
+                  answerId: detail.answer_id,
+                  groundingScore: detail.grounding_score,
+                  verdict: detail.verdict,
+                  citationsCount: detail.citations.length,
+                  hits: detail.evidence,
+                  citations: detail.citations,
+                }
+              : item
+          )));
+        } catch {
+          setActiveAnswer(null);
+          setActiveSearchHits(turn.hits ?? []);
+          setError('No se pudo cargar el detalle completo de este turno. Mostrando datos disponibles.');
+        }
+        return;
+      }
+
+      setActiveAnswer(null);
+      setActiveSearchHits(turn.hits ?? []);
+    } finally {
+      setHydratingTurnId('');
+    }
+  }, []);
+
   useEffect(() => {
     if (!collectionId) {
       setTurns([]);
       setActiveTurnId('');
       setActiveAnswer(null);
       setActiveSearchHits([]);
+      setError('');
       return;
     }
 
@@ -2063,14 +2138,14 @@ export function QueryPage() {
           ? historyResult.value.slice().reverse().map(mapHistoryToTurn)
           : [];
         setTurns(historyTurns);
-        const lastTurn = historyTurns.at(-1);
-        setActiveTurnId(lastTurn?.id ?? '');
+        const lastTurn = historyTurns.at(-1) ?? null;
 
-        if (lastTurn) {
-          await hydrateTurn(lastTurn);
-        } else {
+        if (!lastTurn) {
+          setActiveTurnId('');
           setActiveAnswer(null);
           setActiveSearchHits([]);
+        } else {
+          void hydrateTurn(lastTurn);
         }
 
         if (documentsResult.status === 'rejected' || historyResult.status === 'rejected') {
@@ -2084,7 +2159,7 @@ export function QueryPage() {
     return () => {
       mounted = false;
     };
-  }, [collectionId]);
+  }, [collectionId, hydrateTurn]);
 
   const currentCollection = useMemo(
     () => collections.find(collection => collection.id === collectionId) ?? null,
@@ -2102,59 +2177,149 @@ export function QueryPage() {
   );
 
   const recentMemory = useMemo(
-    () => (historyByCollection[collectionId] ?? []).slice(0, 5),
+    () => {
+      const items = historyByCollection[collectionId] ?? [];
+      const answered = items.filter(item => Boolean(item.answer_id));
+      return (answered.length > 0 ? answered : items).slice(0, 5);
+    },
     [collectionId, historyByCollection],
   );
 
-  const activeTurn = useMemo(
-    () => turns.find(turn => turn.id === activeTurnId) ?? turns.at(-1) ?? null,
-    [activeTurnId, turns],
-  );
+  const visibleTurns = useMemo(() => {
+    const normalizedAnswerQueries = new Set(
+      turns
+        .filter(turn => turn.kind === 'answer')
+        .map(turn => turn.query.trim().toLowerCase()),
+    );
 
-  const hydrateTurn = async (turn: ChatTurn) => {
-    setHydratingTurnId(turn.id);
-    setActiveTurnId(turn.id);
-
-    try {
-      if (turn.kind === 'answer' && turn.answerId) {
-        const detail = await api.getAnswer(turn.answerId);
-        setActiveAnswer(detail);
-        setActiveSearchHits(detail.evidence);
-        setTurns(current => current.map(item => (
-          item.id === turn.id
-            ? {
-                ...item,
-                answer: detail.answer,
-                answerId: detail.answer_id,
-                groundingScore: detail.grounding_score,
-                verdict: detail.verdict,
-                citationsCount: detail.citations.length,
-                hits: detail.evidence,
-                citations: detail.citations,
-              }
-            : item
-        )));
-        return;
+    return turns.filter(turn => {
+      if (turn.id === activeTurnId) {
+        return true;
       }
 
-      setActiveAnswer(null);
-      setActiveSearchHits(turn.hits ?? []);
-    } finally {
-      setHydratingTurnId('');
+      if (turn.kind === 'answer') {
+        return true;
+      }
+
+      const normalizedQuery = turn.query.trim().toLowerCase();
+      return !normalizedAnswerQueries.has(normalizedQuery);
+    });
+  }, [activeTurnId, turns]);
+
+  const activeTurn = useMemo(
+    () => visibleTurns.find(turn => turn.id === activeTurnId) ?? visibleTurns.at(-1) ?? null,
+    [activeTurnId, visibleTurns],
+  );
+
+  const activeEvidence = useMemo(
+    () => activeAnswer?.evidence ?? activeSearchHits,
+    [activeAnswer, activeSearchHits],
+  );
+
+  const activeCitations = useMemo(
+    () => activeAnswer?.citations ?? activeTurn?.citations ?? [],
+    [activeAnswer, activeTurn],
+  );
+
+  const technicalTags = useMemo(() => {
+    if (!activeTurn) return [] as string[];
+
+    const tags = new Set<string>();
+    tags.add(activeTurn.routeMode);
+    tags.add(activeTurn.intent);
+    tags.add(activeTurn.language);
+
+    if (activeTurn.verdict) {
+      tags.add(activeTurn.verdict);
     }
-  };
+
+    activeEvidence.slice(0, 4).forEach(item => {
+      tags.add(item.source_type);
+    });
+
+    return Array.from(tags).slice(0, 8);
+  }, [activeEvidence, activeTurn]);
+
+  const activeContextSummary = useMemo(() => {
+    if (!activeTurn) {
+      return 'Sin turno activo.';
+    }
+
+    if (activeEvidence.length === 0) {
+      return 'No se recuperó evidencia para este turno.';
+    }
+
+    const sources = new Set(activeEvidence.map(item => item.source_type));
+    const documents = new Set(activeEvidence.map(item => item.document_id).filter(Boolean));
+    return `Se usaron ${activeEvidence.length} evidencias, ${documents.size} documentos y fuentes tipo ${Array.from(sources).join(', ')}.`;
+  }, [activeEvidence, activeTurn]);
+
+  useEffect(() => {
+    const viewport = threadViewportRef.current;
+    if (!viewport) return;
+    viewport.scrollTop = viewport.scrollHeight;
+  }, [visibleTurns.length, pendingTurnId]);
 
   const canSubmit = collectionId.length > 0 && query.trim().length > 0 && !loading && !loadingCollections;
-  const composerStatus = loading
-    ? (action === 'search' ? 'Ejecutando búsqueda...' : 'Generando respuesta...')
-    : loadingContext
-      ? 'Cargando contexto de colección...'
-      : 'Listo para consultar';
-
   const routeModes = ['auto', 'exact', 'factual_local', 'multi_hop', 'global', 'argumentative', 'visual'];
 
   const collectionDescription = currentCollection?.description?.trim()
     || 'Chat con memoria por colección, respuestas fundamentadas y acceso rápido al corpus.';
+
+  const quickQuerySuggestions = useMemo(() => {
+    const defaults = [
+      'Resume la idea principal del corpus en 4 líneas con citas.',
+      '¿Qué postura crítica se repite en los documentos y con qué evidencia?',
+      'Extrae 3 conceptos literarios clave y su fragmento más representativo.',
+      'Compara dos enfoques presentes en la colección y justifica con citas.',
+    ];
+
+    const memoryBased = recentMemory
+      .map(item => item.query.trim())
+      .filter(Boolean)
+      .slice(0, 2)
+      .map(item => `Reformula y sintetiza: ${item}`);
+
+    return Array.from(new Set([...memoryBased, ...defaults])).slice(0, 5);
+  }, [recentMemory]);
+
+  const qualityAlerts = useMemo(() => {
+    if (!activeTurn || activeTurn.kind !== 'answer') {
+      return [] as string[];
+    }
+
+    const alerts: string[] = [];
+    const citationsCount = activeTurn.citationsCount ?? 0;
+    const citationsInPanel = activeCitations.length;
+    const groundingScore = activeTurn.groundingScore;
+    const answerText = (activeAnswer?.answer ?? activeTurn.answer ?? '').trim();
+
+    if (citationsCount === 0) {
+      alerts.push('La respuesta no incluye citas explícitas en el turno activo.');
+    }
+
+    if (typeof groundingScore === 'number' && groundingScore < 0.6) {
+      alerts.push('El grounding es bajo para este turno; valida la respuesta con las evidencias del panel.');
+    }
+
+    if (activeTurn.language.startsWith('es') && /^(the evidence supports|i could not|corpus-level synthesis|visual grounding|hierarchical synthesis)/i.test(answerText)) {
+      alerts.push('La respuesta parece usar una plantilla en ingles, posible desalineacion de idioma.');
+    }
+
+    if (activeEvidence.length === 0) {
+      alerts.push('No se recuperaron evidencias para respaldar el resultado actual.');
+    }
+
+    if (citationsCount > 0 && citationsInPanel === 0) {
+      alerts.push('Hay citas reportadas pero no visibles en el panel; posible fallo de hidratacion del detalle.');
+    }
+
+    if ((groundingScore ?? 0) >= 0.75 && activeEvidence.length === 0) {
+      alerts.push('Grounding alto sin evidencias visibles: no confies en esta respuesta hasta rehidratar el turno.');
+    }
+
+    return alerts.slice(0, 3);
+  }, [activeAnswer, activeCitations, activeEvidence, activeTurn]);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -2162,6 +2327,14 @@ export function QueryPage() {
     setLoading(true);
     setError('');
     const prompt = query.trim();
+    const pendingTurn = createPendingTurn(prompt, mode, action);
+    setQuery('');
+    setPendingQuery(prompt);
+    setPendingTurnId(pendingTurn.id);
+    setActiveTurnId('');
+    setActiveAnswer(null);
+    setActiveSearchHits([]);
+    setTurns(current => [...current, pendingTurn]);
     try {
       let submittedTurn: ChatTurn;
 
@@ -2173,6 +2346,8 @@ export function QueryPage() {
         });
 
         submittedTurn = mapSearchResultToTurn(response);
+        setActiveAnswer(null);
+        setActiveSearchHits(response.hits);
       } else {
         const response = await api.answerQuery({
           collection_id: collectionId,
@@ -2182,10 +2357,14 @@ export function QueryPage() {
         });
 
         submittedTurn = mapAnswerResultToTurn(response);
+        setActiveAnswer(response);
+        setActiveSearchHits(response.evidence);
+        answerDetailByTurnIdRef.current[submittedTurn.id] = response;
       }
 
-      setTurns(current => [...current, submittedTurn]);
-      await hydrateTurn(submittedTurn);
+      setTurns(current => current.map(turn => (turn.id === pendingTurn.id ? submittedTurn : turn)));
+      setActiveTurnId(submittedTurn.id);
+      setPendingTurnId('');
 
       const historyEntry: QueryHistoryResponse = {
         query_id: submittedTurn.queryId,
@@ -2207,8 +2386,11 @@ export function QueryPage() {
         [collectionId]: [historyEntry, ...(current[collectionId] ?? [])].slice(0, 20),
       }));
 
-      setQuery('');
+      setPendingQuery('');
     } catch (submissionError) {
+      setTurns(current => current.filter(turn => turn.id !== pendingTurn.id));
+      setPendingQuery('');
+      setPendingTurnId('');
       setError(submissionError instanceof Error ? submissionError.message : 'La consulta falló.');
     } finally {
       setLoading(false);
@@ -2216,253 +2398,350 @@ export function QueryPage() {
   };
 
   return (
-    <div className="query-page query-page--v2 animate-fade-in-up">
-      <section className="query-hero card">
-        <div className="query-hero__copy">
-          <span className="query-hero__eyebrow">Conversación documentada</span>
-          <h2 className="query-hero__title">Workspace conversacional</h2>
-          <p className="query-hero__description">{collectionDescription}</p>
-        </div>
-        <div className="query-hero__meta" aria-label="Resumen de la consulta">
-          <span className="query-chip">{currentCollection?.name ?? 'Sin colección'}</span>
-          <span className="query-chip">{collectionDocuments.length} documentos</span>
-          <span className="query-chip">{turns.length} turnos</span>
-        </div>
-      </section>
-
-      <section className="query-composer query-composer--v2 card" aria-label="Controles de consulta">
-        <div className="query-composer__grid">
-          <label className="query-field">
-            <span className="query-label">Colección</span>
-            <select
-              value={collectionId}
-              onChange={event => setCollectionId(event.target.value)}
-              disabled={loadingCollections}
-              className="query-select"
-            >
-              {collections.length === 0 ? <option value="">No hay colecciones</option> : collections.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
-            </select>
-          </label>
-
-          <label className="query-field">
-            <span className="query-label">Modo de ruta</span>
-            <select
-              value={mode}
-              onChange={event => setMode(event.target.value)}
-              className="query-select"
-            >
-              {routeModes.map(item => <option key={item} value={item}>{item}</option>)}
-            </select>
-          </label>
-
-          <div className="query-field">
-            <span className="query-label">Acción</span>
-            <div className="query-action-switch" role="tablist" aria-label="Modo de ejecución">
-              <button
-                type="button"
-                className={`query-action-btn${action === 'search' ? ' query-action-btn--active' : ''}`}
-                aria-selected={action === 'search'}
-                onClick={() => setAction('search')}
-              >
-                Buscar memoria
-              </button>
-              <button
-                type="button"
-                className={`query-action-btn${action === 'answer' ? ' query-action-btn--active' : ''}`}
-                aria-selected={action === 'answer'}
-                onClick={() => setAction('answer')}
-              >
-                Responder en chat
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <form onSubmit={handleSubmit} className="query-composer__form">
-          <label className="query-field">
-            <span className="query-label">Tu pregunta</span>
-            <textarea
-              value={query}
-              onChange={(event: ChangeEvent<HTMLTextAreaElement>) => setQuery(event.target.value)}
-              rows={4}
-              maxLength={1200}
-              placeholder="Pregunta con lenguaje natural para explorar o responder con evidencia."
-              className="query-textarea query-textarea--chat"
-            />
-          </label>
-
-          <div className="query-composer__footer">
-            <p className="query-composer__hint" aria-live="polite">
-              {action === 'search'
-                ? 'Buscar memoria prioriza evidencia recuperada; no sintetiza texto final.'
-                : 'Responder en chat sintetiza con grounding, citas y trazabilidad de evidencia.'}
-            </p>
-
-            <div className="query-composer__actions">
-              <span className="query-char-counter">{query.length}/1200</span>
-              <button className="btn btn-primary" type="submit" disabled={!canSubmit}>
-                {loading ? (action === 'search' ? 'Buscando...' : 'Generando...') : action === 'search' ? 'Buscar' : 'Responder'}
-              </button>
-            </div>
-          </div>
-          <p className="query-composer__status" aria-live="polite">{composerStatus}</p>
-        </form>
-      </section>
-
-      {error ? (
-        <div className="card query-alert" role="alert">
-          <p>{error}</p>
-        </div>
-      ) : null}
-
-      <div className="query-layout">
-        <section className="query-conversation card">
-          <div className="card__header">
+    <div className="query-chat-page animate-fade-in-up">
+      <div className="query-chat-layout">
+        <section className="query-chat card" aria-label="Chat principal de consulta">
+          <header className="query-chat__header">
             <div>
-              <div className="card__title">Conversación</div>
-              <p className="query-panel-note">Estructura chat-first: pregunta del usuario, respuesta o búsqueda, y trazabilidad de contexto.</p>
+              <div className="card__title">Asistente documental</div>
+              <p className="query-panel-note">{collectionDescription}</p>
             </div>
-            <div className="query-conversation__header-actions">
-              <span className="badge badge--accent">{turns.length} turnos</span>
+            <div className="query-chat__meta" aria-label="Resumen de sesión">
+              <span className="query-chip">{currentCollection?.name ?? 'Sin colección'}</span>
+              <span className="query-chip">{collectionDocuments.length} documentos</span>
+              <span className="query-chip">{visibleTurns.length} turnos</span>
+            </div>
+          </header>
+
+          <section className="query-chat__controls" aria-label="Controles del chat">
+            <label className="query-field">
+              <span className="query-label">Colección</span>
+              <select
+                value={collectionId}
+                onChange={event => setCollectionId(event.target.value)}
+                disabled={loadingCollections}
+                className="query-select"
+              >
+                {collections.length === 0 ? <option value="">No hay colecciones</option> : collections.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+              </select>
+            </label>
+
+            <button
+              type="button"
+              className="btn btn-secondary query-advanced-toggle"
+              onClick={() => setShowAdvancedControls(current => !current)}
+              aria-expanded={showAdvancedControls}
+            >
+              {showAdvancedControls ? 'Ocultar opciones avanzadas' : 'Mostrar opciones avanzadas'}
+            </button>
+
+            <div className="query-chat__context-toggle-wrap">
               <button
                 type="button"
                 className="btn btn-secondary query-context-toggle"
                 onClick={() => setContextMobileOpen(current => !current)}
               >
-                {contextMobileOpen ? 'Ocultar contexto' : 'Ver contexto'}
+                {contextMobileOpen ? 'Ocultar panel lateral' : 'Ver panel lateral'}
               </button>
             </div>
+
+            {showAdvancedControls ? (
+              <div className="query-advanced-panel" role="group" aria-label="Opciones avanzadas">
+                <label className="query-field">
+                  <span className="query-label">Ruta de recuperación</span>
+                  <select
+                    value={mode}
+                    onChange={event => setMode(event.target.value)}
+                    className="query-select"
+                  >
+                    {routeModes.map(item => <option key={item} value={item}>{item}</option>)}
+                  </select>
+                </label>
+
+                <label className="query-field">
+                  <span className="query-label">Tipo de salida</span>
+                  <div className="query-action-switch" role="tablist" aria-label="Tipo de salida">
+                    <button
+                      type="button"
+                      className={`query-action-btn${action === 'answer' ? ' query-action-btn--active' : ''}`}
+                      aria-selected={action === 'answer'}
+                      onClick={() => setAction('answer')}
+                    >
+                      Respuesta final
+                    </button>
+                    <button
+                      type="button"
+                      className={`query-action-btn${action === 'search' ? ' query-action-btn--active' : ''}`}
+                      aria-selected={action === 'search'}
+                      onClick={() => setAction('search')}
+                    >
+                      Solo evidencia
+                    </button>
+                  </div>
+                </label>
+
+                <p className="query-panel-note">
+                  La ruta y el tipo de salida sí afectan el resultado. Si tienes dudas, usa ruta <strong>auto</strong> y <strong>respuesta final</strong>.
+                </p>
+              </div>
+            ) : null}
+          </section>
+
+          <section className="query-chat__quick-prompts" aria-label="Sugerencias rápidas de consulta">
+            <div className="query-panel-heading">Sugerencias rápidas</div>
+            <div className="query-suggestion-list">
+              {quickQuerySuggestions.map(suggestion => (
+                <button
+                  key={suggestion}
+                  type="button"
+                  className="query-suggestion-pill"
+                  onClick={() => {
+                    setQuery(suggestion);
+                    composerInputRef.current?.focus();
+                  }}
+                  disabled={loading || loadingCollections}
+                >
+                  {suggestion}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {error ? (
+            <div className="query-alert" role="alert">
+              <p>{error}</p>
+            </div>
+          ) : null}
+
+          <div className="query-chat__thread" ref={threadViewportRef}>
+            {loadingContext ? <p className="query-panel-note">Cargando contexto de colección...</p> : null}
+            <ConversationThread
+              turns={visibleTurns}
+              activeTurnId={activeTurnId}
+              hydratingTurnId={hydratingTurnId}
+              pendingTurnId={pendingTurnId}
+              onSelectTurn={(turnId: string) => {
+                const selected = visibleTurns.find(turn => turn.id === turnId);
+                if (!selected) return;
+                void hydrateTurn(selected);
+              }}
+            />
           </div>
 
-          {loadingContext ? <p className="query-panel-note">Cargando contexto de colección...</p> : null}
+          <form ref={composerFormRef} onSubmit={handleSubmit} className="query-chat__composer">
+            <textarea
+              ref={composerInputRef}
+              value={query}
+              onChange={(event: ChangeEvent<HTMLTextAreaElement>) => setQuery(event.target.value)}
+              onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault();
+                  if (canSubmit) {
+                    composerFormRef.current?.requestSubmit();
+                  }
+                }
+              }}
+              rows={2}
+              maxLength={1200}
+              placeholder="Escribe tu pregunta. Enter envia, Shift+Enter nueva linea."
+              className="query-textarea query-textarea--chat"
+              aria-label="Caja de mensaje"
+            />
 
-          <ConversationThread
-            turns={turns}
-            activeTurnId={activeTurnId}
-            hydratingTurnId={hydratingTurnId}
-            onSelectTurn={(turnId: string) => {
-              const selected = turns.find(turn => turn.id === turnId);
-              if (!selected) return;
-              void hydrateTurn(selected);
-            }}
-          />
+            <div className="query-chat__composer-footer">
+              <button className="btn btn-primary" type="submit" disabled={!canSubmit}>
+                {loading ? (action === 'search' ? 'Buscando...' : 'Generando...') : action === 'search' ? 'Buscar evidencia' : 'Enviar'}
+              </button>
+            </div>
+          </form>
         </section>
 
-        <aside className={`query-context card${contextMobileOpen ? ' query-context--open' : ''}`}>
-          <div className="card__header">
-            <div>
-              <div className="card__title">Contexto activo</div>
-              <p className="query-panel-note">Estado del turno, evidencia, fuentes y exportación.</p>
+        <aside className={`query-side-rail${contextMobileOpen ? ' query-side-rail--open' : ''}`}>
+          <section className="query-side-card card" aria-label="Panel de citas y fragmentos">
+            <div className="card__header">
+              <div>
+                <div className="card__title">Citas y fragmentos</div>
+                <p className="query-panel-note">Evidencia que fundamenta el turno seleccionado.</p>
+              </div>
+              <span className="badge badge--accent">{activeCitations.length}</span>
             </div>
-            <span className="badge badge--info">{activeTurn?.kind === 'answer' ? 'respuesta' : 'búsqueda'}</span>
-          </div>
 
-          {activeTurn ? (
-            <>
-              <section className="query-context__block query-active-turn">
-                <div className="query-panel-heading">Turno activo</div>
-                <p className="query-turn__query">{activeTurn.query}</p>
-                <div className="query-turn__stats">
-                  <span className="query-chip">{activeTurn.routeMode}</span>
-                  <span className="query-chip">{activeTurn.intent}</span>
-                  <span className="query-chip">{activeTurn.language}</span>
+            {!activeTurn ? (
+              <p className="query-panel-note">
+                {pendingQuery
+                  ? `Procesando la consulta actual: "${pendingQuery}". Aquí aparecerán citas y fragmentos en cuanto termine.`
+                  : 'Selecciona un turno para revisar citas y fragmentos.'}
+              </p>
+            ) : (
+              <>
+                <div className="query-context__block">
+                  <div className="query-panel-heading">Citas exactas</div>
+                  {activeCitations.length === 0 ? (
+                    <p className="query-panel-note">Este turno no devolvió citas explícitas.</p>
+                  ) : (
+                    <div className="query-citation-list">
+                      {activeCitations.slice(0, 6).map(citation => (
+                        <article key={citation.id} className="query-citation">
+                          <div className="query-citation__top">
+                            <span className="badge badge--accent">
+                              {citation.page_number !== null && citation.page_number !== undefined ? `Página ${citation.page_number}` : 'Cita'}
+                            </span>
+                            <span className="query-citation__meta">{citation.document_id}</span>
+                          </div>
+                          <p className="query-citation__snippet">{citation.snippet}</p>
+                          <div className="query-citation__footer">
+                            {citation.node_id ? <span className="query-chip">Nodo {citation.node_id}</span> : null}
+                            {citation.char_start !== null && citation.char_start !== undefined && citation.char_end !== null && citation.char_end !== undefined ? (
+                              <span className="query-chip">chars {citation.char_start}–{citation.char_end}</span>
+                            ) : null}
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              </section>
 
-              {activeAnswer ? (
-                <>
-                  <AnswerPanel answer={activeAnswer} />
-                  <section className="query-context__block">
-                    <div className="query-panel-heading">Evidencia prioritaria</div>
-                    {activeAnswer.evidence.length === 0 ? (
-                      <p className="query-panel-note">No hay evidencia recuperada para este turno.</p>
-                    ) : (
-                      <div className="query-turn__evidence-list">
-                        {activeAnswer.evidence.slice(0, 5).map(hit => <EvidenceCard key={hit.id} evidence={hit} />)}
-                      </div>
-                    )}
+                <div className="query-context__block">
+                  <div className="query-panel-heading">Fragmentos recuperados</div>
+                  {activeEvidence.length === 0 ? (
+                    <p className="query-panel-note">No hay fragmentos para este turno.</p>
+                  ) : (
+                    <div className="query-turn__evidence-list">
+                      {activeEvidence.slice(0, 5).map(hit => <EvidenceCard key={hit.id} evidence={hit} />)}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </section>
+
+          <section className="query-side-card card" aria-label="Panel técnico de contexto">
+            <div className="card__header">
+              <div>
+                <div className="card__title">Detalles técnicos</div>
+                <p className="query-panel-note">Contexto, etiquetas, métricas y accesos rápidos de sesión.</p>
+              </div>
+              <span className="badge badge--info">{activeTurn?.kind === 'answer' ? 'respuesta' : 'búsqueda'}</span>
+            </div>
+
+            {activeTurn ? (
+              <>
+                <section className="query-context__block query-active-turn">
+                  <div className="query-panel-heading">Turno activo</div>
+                  <p className="query-turn__query">{activeTurn.query}</p>
+                  <div className="query-turn__stats">
+                    {technicalTags.map(tag => <span key={tag} className="query-chip">{tag}</span>)}
+                  </div>
+                </section>
+
+                <section className="query-context__block">
+                  <div className="query-panel-heading">Métricas</div>
+                  <div className="query-answer__grid">
+                    <div className="query-answer__metric">
+                      <div className="query-answer__label">Grounding</div>
+                      <div className="query-answer__value">{activeTurn.groundingScore?.toFixed(3) ?? '—'}</div>
+                    </div>
+                    <div className="query-answer__metric">
+                      <div className="query-answer__label">Citas</div>
+                      <div className="query-answer__value">{activeTurn.citationsCount ?? 0}</div>
+                    </div>
+                    <div className="query-answer__metric">
+                      <div className="query-answer__label">Evidencias</div>
+                      <div className="query-answer__value">{activeEvidence.length}</div>
+                    </div>
+                    <div className="query-answer__metric">
+                      <div className="query-answer__label">Documentos</div>
+                      <div className="query-answer__value">{collectionDocuments.length}</div>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="query-context__block">
+                  <div className="query-panel-heading">Contexto usado</div>
+                  <p className="query-panel-note">{activeContextSummary}</p>
+                </section>
+
+                {activeTurn.kind === 'answer' ? (
+                  <section className="query-context__block query-answer">
+                    <div className="query-panel-heading">Respuesta completa</div>
+                    <p className="query-answer__body">
+                      {normalizeAssistantText(activeAnswer?.answer ?? activeTurn.answer ?? '', activeTurn.language) || 'Sin respuesta textual disponible para este turno.'}
+                    </p>
                   </section>
+                ) : null}
 
-                  <PageViewer evidence={activeAnswer.evidence} />
-                  <CitationSidebar citations={activeAnswer.citations} />
+                {qualityAlerts.length > 0 ? (
+                  <section className="query-context__block">
+                    <div className="query-panel-heading">Alertas de calidad</div>
+                    <ul className="query-alert-list">
+                      {qualityAlerts.map(alert => <li key={alert}>{alert}</li>)}
+                    </ul>
+                  </section>
+                ) : null}
 
-                  <div className="query-entity-card query-export">
-                    <div className="query-panel-heading">Exportar respuesta</div>
+                {activeAnswer ? (
+                  <section className="query-context__block">
+                    <div className="query-panel-heading">Exportación</div>
                     <div className="query-export__actions">
                       <a className="btn btn-primary" href={api.exportAnswerMarkdown(activeAnswer.answer_id)} target="_blank" rel="noreferrer">Markdown</a>
                       <a className="btn btn-secondary" href={api.exportAnswerPdf(activeAnswer.answer_id)} target="_blank" rel="noreferrer">PDF</a>
                     </div>
-                  </div>
-                </>
-              ) : (
+                  </section>
+                ) : null}
+
                 <section className="query-context__block">
-                  <div className="query-panel-heading">Resultados de memoria</div>
-                  {activeSearchHits.length === 0 ? (
-                    <p className="query-panel-note">No hay evidencias detalladas para este turno.</p>
-                  ) : (
-                    <div className="query-turn__evidence-list">
-                      {activeSearchHits.slice(0, 6).map(hit => <EvidenceCard key={hit.id} evidence={hit} />)}
-                    </div>
-                  )}
+                  <div className="query-panel-heading">Memoria reciente</div>
+                  <div className="query-rail__list">
+                    {recentMemory.length === 0 ? (
+                      <p className="query-panel-note">No hay consultas previas para esta colección.</p>
+                    ) : (
+                      recentMemory.map(item => (
+                        <button
+                          key={item.query_id}
+                          type="button"
+                          className="query-rail__item query-rail__item--button"
+                          onClick={() => setQuery(item.query)}
+                        >
+                          <div className="query-rail__item-title">{item.query}</div>
+                          <div className="query-rail__item-meta">{formatRelativeDate(item.created_at)} · {item.route_mode}</div>
+                        </button>
+                      ))
+                    )}
+                  </div>
                 </section>
-              )}
 
-              <section className="query-context__block">
-                <div className="query-panel-heading">Memoria reciente</div>
-                <div className="query-rail__list">
-                  {recentMemory.length === 0 ? (
-                    <p className="query-panel-note">No hay consultas previas para reutilizar contexto.</p>
-                  ) : (
-                    recentMemory.map(item => (
-                      <button
-                        key={item.query_id}
-                        type="button"
-                        className="query-rail__item query-rail__item--button"
-                        onClick={() => setQuery(item.query)}
-                      >
-                        <div className="query-rail__item-title">{item.query}</div>
-                        <div className="query-rail__item-meta">{formatRelativeDate(item.created_at)} · {item.route_mode}</div>
-                      </button>
-                    ))
-                  )}
-                </div>
-              </section>
-
-              <section className="query-context__block">
-                <div className="query-panel-heading">Documentos en contexto</div>
-                <p className="query-panel-note">Mostrando {visibleDocuments.length} de {collectionDocuments.length} documentos.</p>
-                <div className="query-rail__list">
-                  {visibleDocuments.length === 0 ? (
-                    <p className="query-panel-note">No hay documentos disponibles en esta colección.</p>
-                  ) : (
-                    visibleDocuments.map(document => {
-                      const pipeline = getDocumentPipeline(document.status);
-                      const collectionPath = normalizeCollectionPath(document.collection_path || document.title);
-                      return (
-                        <article key={document.id} className="query-rail__item">
-                          <div className="query-rail__item-top">
-                            <div className="query-rail__item-title" title={getCollectionDisplayTitle(document)}>{getCollectionDisplayTitle(document)}</div>
-                            <span className={`badge badge--${pipeline.tone}`}>{pipeline.label}</span>
-                          </div>
-                          <div className="query-rail__item-meta" title={(collectionPath || document.source_path) ?? undefined}>{collectionPath || document.source_path || 'Ruta no disponible'}</div>
-                        </article>
-                      );
-                    })
-                  )}
-                </div>
-              </section>
-            </>
-          ) : (
-            <div className="query-empty-state" role="status" aria-live="polite">
-              <div className="query-empty-state__icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none">
-                  <path d="m21 21-4.4-4.4M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </div>
-              <h3 className="query-empty-state__title">Selecciona un turno</h3>
-              <p>Cuando actives un turno, aquí verás la evidencia, citas y exportación.</p>
-            </div>
-          )}
+                <section className="query-context__block">
+                  <div className="query-panel-heading">Documentos en contexto</div>
+                  <p className="query-panel-note">Mostrando {visibleDocuments.length} de {collectionDocuments.length} documentos.</p>
+                  <div className="query-rail__list">
+                    {visibleDocuments.length === 0 ? (
+                      <p className="query-panel-note">No hay documentos disponibles en esta colección.</p>
+                    ) : (
+                      visibleDocuments.map(document => {
+                        const pipeline = getDocumentPipeline(document.status);
+                        const collectionPath = normalizeCollectionPath(document.collection_path || document.title);
+                        return (
+                          <article key={document.id} className="query-rail__item">
+                            <div className="query-rail__item-top">
+                              <div className="query-rail__item-title" title={getCollectionDisplayTitle(document)}>{getCollectionDisplayTitle(document)}</div>
+                              <span className={`badge badge--${pipeline.tone}`}>{pipeline.label}</span>
+                            </div>
+                            <div className="query-rail__item-meta" title={(collectionPath || document.source_path) ?? undefined}>{collectionPath || document.source_path || 'Ruta no disponible'}</div>
+                          </article>
+                        );
+                      })
+                    )}
+                  </div>
+                </section>
+              </>
+            ) : (
+              <p className="query-panel-note">
+                {pendingQuery
+                  ? `Consulta en curso: "${pendingQuery}". Los detalles técnicos se actualizarán automáticamente.`
+                  : 'Inicia una conversación para ver detalles técnicos.'}
+              </p>
+            )}
+          </section>
         </aside>
       </div>
     </div>
@@ -2474,26 +2753,29 @@ export function JobsPage() {
   const [selectedJobId, setSelectedJobId] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const selectedJobIdRef = useRef('');
 
-  const refreshJobs = async () => {
+  useEffect(() => {
+    selectedJobIdRef.current = selectedJobId;
+  }, [selectedJobId]);
+
+  const refreshJobs = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
       const items = await api.listJobs();
       setJobs(items);
-      if (!selectedJobId && items[0]) {
-        setSelectedJobId(items[0].id);
-      }
+      setSelectedJobId(current => current || selectedJobIdRef.current || items[0]?.id || '');
     } catch (jobError) {
       setError(jobError instanceof Error ? jobError.message : 'No se pudieron cargar las tareas.');
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     void refreshJobs();
-  }, []);
+  }, [refreshJobs]);
 
   useEffect(() => {
     if (selectedJobId || jobs.length === 0) return;
@@ -2650,21 +2932,37 @@ export function ObservabilityPage() {
   const [evidenceLoading, setEvidenceLoading] = useState(false);
   const [evidenceError, setEvidenceError] = useState('');
   const [message, setMessage] = useState('');
+  const auditFiltersRef = useRef({
+    entityType: '',
+    entityId: '',
+    runId: '',
+    limit: '40',
+  });
 
   const selectedAudit = auditEntries.find(entry => entry.id === selectedAuditId) ?? auditEntries[0] ?? null;
 
-  const refreshAudit = async () => {
+  useEffect(() => {
+    auditFiltersRef.current = {
+      entityType,
+      entityId,
+      runId,
+      limit,
+    };
+  }, [entityType, entityId, runId, limit]);
+
+  const refreshAudit = useCallback(async () => {
     setAuditLoading(true);
     setAuditError('');
     try {
-      const nextLimit = Math.max(1, Math.min(100, Number(limit) || 40));
+      const currentFilters = auditFiltersRef.current;
+      const nextLimit = Math.max(1, Math.min(100, Number(currentFilters.limit) || 40));
       const nextParams: { entityType?: string; entityId?: string; runId?: string; limit?: number } = { limit: nextLimit };
 
-      if (runId.trim()) {
-        nextParams.runId = runId.trim();
-      } else if (entityType.trim() && entityType !== 'all' && entityId.trim()) {
-        nextParams.entityType = entityType.trim();
-        nextParams.entityId = entityId.trim();
+      if (currentFilters.runId.trim()) {
+        nextParams.runId = currentFilters.runId.trim();
+      } else if (currentFilters.entityType.trim() && currentFilters.entityType !== 'all' && currentFilters.entityId.trim()) {
+        nextParams.entityType = currentFilters.entityType.trim();
+        nextParams.entityId = currentFilters.entityId.trim();
       }
 
       const items = await api.listPipelineAudit(nextParams);
@@ -2677,11 +2975,11 @@ export function ObservabilityPage() {
     } finally {
       setAuditLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     void refreshAudit();
-  }, []);
+  }, [refreshAudit]);
 
   useEffect(() => {
     if (!selectedAudit) {
@@ -2774,6 +3072,12 @@ export function ObservabilityPage() {
             className="btn"
             type="button"
             onClick={() => {
+              auditFiltersRef.current = {
+                entityType: '',
+                entityId: '',
+                runId: '',
+                limit: '40',
+              };
               setEntityType('');
               setEntityId('');
               setRunId('');

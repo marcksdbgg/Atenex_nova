@@ -27,3 +27,15 @@ class TestQueryRoutingPolicy:
         features = self.policy.extract_features("Why does this document contradict the earlier claim?")
         assert self.policy.choose_mode(features) == QueryMode.ARGUMENTATIVE
         assert self.policy.classify_intent(features) == QueryIntent.ARGUMENTATIVE
+
+    def test_detect_language_spanish_question(self) -> None:
+        features = self.policy.extract_features(
+            "Explica la neotenia literaria en 3 ideas y agrega 3 citas con referencia."
+        )
+        assert features.language == "es"
+
+    def test_detect_language_english_question(self) -> None:
+        features = self.policy.extract_features(
+            "Explain literary neoteny in three concise points and cite the source documents."
+        )
+        assert features.language == "en"

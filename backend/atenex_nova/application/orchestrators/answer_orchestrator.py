@@ -14,7 +14,7 @@ from atenex_nova.domain.entities.evidence_item import EvidenceItem
 from atenex_nova.domain.value_objects.identifiers import AnswerVerdict, new_id
 from atenex_nova.infrastructure.llm.llm_gateway import LlamaCppAdapter, LLMGateway, OllamaAdapter
 from atenex_nova.shared.config.settings import get_settings
-from atenex_nova.shared.exceptions.base import StrictModeViolationError
+from atenex_nova.shared.exceptions.base import ServiceUnavailableError, StrictModeViolationError
 
 TOKEN_RE = re.compile(r"[\w\-]+", re.UNICODE)
 PROMPT_FILES = {
@@ -63,9 +63,15 @@ class AnswerOrchestrator:
     async def compose(self, search_result: SearchResult, generation_profile: str = "standard") -> AnswerBundle:
         plan_type = self._planner.choose_plan(search_result.evidence_pack)
         prompt = self._build_prompt(search_result, plan_type, generation_profile)
-        draft_text = await self._generate(prompt, plan_type, search_result)
+        draft_text = await self._generate(prompt, plan_type)
         citations = self._bind_citations(search_result.evidence_pack.items, draft_text)
-        answer_text = self._finalize_text(draft_text, citations, search_result.evidence_pack.route_mode, plan_type)
+        answer_text = self._finalize_text(
+            draft_text,
+            citations,
+            search_result.evidence_pack.route_mode,
+            plan_type,
+            search_result.query.language,
+        )
         verification = self._verify(answer_text, search_result.evidence_pack.items, search_result.evidence_pack.contradictions, plan_type, citations)
         self._enforce_strict_answer(answer_text, citations, verification)
         answer = Answer(
@@ -93,7 +99,7 @@ class AnswerOrchestrator:
             verification=verification,
         )
 
-    async def _generate(self, prompt: str, plan_type: str, search_result: SearchResult) -> str:
+    async def _generate(self, prompt: str, plan_type: str) -> str:
         max_tokens = 1024 if plan_type in {"direct_answer", "visual_grounded_synthesis"} else 1536
         temperature = 0.15 if plan_type == "direct_answer" else 0.25
         text = await self._generator.generate(
@@ -104,12 +110,10 @@ class AnswerOrchestrator:
         )
         if text.strip():
             return text.strip()
-        if self._settings.llm_required or self._settings.strict_mode_enabled:
-            raise StrictModeViolationError(
-                message="LLM returned empty draft text in strict mode",
-                code="EMPTY_LLM_OUTPUT",
-            )
-        return self._fallback_answer(search_result, plan_type)
+        raise ServiceUnavailableError(
+            service="llm",
+            message="LLM returned empty draft text; non-LLM fallback answers are disabled",
+        )
 
     def _build_prompt(self, search_result: SearchResult, plan_type: str, generation_profile: str) -> str:
         template = self._load_prompt(plan_type)
@@ -156,40 +160,22 @@ class AnswerOrchestrator:
             )
         return "\n".join(lines) if lines else "[No evidence items available]"
 
-    def _fallback_answer(self, search_result: SearchResult, plan_type: str) -> str:
-        items = search_result.evidence_pack.items[:5]
-        if not items:
-            return "I could not find grounded evidence for this query."
-        if plan_type == "global_synthesis":
-            summary = "; ".join(item.snippet for item in items[:3])
-            return f"Corpus-level synthesis: {summary}."
-        if plan_type == "argument_synthesis":
-            supports = [item.snippet for item in items if item.source_type != "summary"]
-            contradictions = [item.snippet for item in search_result.evidence_pack.contradictions]
-            text = f"The evidence supports: {'; '.join(supports[:3])}."
-            if contradictions:
-                text += f" Conflicting signals: {'; '.join(contradictions[:2])}."
-            return text
-        if plan_type == "visual_grounded_synthesis":
-            visual = [item for item in items if item.page_number is not None]
-            selected = visual or items
-            parts = []
-            for idx, item in enumerate(selected[:3], start=1):
-                page = f"page {item.page_number}" if item.page_number is not None else "visual evidence"
-                parts.append(f"{page}: {item.snippet} [{idx}]")
-            return "Visual grounding: " + " ".join(parts)
-        if plan_type == "hierarchical_synthesis":
-            grouped: dict[str, list[str]] = {}
-            for item in items:
-                grouped.setdefault(item.document_id or item.source_type, []).append(item.snippet)
-            paragraphs = [f"{key}: {' '.join(values[:2])}" for key, values in grouped.items()]
-            return "Hierarchical synthesis: " + " ".join(paragraphs)
-        first = items[0]
-        additional = items[1:3]
-        answer = f"{first.snippet} [1]"
-        for idx, item in enumerate(additional, start=2):
-            answer += f" {item.snippet} [{idx}]"
-        return answer
+    @staticmethod
+    def _compact_snippet(snippet: str, max_chars: int = 220) -> str:
+        clean = " ".join(snippet.split())
+        clean = re.sub(
+            r"(?:^|[;|])\s*(?:title|video\s*id|video\s*url|channel|kind|language)\s*:\s*[^;|]+",
+            " ",
+            clean,
+            flags=re.IGNORECASE,
+        )
+        clean = re.sub(r"\s+", " ", clean).strip(" .;-")
+        if not clean:
+            return ""
+        if len(clean) <= max_chars:
+            return clean
+        shortened = clean[:max_chars].rsplit(" ", 1)[0].strip()
+        return f"{shortened}..."
 
     def _bind_citations(self, items: list[EvidenceItem], draft_text: str) -> list[Citation]:
         citations: list[Citation] = []
@@ -226,7 +212,14 @@ class AnswerOrchestrator:
                 )
         return citations
 
-    def _finalize_text(self, draft_text: str, citations: list[Citation], route_mode: str, plan_type: str) -> str:
+    def _finalize_text(
+        self,
+        draft_text: str,
+        citations: list[Citation],
+        route_mode: str,
+        plan_type: str,
+        query_language: str,
+    ) -> str:
         text = draft_text.strip()
         if not text:
             if self._settings.strict_mode_enabled:
@@ -234,7 +227,25 @@ class AnswerOrchestrator:
                     message="strict mode cannot finalize an empty answer",
                     code="EMPTY_FINAL_ANSWER",
                 )
+            if query_language.lower().startswith("es"):
+                return "No pude producir una respuesta fundamentada con la evidencia disponible."
             return "I could not produce a grounded answer."
+
+        if query_language.lower().startswith("es"):
+            text = re.sub(r"^\s*the evidence supports\s*:\s*", "Evidencia principal: ", text, flags=re.IGNORECASE)
+            text = re.sub(
+                r"^\s*i could not find grounded evidence for this query\.?\s*$",
+                "No encontré evidencia suficiente para esta consulta.",
+                text,
+                flags=re.IGNORECASE,
+            )
+            text = re.sub(
+                r"^\s*i could not produce a grounded answer\.?\s*$",
+                "No pude producir una respuesta fundamentada con la evidencia disponible.",
+                text,
+                flags=re.IGNORECASE,
+            )
+
         if plan_type == "visual_grounded_synthesis" and route_mode == "visual":
             return text
         if citations and not any(marker in text for marker in ("[1]", "[2]", "[3]")):

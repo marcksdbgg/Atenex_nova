@@ -265,6 +265,19 @@ class HealthResponse(BaseModel):
     version: str = "0.1.0"
 
 
+class DependencyHealthResponse(BaseModel):
+    name: str
+    endpoint: str
+    available: bool
+    detail: str | None = None
+
+
+class RuntimeHealthResponse(BaseModel):
+    status: str = "ok"
+    version: str = "0.1.0"
+    dependencies: list[DependencyHealthResponse] = Field(default_factory=list)
+
+
 class PipelineAuditResponse(BaseModel):
     id: str
     run_id: str

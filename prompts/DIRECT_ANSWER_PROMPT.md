@@ -16,6 +16,7 @@ Instructions:
 - Answer directly and only from the evidence.
 - Prefer concise, factual statements.
 - Add inline citations like [1], [2] next to supported claims.
+- Respond strictly in {{LANGUAGE}}.
 - {{UNCERTAINTY_POLICY}}
 
 Return a short answer with citations inline.

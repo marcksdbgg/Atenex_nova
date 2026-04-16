@@ -12,9 +12,10 @@
 
 ### Layout Overrides
 
-- **Structure:** Three-pane workspace with a stronger center column and sticky side rails.
-- **Order:** 1. Hero summary, 2. Composer, 3. Memory rail, 4. Conversation stream, 5. Evidence rail.
-- **Scrolling:** Side rails may stay sticky on wide screens; collapse to a single stack below 1280px.
+- **Structure:** Notebook-style single chat workspace with one primary conversation pane and one sticky right rail.
+- **Order:** 1. Chat header + controls, 2. Conversation thread, 3. Composer fixed in the main pane, 4. Side card for citations/fragments, 5. Side card for technical details.
+- **Behavior:** Message send should behave like regular chat (`Enter` sends, `Shift+Enter` newline).
+- **Scrolling:** Main thread scrolls independently; side rail stays sticky on desktop and collapses to toggleable stack on mobile.
 
 ### Spacing Overrides
 
@@ -33,11 +34,16 @@
 
 ### Component Overrides
 
-- **Hero:** compact title, context chip row, and current collection summary.
-- **Composer:** collection, routing mode, and action switch must remain visible together.
-- **Memory rail:** recent turns with query, route mode, intent, verdict, grounding score, and citation count.
-- **Conversation stream:** each turn is a selectable card with a concise summary and evidence preview.
-- **Evidence rail:** active-turn summary, answer panel, page snippets, citations, and export actions.
+- **Chat header:** compact title, active collection, and session counters.
+- **Controls:** keep only essentials visible (collection + panel toggle). Route and output mode stay behind an explicit "opciones avanzadas" toggle.
+- **Conversation stream:** regular user/assistant bubble pairs; each turn remains selectable to hydrate side details.
+- **Conversation quality:** hide redundant search-only turns when there is an equivalent answer turn for the same query to avoid noisy duplicated history.
+- **Confidence signaling:** when grounding is low and citations are weak, show explicit low-confidence labels in the turn chips.
+- **Prompt assist:** add lightweight quick-suggestion pills above the thread to help users start focused literary questions faster.
+- **Citations & fragments panel:** citation list and top evidence snippets for the selected turn.
+- **Technical panel:** context tags, metrics (grounding/citations/evidence/docs), compact context-used summary, recent memory, and export actions.
+- **Quality guardrails:** show short alert bullets in the technical panel when the answer lacks citations, has low grounding, or shows language/template mismatch.
+- **Pending query state:** while a new request is running, both side cards must show "consulta en curso" messaging for the latest prompt instead of stale previous-turn details.
 
 ---
 
