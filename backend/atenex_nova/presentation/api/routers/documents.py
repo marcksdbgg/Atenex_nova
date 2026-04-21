@@ -3,12 +3,17 @@
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocumentRepository
-from atenex_nova.infrastructure.db.repositories.sql_node_repo import SqlDocumentNodeRepository
-from atenex_nova.infrastructure.db.session import get_session
-from atenex_nova.presentation.api.dto.schemas import DocumentResponse, DocumentNodeResponse
+from atenex_nova.application.services.document_read_service import DocumentReadService
+from atenex_nova.dependencies import get_document_read_service
+from atenex_nova.presentation.api.dto.schemas import (
+    ChunkResponse,
+    DocumentNodeResponse,
+    DocumentPageResponse,
+    DocumentResponse,
+    PropositionResponse,
+)
+from atenex_nova.shared.exceptions.base import EntityNotFoundError
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -16,12 +21,12 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 @router.get("/{document_id}", response_model=DocumentResponse)
 async def get_document(
     document_id: str,
-    session: AsyncSession = Depends(get_session),
+    service: DocumentReadService = Depends(get_document_read_service),
 ) -> DocumentResponse:
-    repo = SqlDocumentRepository(session)
-    doc = await repo.get_by_id(document_id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
+    try:
+        doc = await service.get_document(document_id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return DocumentResponse(
         id=doc.id,
         collection_id=doc.collection_id,
@@ -41,10 +46,12 @@ async def get_document(
 @router.get("/{document_id}/nodes", response_model=list[DocumentNodeResponse])
 async def get_document_nodes(
     document_id: str,
-    session: AsyncSession = Depends(get_session),
+    service: DocumentReadService = Depends(get_document_read_service),
 ) -> list[DocumentNodeResponse]:
-    repo = SqlDocumentNodeRepository(session)
-    nodes = await repo.get_by_document(document_id)
+    try:
+        nodes = await service.get_structure(document_id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return [
         DocumentNodeResponse(
             id=n.id,
@@ -56,6 +63,75 @@ async def get_document_nodes(
             page_number=n.page_number,
             order_index=n.order_index,
             metadata_json=json.dumps(n.metadata) if n.metadata else None,
+            bbox=n.bbox,
         )
         for n in nodes
     ]
+
+
+@router.get("/{document_id}/structure", response_model=list[DocumentNodeResponse])
+async def get_document_structure(
+    document_id: str,
+    service: DocumentReadService = Depends(get_document_read_service),
+) -> list[DocumentNodeResponse]:
+    return await get_document_nodes(document_id=document_id, service=service)
+
+
+@router.get("/{document_id}/chunks", response_model=list[ChunkResponse])
+async def get_document_chunks(
+    document_id: str,
+    service: DocumentReadService = Depends(get_document_read_service),
+) -> list[ChunkResponse]:
+    try:
+        chunks = await service.get_chunks(document_id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return [
+        ChunkResponse(
+            id=chunk.id,
+            document_id=chunk.document_id,
+            text=chunk.text,
+            summary=chunk.summary,
+            token_count=chunk.token_count,
+            node_ids=chunk.node_ids,
+            embedding_ref=chunk.embedding_ref,
+            sparse_ref=chunk.sparse_ref,
+            metadata=chunk.metadata,
+        )
+        for chunk in chunks
+    ]
+
+
+@router.get("/{document_id}/propositions", response_model=list[PropositionResponse])
+async def get_document_propositions(
+    document_id: str,
+    service: DocumentReadService = Depends(get_document_read_service),
+) -> list[PropositionResponse]:
+    try:
+        propositions = await service.get_propositions(document_id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return [
+        PropositionResponse(
+            id=prop.id,
+            document_id=prop.document_id,
+            source_chunk_id=prop.source_chunk_id,
+            text=prop.text,
+            kind=prop.kind,
+            embedding_ref=prop.embedding_ref,
+        )
+        for prop in propositions
+    ]
+
+
+@router.get("/{document_id}/pages/{page_number}", response_model=DocumentPageResponse)
+async def get_document_page(
+    document_id: str,
+    page_number: int,
+    service: DocumentReadService = Depends(get_document_read_service),
+) -> DocumentPageResponse:
+    try:
+        page = await service.get_page(document_id, page_number)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return DocumentPageResponse(**page)

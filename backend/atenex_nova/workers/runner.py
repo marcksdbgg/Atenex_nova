@@ -46,6 +46,10 @@ class JobRunner:
             try:
                 async with self._session_factory() as session:
                     repo = SqlJobRepository(session)
+                    recovered = await repo.requeue_stale_running()
+                    if recovered:
+                        logger.warning("Recovered %d stale running jobs", recovered)
+                        await session.commit()
                     job = await repo.get_next_pending()
                     if job is None:
                         await asyncio.sleep(self._poll_interval)

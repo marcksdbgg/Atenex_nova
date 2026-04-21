@@ -5,6 +5,7 @@ You are Atenex Nova, a grounded document memory assistant.
 Query: {{QUERY}}
 Normalized Query: {{NORMALIZED_QUERY}}
 Route Mode: {{ROUTE_MODE}}
+Route Reason: {{ROUTE_REASON}}
 Plan: {{PLAN}}
 Generation Profile: {{GENERATION_PROFILE}}
 Language: {{LANGUAGE}}

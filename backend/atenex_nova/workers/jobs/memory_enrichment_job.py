@@ -184,8 +184,10 @@ class EmbedPropositionsJobHandler(BaseJobHandler):
                                     "document_id": prop.document_id,
                                     "collection_id": document.collection_id,
                                     "proposition_id": prop.id,
+                                    "title": document.title,
                                     "text": prop.text,
                                     "kind": prop.kind,
+                                    "source_chunk_id": prop.source_chunk_id,
                                 },
                             )
                             for prop, vector in zip(propositions, vectors, strict=False)
@@ -335,6 +337,7 @@ class EmbedSummariesJobHandler(BaseJobHandler):
                                     "scope_type": summary.scope_type,
                                     "scope_id": summary.scope_id,
                                     "collection_id": document.collection_id,
+                                    "title": document.title,
                                     "text": summary.text,
                                 },
                             )

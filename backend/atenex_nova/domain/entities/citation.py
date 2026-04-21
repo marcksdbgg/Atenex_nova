@@ -16,4 +16,7 @@ class Citation:
     char_start: int | None = None
     char_end: int | None = None
     snippet: str = ""
+    bbox: dict[str, object] | None = None
+    heading_path: list[str] = field(default_factory=list)
+    page_asset_path: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))

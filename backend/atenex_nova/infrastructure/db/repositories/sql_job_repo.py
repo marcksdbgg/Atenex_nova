@@ -1,6 +1,7 @@
 """SQL repository: Job."""
 
 import json
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -91,6 +92,24 @@ class SqlJobRepository:
         )
         model = r.scalar_one_or_none()
         return self._to_entity(model) if model else None
+
+    async def requeue_stale_running(self, stale_after_minutes: int = 10) -> int:
+        cutoff = datetime.now(UTC) - timedelta(minutes=max(1, stale_after_minutes))
+        result = await self._session.execute(
+            select(JobModel).where(
+                JobModel.status == JobStatus.RUNNING.value,
+                JobModel.started_at.is_not(None),
+                JobModel.started_at < cutoff,
+            )
+        )
+        stale_jobs = result.scalars().all()
+        for model in stale_jobs:
+            model.status = JobStatus.PENDING.value
+            model.error = "Recovered stale running job"
+            model.started_at = None
+            model.completed_at = None
+        await self._session.flush()
+        return len(stale_jobs)
 
     async def count_by_status(self) -> dict[JobStatus, int]:
         r = await self._session.execute(

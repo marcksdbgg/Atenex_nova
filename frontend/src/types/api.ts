@@ -64,6 +64,40 @@ export interface DocumentNode {
   page_number?: number;
   order_index: number;
   metadata_json?: string;
+  bbox?: Record<string, unknown> | null;
+}
+
+export interface Chunk {
+  id: string;
+  document_id: string;
+  text: string;
+  summary: string;
+  token_count: number;
+  node_ids: string[];
+  embedding_ref?: string | null;
+  sparse_ref?: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface Proposition {
+  id: string;
+  document_id: string;
+  source_chunk_id: string;
+  text: string;
+  kind: string;
+  embedding_ref?: string | null;
+}
+
+export interface DocumentPage {
+  id: string;
+  document_id: string;
+  collection_id: string;
+  page_number: number;
+  title: string;
+  text: string;
+  is_complex: boolean;
+  image_path?: string | null;
+  metadata: Record<string, unknown>;
 }
 
 export interface Job {
@@ -117,7 +151,7 @@ export interface QueryHit {
   score: number;
   rank: number;
   page_number?: number | null;
-  metadata?: Record<string, string> | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface Citation {
@@ -129,6 +163,9 @@ export interface Citation {
   char_start?: number | null;
   char_end?: number | null;
   snippet: string;
+  bbox?: Record<string, unknown> | null;
+  heading_path?: string[];
+  page_asset_path?: string | null;
 }
 
 export interface AnswerRequest {
@@ -147,10 +184,14 @@ export interface AnswerResponse {
   language: string;
   intent: string;
   route_mode: string;
+  route_reason: string;
   plan_type: string;
   answer: string;
   verdict: string;
   grounding_score: number;
+  prompt_version: string;
+  verification_issues: string[];
+  evidence_trace: Record<string, unknown>;
   citations: Citation[];
   evidence: QueryHit[];
 }
@@ -163,6 +204,7 @@ export interface QuerySearchResponse {
   language: string;
   intent: string;
   route_mode: string;
+  route_reason: string;
   total_hits: number;
   hits: QueryHit[];
 }

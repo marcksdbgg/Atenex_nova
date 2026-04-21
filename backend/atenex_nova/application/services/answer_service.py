@@ -33,6 +33,7 @@ class AnswerDetail:
     language: str
     intent: str
     route_mode: str
+    route_reason: str = ""
 
 
 class AnswerService:
@@ -96,6 +97,7 @@ class AnswerService:
                 language="auto",
                 intent="factual",
                 route_mode="factual_local",
+                route_reason="",
             )
         search_result = await self._query_service.search_only(collection_id=query.collection_id, query=query.text, mode=query.route_mode or "auto")
         return AnswerDetail(
@@ -109,6 +111,7 @@ class AnswerService:
             language=query.language,
             intent=query.intent,
             route_mode=query.route_mode,
+            route_reason=search_result.route_reason,
         )
 
     def export_markdown(self, detail: AnswerDetail) -> str:

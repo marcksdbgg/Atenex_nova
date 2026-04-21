@@ -2,17 +2,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from 'react';
 
 import { ConversationThread } from '../components/ConversationThread';
-import { normalizeAssistantText } from '../components/ChatMessage';
+import { AnswerPanel } from '../components/AnswerPanel';
+import { CitationSidebar } from '../components/CitationSidebar';
+import { normalizeAssistantText } from '../components/chatMessageText';
 import { EvidenceCard } from '../components/EvidenceCard';
+import { PageViewer } from '../components/PageViewer';
 import { api } from '../services/api';
 import type {
   AnswerResponse,
   Citation,
+  Chunk,
   Collection,
   Document,
+  DocumentNode,
+  DocumentPage,
   DocumentEvidenceResponse,
   EvaluationRunResponse,
   PipelineAuditEntry,
+  Proposition,
   QueryHit,
   QueryHistoryResponse,
   QuerySearchResponse,
@@ -2021,6 +2028,13 @@ export function QueryPage() {
   const [error, setError] = useState('');
   const [activeAnswer, setActiveAnswer] = useState<AnswerResponse | null>(null);
   const [activeSearchHits, setActiveSearchHits] = useState<QueryHit[]>([]);
+  const [inspectorDocumentId, setInspectorDocumentId] = useState('');
+  const [inspectorNodes, setInspectorNodes] = useState<DocumentNode[]>([]);
+  const [inspectorChunks, setInspectorChunks] = useState<Chunk[]>([]);
+  const [inspectorPropositions, setInspectorPropositions] = useState<Proposition[]>([]);
+  const [inspectorPage, setInspectorPage] = useState<DocumentPage | null>(null);
+  const [inspectorLoading, setInspectorLoading] = useState(false);
+  const [inspectorError, setInspectorError] = useState('');
   const answerDetailByTurnIdRef = useRef<Record<string, AnswerResponse>>({});
   const composerFormRef = useRef<HTMLFormElement | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -2220,6 +2234,67 @@ export function QueryPage() {
     () => activeAnswer?.citations ?? activeTurn?.citations ?? [],
     [activeAnswer, activeTurn],
   );
+
+  useEffect(() => {
+    const candidateIds = [
+      activeCitations.find(item => item.document_id)?.document_id ?? '',
+      activeEvidence.find(item => item.document_id)?.document_id ?? '',
+      collectionDocuments[0]?.id ?? '',
+    ].filter(Boolean);
+    const nextId = candidateIds[0] ?? '';
+    if (!nextId) {
+      setInspectorDocumentId('');
+      return;
+    }
+    setInspectorDocumentId(current => (current && candidateIds.includes(current) ? current : nextId));
+  }, [activeCitations, activeEvidence, collectionDocuments]);
+
+  useEffect(() => {
+    if (!inspectorDocumentId) {
+      setInspectorNodes([]);
+      setInspectorChunks([]);
+      setInspectorPropositions([]);
+      setInspectorPage(null);
+      setInspectorError('');
+      return;
+    }
+
+    let mounted = true;
+    const candidatePageNumber = activeCitations.find(item => item.document_id === inspectorDocumentId)?.page_number
+      ?? activeEvidence.find(item => item.document_id === inspectorDocumentId)?.page_number
+      ?? null;
+
+    setInspectorLoading(true);
+    setInspectorError('');
+
+    Promise.allSettled([
+      api.getDocumentStructure(inspectorDocumentId),
+      api.getDocumentChunks(inspectorDocumentId),
+      api.getDocumentPropositions(inspectorDocumentId),
+      candidatePageNumber ? api.getDocumentPage(inspectorDocumentId, candidatePageNumber) : Promise.resolve(null),
+    ])
+      .then(([structureResult, chunkResult, propositionResult, pageResult]) => {
+        if (!mounted) return;
+        setInspectorNodes(structureResult.status === 'fulfilled' ? structureResult.value : []);
+        setInspectorChunks(chunkResult.status === 'fulfilled' ? chunkResult.value : []);
+        setInspectorPropositions(propositionResult.status === 'fulfilled' ? propositionResult.value : []);
+        setInspectorPage(pageResult.status === 'fulfilled' ? pageResult.value : null);
+        if (
+          structureResult.status === 'rejected'
+          || chunkResult.status === 'rejected'
+          || propositionResult.status === 'rejected'
+        ) {
+          setInspectorError('No se pudo cargar por completo el inspector documental.');
+        }
+      })
+      .finally(() => {
+        if (mounted) setInspectorLoading(false);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [activeCitations, activeEvidence, inspectorDocumentId]);
 
   const technicalTags = useMemo(() => {
     if (!activeTurn) return [] as string[];
@@ -2576,29 +2651,7 @@ export function QueryPage() {
               <>
                 <div className="query-context__block">
                   <div className="query-panel-heading">Citas exactas</div>
-                  {activeCitations.length === 0 ? (
-                    <p className="query-panel-note">Este turno no devolvió citas explícitas.</p>
-                  ) : (
-                    <div className="query-citation-list">
-                      {activeCitations.slice(0, 6).map(citation => (
-                        <article key={citation.id} className="query-citation">
-                          <div className="query-citation__top">
-                            <span className="badge badge--accent">
-                              {citation.page_number !== null && citation.page_number !== undefined ? `Página ${citation.page_number}` : 'Cita'}
-                            </span>
-                            <span className="query-citation__meta">{citation.document_id}</span>
-                          </div>
-                          <p className="query-citation__snippet">{citation.snippet}</p>
-                          <div className="query-citation__footer">
-                            {citation.node_id ? <span className="query-chip">Nodo {citation.node_id}</span> : null}
-                            {citation.char_start !== null && citation.char_start !== undefined && citation.char_end !== null && citation.char_end !== undefined ? (
-                              <span className="query-chip">chars {citation.char_start}–{citation.char_end}</span>
-                            ) : null}
-                          </div>
-                        </article>
-                      ))}
-                    </div>
-                  )}
+                  <CitationSidebar citations={activeCitations} />
                 </div>
 
                 <div className="query-context__block">
@@ -2607,9 +2660,24 @@ export function QueryPage() {
                     <p className="query-panel-note">No hay fragmentos para este turno.</p>
                   ) : (
                     <div className="query-turn__evidence-list">
-                      {activeEvidence.slice(0, 5).map(hit => <EvidenceCard key={hit.id} evidence={hit} />)}
+                      {activeEvidence.slice(0, 5).map(hit => (
+                        <button
+                          key={hit.id}
+                          type="button"
+                          style={{ all: 'unset', cursor: hit.document_id ? 'pointer' : 'default' }}
+                          onClick={() => {
+                            if (hit.document_id) setInspectorDocumentId(hit.document_id);
+                          }}
+                        >
+                          <EvidenceCard evidence={hit} />
+                        </button>
+                      ))}
                     </div>
                   )}
+                </div>
+                <div className="query-context__block">
+                  <div className="query-panel-heading">Visual evidence</div>
+                  <PageViewer evidence={activeEvidence} />
                 </div>
               </>
             )}
@@ -2662,12 +2730,19 @@ export function QueryPage() {
                 </section>
 
                 {activeTurn.kind === 'answer' ? (
-                  <section className="query-context__block query-answer">
-                    <div className="query-panel-heading">Respuesta completa</div>
-                    <p className="query-answer__body">
-                      {normalizeAssistantText(activeAnswer?.answer ?? activeTurn.answer ?? '', activeTurn.language) || 'Sin respuesta textual disponible para este turno.'}
-                    </p>
-                  </section>
+                  <>
+                    {activeAnswer ? (
+                      <section className="query-context__block query-answer">
+                        <AnswerPanel answer={activeAnswer} />
+                      </section>
+                    ) : null}
+                    <section className="query-context__block query-answer">
+                      <div className="query-panel-heading">Respuesta completa</div>
+                      <p className="query-answer__body">
+                        {normalizeAssistantText(activeAnswer?.answer ?? activeTurn.answer ?? '', activeTurn.language) || 'Sin respuesta textual disponible para este turno.'}
+                      </p>
+                    </section>
+                  </>
                 ) : null}
 
                 {qualityAlerts.length > 0 ? (
@@ -2686,6 +2761,11 @@ export function QueryPage() {
                       <a className="btn btn-primary" href={api.exportAnswerMarkdown(activeAnswer.answer_id)} target="_blank" rel="noreferrer">Markdown</a>
                       <a className="btn btn-secondary" href={api.exportAnswerPdf(activeAnswer.answer_id)} target="_blank" rel="noreferrer">PDF</a>
                     </div>
+                    {Object.keys(activeAnswer.evidence_trace ?? {}).length > 0 ? (
+                      <pre style={{ marginTop: 'var(--space-3)', whiteSpace: 'pre-wrap', background: 'rgba(255,255,255,0.03)', borderRadius: 'var(--radius-md)', padding: 'var(--space-3)', color: 'var(--color-text-secondary)', fontSize: 'var(--font-xs)', lineHeight: 'var(--line-height-relaxed)' }}>
+                        {JSON.stringify(activeAnswer.evidence_trace, null, 2)}
+                      </pre>
+                    ) : null}
                   </section>
                 ) : null}
 
@@ -2721,7 +2801,23 @@ export function QueryPage() {
                         const pipeline = getDocumentPipeline(document.status);
                         const collectionPath = normalizeCollectionPath(document.collection_path || document.title);
                         return (
-                          <article key={document.id} className="query-rail__item">
+                          <article
+                            key={document.id}
+                            className="query-rail__item"
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => setInspectorDocumentId(document.id)}
+                            onKeyDown={event => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                setInspectorDocumentId(document.id);
+                              }
+                            }}
+                            style={{
+                              cursor: 'pointer',
+                              borderColor: inspectorDocumentId === document.id ? 'rgba(99,102,241,0.55)' : undefined,
+                            }}
+                          >
                             <div className="query-rail__item-top">
                               <div className="query-rail__item-title" title={getCollectionDisplayTitle(document)}>{getCollectionDisplayTitle(document)}</div>
                               <span className={`badge badge--${pipeline.tone}`}>{pipeline.label}</span>
@@ -2732,6 +2828,46 @@ export function QueryPage() {
                       })
                     )}
                   </div>
+                </section>
+                <section className="query-context__block">
+                  <div className="query-panel-heading">Inspector documental</div>
+                  {!inspectorDocumentId ? (
+                    <p className="query-panel-note">Selecciona un documento del corpus o de la evidencia para inspeccionarlo.</p>
+                  ) : inspectorLoading ? (
+                    <p className="query-panel-note">Cargando estructura, chunks y proposiciones...</p>
+                  ) : (
+                    <div style={{ display: 'grid', gap: 'var(--space-3)' }}>
+                      <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                        <span className="query-chip">Documento {inspectorDocumentId}</span>
+                        <span className="query-chip">Nodos {inspectorNodes.length}</span>
+                        <span className="query-chip">Chunks {inspectorChunks.length}</span>
+                        <span className="query-chip">Proposiciones {inspectorPropositions.length}</span>
+                        {inspectorPage ? <span className="query-chip">Pagina {inspectorPage.page_number}</span> : null}
+                      </div>
+                      {inspectorError ? <p className="query-panel-note" style={{ color: 'var(--color-error)' }}>{inspectorError}</p> : null}
+                      {inspectorPage ? (
+                        <div className="card" style={{ background: 'rgba(10,14,23,0.96)', borderColor: 'var(--color-border)' }}>
+                          <div className="card__title">{inspectorPage.title}</div>
+                          <p className="query-panel-note" style={{ marginTop: 'var(--space-2)' }}>{inspectorPage.text}</p>
+                          {inspectorPage.image_path ? (
+                            <a href={inspectorPage.image_path} target="_blank" rel="noreferrer">Abrir pagina visual</a>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      <div className="card" style={{ background: 'rgba(10,14,23,0.96)', borderColor: 'var(--color-border)' }}>
+                        <div className="card__title">Estructura</div>
+                        <pre style={{ marginTop: 'var(--space-3)', whiteSpace: 'pre-wrap', fontSize: 'var(--font-xs)', color: 'var(--color-text-secondary)' }}>
+                          {JSON.stringify(inspectorNodes.slice(0, 6), null, 2)}
+                        </pre>
+                      </div>
+                      <div className="card" style={{ background: 'rgba(10,14,23,0.96)', borderColor: 'var(--color-border)' }}>
+                        <div className="card__title">Chunks y proposiciones</div>
+                        <pre style={{ marginTop: 'var(--space-3)', whiteSpace: 'pre-wrap', fontSize: 'var(--font-xs)', color: 'var(--color-text-secondary)' }}>
+                          {JSON.stringify({ chunks: inspectorChunks.slice(0, 4), propositions: inspectorPropositions.slice(0, 4) }, null, 2)}
+                        </pre>
+                      </div>
+                    </div>
+                  )}
                 </section>
               </>
             ) : (

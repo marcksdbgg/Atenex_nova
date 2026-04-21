@@ -76,6 +76,40 @@ class DocumentNodeResponse(BaseModel):
     page_number: int | None = None
     order_index: int
     metadata_json: str | None = None
+    bbox: dict[str, object] | None = None
+
+
+class ChunkResponse(BaseModel):
+    id: str
+    document_id: str
+    text: str
+    summary: str
+    token_count: int
+    node_ids: list[str] = Field(default_factory=list)
+    embedding_ref: str | None = None
+    sparse_ref: str | None = None
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class PropositionResponse(BaseModel):
+    id: str
+    document_id: str
+    source_chunk_id: str
+    text: str
+    kind: str
+    embedding_ref: str | None = None
+
+
+class DocumentPageResponse(BaseModel):
+    id: str
+    document_id: str
+    collection_id: str
+    page_number: int
+    title: str
+    text: str
+    is_complex: bool = False
+    image_path: str | None = None
+    metadata: dict[str, object] = Field(default_factory=dict)
 
 # --- Job ---
 class JobResponse(BaseModel):
@@ -114,7 +148,7 @@ class QueryHitResponse(BaseModel):
     score: float
     rank: int
     page_number: int | None = None
-    metadata: dict[str, str] | None = None
+    metadata: dict[str, object] | None = None
 
 
 class QuerySearchResponse(BaseModel):
@@ -125,6 +159,7 @@ class QuerySearchResponse(BaseModel):
     language: str
     intent: str
     route_mode: str
+    route_reason: str = ""
     total_hits: int
     hits: list[QueryHitResponse]
 
@@ -153,6 +188,9 @@ class CitationResponse(BaseModel):
     char_start: int | None = None
     char_end: int | None = None
     snippet: str
+    bbox: dict[str, object] | None = None
+    heading_path: list[str] = Field(default_factory=list)
+    page_asset_path: str | None = None
 
 
 class AnswerResponse(BaseModel):
@@ -164,10 +202,14 @@ class AnswerResponse(BaseModel):
     language: str
     intent: str
     route_mode: str
+    route_reason: str = ""
     plan_type: str
     answer: str
     verdict: str
     grounding_score: float
+    prompt_version: str = "v1"
+    verification_issues: list[str] = Field(default_factory=list)
+    evidence_trace: dict[str, object] = Field(default_factory=dict)
     citations: list[CitationResponse]
     evidence: list[QueryHitResponse]
 

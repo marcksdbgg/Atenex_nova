@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from atenex_nova.application.services.collection_service import CollectionService
 from atenex_nova.application.services.answer_service import AnswerService
 from atenex_nova.application.services.evaluation_service import EvaluationService
+from atenex_nova.application.services.document_read_service import DocumentReadService
 from atenex_nova.application.services.document_service import DocumentService
 from atenex_nova.application.services.job_service import JobService
 from atenex_nova.application.services.query_service import QueryService
@@ -35,6 +36,12 @@ async def get_document_service(
         doc_repo=SqlDocumentRepository(session),
         job_repo=SqlJobRepository(session),
     )
+
+
+async def get_document_read_service(
+    session: AsyncSession = Depends(get_session),
+) -> DocumentReadService:
+    return DocumentReadService(session)
 
 
 async def get_job_service(

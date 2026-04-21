@@ -16,8 +16,8 @@ class DocumentNode:
     parent_id: str | None = None
     page_number: int | None = None
     order_index: int = 0
-    bbox: dict | None = None
-    metadata: dict = field(default_factory=dict)
+    bbox: dict[str, object] | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {

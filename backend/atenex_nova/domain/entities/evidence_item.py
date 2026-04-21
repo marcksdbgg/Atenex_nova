@@ -19,5 +19,5 @@ class EvidenceItem:
     title: str = ""
     snippet: str = ""
     citation_candidate: bool = True
-    metadata: dict[str, str] = field(default_factory=dict)
+    metadata: dict[str, object] = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))

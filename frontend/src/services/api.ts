@@ -2,10 +2,12 @@
 import type {
   AnswerRequest,
   AnswerResponse,
+  Chunk,
   CollectionRebuildResponse,
   Collection,
   CreateCollectionRequest,
   Document,
+  DocumentPage,
   DocumentNode,
   DocumentEvidenceResponse,
   EvaluationRunRequest,
@@ -14,6 +16,7 @@ import type {
   ImportLocalFolderResponse,
   Job,
   PipelineAuditEntry,
+  Proposition,
   QueryHistoryResponse,
   QuerySearchRequest,
   QuerySearchResponse,
@@ -215,6 +218,11 @@ class ApiClient {
     );
   getDocument = (id: string) => this.request<Document>(`/documents/${id}`);
   getDocumentNodes = (id: string) => this.request<DocumentNode[]>(`/documents/${id}/nodes`);
+  getDocumentStructure = (id: string) => this.request<DocumentNode[]>(`/documents/${id}/structure`);
+  getDocumentChunks = (id: string) => this.request<Chunk[]>(`/documents/${id}/chunks`);
+  getDocumentPropositions = (id: string) => this.request<Proposition[]>(`/documents/${id}/propositions`);
+  getDocumentPage = (id: string, pageNumber: number) =>
+    this.request<DocumentPage>(`/documents/${id}/pages/${pageNumber}`);
 
   /* Jobs */
   listJobs = () => this.request<Job[]>('/jobs');

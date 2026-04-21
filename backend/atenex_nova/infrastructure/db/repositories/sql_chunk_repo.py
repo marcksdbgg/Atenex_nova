@@ -24,6 +24,7 @@ class SqlChunkRepository:
             node_ids=json.loads(model.node_ids_json),
             embedding_ref=model.embedding_ref,
             sparse_ref=model.sparse_ref,
+            metadata=json.loads(model.metadata_json) if model.metadata_json else {},
         )
 
     async def create(self, chunk: Chunk) -> None:

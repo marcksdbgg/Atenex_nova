@@ -1,5 +1,6 @@
 """Chunk entity."""
 
+import json
 from dataclasses import dataclass, field
 
 
@@ -14,9 +15,9 @@ class Chunk:
     node_ids: list[str] = field(default_factory=list)
     embedding_ref: str | None = None
     sparse_ref: str | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        import json
         return {
             "id": self.id,
             "document_id": self.document_id,
@@ -26,4 +27,5 @@ class Chunk:
             "node_ids_json": json.dumps(self.node_ids),
             "embedding_ref": self.embedding_ref,
             "sparse_ref": self.sparse_ref,
+            "metadata_json": json.dumps(self.metadata) if self.metadata else None,
         }

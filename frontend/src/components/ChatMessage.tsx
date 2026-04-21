@@ -1,4 +1,5 @@
 import type { QueryHit } from '../types/api';
+import { summarizeAssistantText } from './chatMessageText';
 
 interface ChatMessageProps {
   id: string;
@@ -30,50 +31,6 @@ function formatTurnDate(value: string): string {
     hour: '2-digit',
     minute: '2-digit',
   }).format(date);
-}
-
-export function normalizeAssistantText(text: string, language: string): string {
-  const normalized = text.trim();
-  if (!normalized) return normalized;
-
-  const cleaned = normalized
-    .replace(/^\*{3,}\s*/gm, '')
-    .replace(/^#{1,6}\s*/gm, '')
-    .replace(/\r\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n');
-
-  if (language.startsWith('es')) {
-    if (/^the evidence supports\s*:/i.test(cleaned)) {
-      return cleaned.replace(/^the evidence supports\s*:/i, 'Evidencia principal:').replace(/;\s*/g, ';\n');
-    }
-    if (/^i could not find grounded evidence for this query\.?$/i.test(cleaned)) {
-      return 'No encontre evidencia suficiente para responder con fundamento.';
-    }
-    if (/^i could not produce a grounded answer\.?$/i.test(cleaned)) {
-      return 'No pude producir una respuesta fundamentada con la evidencia disponible.';
-    }
-  }
-
-  return cleaned.replace(/;\s*/g, ';\n');
-}
-
-export function summarizeAssistantText(text: string, language: string, maxLength = 260): string {
-  const normalized = normalizeAssistantText(text, language).replace(/\s+/g, ' ').trim();
-  if (!normalized || normalized.length <= maxLength) {
-    return normalized;
-  }
-
-  const sentences = normalized.match(/[^.!?…]+[.!?…]+/g);
-  if (sentences && sentences.length > 0) {
-    const summary = sentences.slice(0, 2).join(' ').trim();
-    if (summary.length >= 120) {
-      return summary.length > maxLength ? `${summary.slice(0, maxLength - 1).trimEnd()}…` : summary;
-    }
-  }
-
-  const cutoff = normalized.lastIndexOf('. ', maxLength);
-  const fallback = cutoff > 120 ? normalized.slice(0, cutoff + 1) : normalized.slice(0, maxLength);
-  return `${fallback.trimEnd()}…`;
 }
 
 function TypingIndicator() {
@@ -111,13 +68,13 @@ export function ChatMessage({
   const rawAnswer = answer?.trim() ?? '';
   const assistantText = kind === 'answer'
     ? (loading
-      ? 'Gemma 4 está generando una respuesta fundamentada.'
+      ? 'Gemma 4 esta generando una respuesta fundamentada.'
       : isLowConfidenceAnswer
-        ? 'Esta respuesta tiene baja confianza por falta de evidencia sólida. Ajusta la consulta o revisa las citas del panel lateral.'
-        : (rawAnswer ? summarizeAssistantText(rawAnswer, language) : 'La respuesta está disponible en el panel lateral.'))
+        ? 'Esta respuesta tiene baja confianza por falta de evidencia solida. Ajusta la consulta o revisa las citas del panel lateral.'
+        : (rawAnswer ? summarizeAssistantText(rawAnswer, language) : 'La respuesta esta disponible en el panel lateral.'))
     : (loading
       ? 'Recuperando evidencia del corpus.'
-      : `Encontré ${totalHits ?? hits?.length ?? 0} evidencias para esta búsqueda en modo ${routeMode}.`);
+      : `Encontre ${totalHits ?? hits?.length ?? 0} evidencias para esta busqueda en modo ${routeMode}.`);
 
   const handleSelect = () => {
     onSelect(id);
@@ -166,7 +123,7 @@ export function ChatMessage({
           <div className="chat-bubble chat-bubble--assistant">
             <div className="chat-bubble__meta">
               <span>Asistente IA</span>
-              <span>{loading ? 'Escribiendo...' : kind === 'answer' ? 'Respuesta' : 'Búsqueda'}</span>
+              <span>{loading ? 'Escribiendo...' : kind === 'answer' ? 'Respuesta' : 'Busqueda'}</span>
             </div>
             <div className="chat-bubble__text">
               {loading ? (
@@ -187,7 +144,7 @@ export function ChatMessage({
           <span className="tag tag--soft">{language}</span>
           {kind === 'answer' ? (
             <>
-              <span className="tag tag--success">Grounding {groundingScore?.toFixed(3) ?? '—'}</span>
+              <span className="tag tag--success">Grounding {groundingScore?.toFixed(3) ?? '-'}</span>
               <span className="tag tag--warning">{citationsCount ?? 0} citas</span>
               {isLowConfidenceAnswer ? <span className="tag tag--danger">Baja confianza</span> : null}
             </>

@@ -27,10 +27,14 @@ async def get_answer(answer_id: str, service: AnswerService = Depends(get_answer
         language=detail.language,
         intent=detail.intent,
         route_mode=detail.route_mode,
+        route_reason=detail.route_reason,
         plan_type=detail.answer.plan_type,
         answer=detail.answer.text,
         verdict=detail.answer.verdict,
         grounding_score=detail.answer.grounding_score,
+        prompt_version=detail.answer.prompt_version,
+        verification_issues=detail.answer.verification_issues,
+        evidence_trace=detail.answer.evidence_trace,
         citations=[
             CitationResponse(
                 id=citation.id,
@@ -41,6 +45,9 @@ async def get_answer(answer_id: str, service: AnswerService = Depends(get_answer
                 char_start=citation.char_start,
                 char_end=citation.char_end,
                 snippet=citation.snippet,
+                bbox=citation.bbox,
+                heading_path=citation.heading_path,
+                page_asset_path=citation.page_asset_path,
             )
             for citation in detail.citations
         ],

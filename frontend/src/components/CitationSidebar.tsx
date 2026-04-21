@@ -22,15 +22,21 @@ export function CitationSidebar({ citations }: CitationSidebarProps) {
           {citations.map(citation => (
             <article key={citation.id} className="query-citation">
               <div className="query-citation__top">
-                <span className="badge badge--accent">{citation.page_number !== null && citation.page_number !== undefined ? `Página ${citation.page_number}` : 'Cita'}</span>
+                <span className="badge badge--accent">{citation.page_number !== null && citation.page_number !== undefined ? `Pagina ${citation.page_number}` : 'Cita'}</span>
                 <span className="query-citation__meta">{citation.document_id}</span>
               </div>
               <p className="query-citation__snippet">{citation.snippet}</p>
+              {citation.heading_path && citation.heading_path.length > 0 ? (
+                <div className="query-citation__footer">
+                  <span className="query-chip">{citation.heading_path.join(' / ')}</span>
+                </div>
+              ) : null}
               <div className="query-citation__footer">
                 {citation.node_id ? <span className="query-chip">Nodo {citation.node_id}</span> : null}
                 {citation.char_start !== null && citation.char_start !== undefined && citation.char_end !== null && citation.char_end !== undefined ? (
-                  <span className="query-chip">chars {citation.char_start}–{citation.char_end}</span>
+                  <span className="query-chip">chars {citation.char_start}-{citation.char_end}</span>
                 ) : null}
+                {citation.page_asset_path ? <span className="query-chip">Asset disponible</span> : null}
               </div>
             </article>
           ))}

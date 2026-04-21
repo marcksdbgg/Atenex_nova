@@ -97,6 +97,7 @@ async def search_queries(
         language=result.query.language,
         intent=result.query.intent,
         route_mode=result.query.route_mode,
+        route_reason=result.route_reason,
         total_hits=len(result.hits),
         hits=[
             QueryHitResponse(
@@ -147,10 +148,14 @@ async def answer_query(
         language=result.query_language,
         intent=result.query_intent,
         route_mode=result.route_mode,
+        route_reason=result.route_reason,
         plan_type=result.plan_type,
         answer=result.answer.text,
         verdict=result.answer.verdict,
         grounding_score=result.answer.grounding_score,
+        prompt_version=result.answer.prompt_version,
+        verification_issues=result.answer.verification_issues,
+        evidence_trace=result.answer.evidence_trace,
         citations=[
             CitationResponse(
                 id=citation.id,
@@ -161,6 +166,9 @@ async def answer_query(
                 char_start=citation.char_start,
                 char_end=citation.char_end,
                 snippet=citation.snippet,
+                bbox=citation.bbox,
+                heading_path=citation.heading_path,
+                page_asset_path=citation.page_asset_path,
             )
             for citation in result.citations
         ],

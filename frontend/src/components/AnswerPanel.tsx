@@ -31,8 +31,12 @@ export function AnswerPanel({ answer }: AnswerPanelProps) {
           <div className="query-answer__value">{answer.route_mode}</div>
         </div>
         <div className="query-answer__metric">
-          <div className="query-answer__label">Intención</div>
+          <div className="query-answer__label">Intencion</div>
           <div className="query-answer__value">{answer.intent}</div>
+        </div>
+        <div className="query-answer__metric">
+          <div className="query-answer__label">Motivo ruta</div>
+          <div className="query-answer__value query-answer__value--truncate" title={answer.route_reason}>{answer.route_reason}</div>
         </div>
         <div className="query-answer__metric">
           <div className="query-answer__label">Idioma</div>
@@ -46,7 +50,9 @@ export function AnswerPanel({ answer }: AnswerPanelProps) {
 
       <div className="query-answer__footer">
         <span className="query-chip">ID {answer.query_id}</span>
-        <span className="query-chip">Colección {answer.collection_id}</span>
+        <span className="query-chip">Coleccion {answer.collection_id}</span>
+        <span className="query-chip">Prompt {answer.prompt_version}</span>
+        {answer.verification_issues.length > 0 ? <span className="query-chip">Issues {answer.verification_issues.join(', ')}</span> : null}
       </div>
     </section>
   );

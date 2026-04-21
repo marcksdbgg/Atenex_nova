@@ -48,8 +48,13 @@ class DoclingParserAdapter:
                     node_type=NodeType.PARAGRAPH,
                     raw_text=block,
                     normalized_text="",
+                    page_number=1,
                     order_index=idx,
-                    metadata={"source_format": "text/plain", "source_path": file_path},
+                    metadata={
+                        "source_format": "text/plain",
+                        "source_path": file_path,
+                        "heading_path": [],
+                    },
                 )
             )
 
@@ -95,14 +100,52 @@ class DoclingParserAdapter:
             elif raw_text.startswith("#"):
                 node_type = NodeType.HEADING
 
+            headings = []
+            if hasattr(chunk, "meta") and hasattr(chunk.meta, "headings"):
+                headings = [str(item).strip() for item in (chunk.meta.headings or []) if str(item).strip()]
+            page_number = None
+            if hasattr(chunk, "meta"):
+                for candidate_attr in ("page_number", "page_no"):
+                    candidate = getattr(chunk.meta, candidate_attr, None)
+                    if isinstance(candidate, int):
+                        page_number = candidate
+                        break
+                if page_number is None:
+                    provenance = getattr(chunk.meta, "doc_items", None)
+                    if provenance:
+                        try:
+                            first_item = provenance[0]
+                            prov = getattr(first_item, "prov", None)
+                            if prov:
+                                page_number = getattr(prov[0], "page_no", None)
+                        except Exception:
+                            page_number = None
+
+            bbox = None
+            if hasattr(chunk, "meta"):
+                bbox_candidate = getattr(chunk.meta, "bbox", None)
+                if bbox_candidate is not None:
+                    bbox = {
+                        "l": getattr(bbox_candidate, "l", None),
+                        "t": getattr(bbox_candidate, "t", None),
+                        "r": getattr(bbox_candidate, "r", None),
+                        "b": getattr(bbox_candidate, "b", None),
+                    }
+
             node = DocumentNode(
                 id=new_id(),
                 document_id=document_id,
                 node_type=node_type,
                 raw_text=raw_text,
                 normalized_text="",
+                page_number=page_number,
                 order_index=idx,
-                metadata={"headings": chunk.meta.headings if hasattr(chunk.meta, 'headings') else []}
+                bbox=bbox,
+                metadata={
+                    "headings": headings,
+                    "heading_path": headings,
+                    "source_format": Path(file_path).suffix.lower().lstrip(".") or "docling",
+                },
             )
             nodes.append(node)
 

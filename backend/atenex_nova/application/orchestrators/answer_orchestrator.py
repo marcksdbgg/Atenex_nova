@@ -20,9 +20,11 @@ TOKEN_RE = re.compile(r"[\w\-]+", re.UNICODE)
 PROMPT_FILES = {
     "direct_answer": "DIRECT_ANSWER_PROMPT.md",
     "hierarchical_synthesis": "HIERARCHICAL_MAP_PROMPT.md",
+    "hierarchical_reduce": "HIERARCHICAL_REDUCE_PROMPT.md",
     "global_synthesis": "GLOBAL_SYNTHESIS_PROMPT.md",
     "argument_synthesis": "ARGUMENT_SYNTHESIS_PROMPT.md",
     "visual_grounded_synthesis": "VISUAL_GROUNDED_PROMPT.md",
+    "verification": "VERIFICATION_PROMPT.md",
 }
 
 
@@ -42,6 +44,7 @@ class AnswerBundle:
     query_language: str
     query_intent: str
     route_mode: str
+    route_reason: str
     plan_type: str
     answer: Answer
     citations: list[Citation]
@@ -72,7 +75,40 @@ class AnswerOrchestrator:
             plan_type,
             search_result.query.language,
         )
-        verification = self._verify(answer_text, search_result.evidence_pack.items, search_result.evidence_pack.contradictions, plan_type, citations)
+        verification = await self._verify(search_result, answer_text, plan_type, citations)
+        attempts = 1
+
+        if self._should_retry_generation(verification, citations):
+            repair_prompt = self._build_repair_prompt(prompt, verification.issues)
+            try:
+                repaired_draft = await self._generate(repair_prompt, plan_type)
+                repaired_citations = self._bind_citations(search_result.evidence_pack.items, repaired_draft)
+                repaired_answer = self._finalize_text(
+                    repaired_draft,
+                    repaired_citations,
+                    search_result.evidence_pack.route_mode,
+                    plan_type,
+                    search_result.query.language,
+                )
+                repaired_verification = await self._verify(
+                    search_result,
+                    repaired_answer,
+                    plan_type,
+                    repaired_citations,
+                )
+                attempts = 2
+                if self._is_better_attempt(verification, citations, repaired_verification, repaired_citations):
+                    prompt = repair_prompt
+                    draft_text = repaired_draft
+                    citations = repaired_citations
+                    answer_text = repaired_answer
+                    verification = repaired_verification
+                    verification.issues = sorted(
+                        set([*verification.issues, "regenerated_after_failed_verification"]),
+                    )
+            except ServiceUnavailableError:
+                pass
+
         self._enforce_strict_answer(answer_text, citations, verification)
         answer = Answer(
             id=new_id(),
@@ -81,6 +117,16 @@ class AnswerOrchestrator:
             text=answer_text,
             grounding_score=verification.grounding_score,
             verdict=verification.verdict.value,
+            prompt_version="v2",
+            draft_text=draft_text,
+            verification_issues=verification.issues,
+            evidence_trace={
+                "route_reason": search_result.route_reason,
+                "evidence_groups": search_result.evidence_pack.evidence_groups,
+                "excluded_evidence_count": search_result.evidence_pack.excluded_count,
+                "selected_count": search_result.evidence_pack.selected_count,
+                "generation_attempts": attempts,
+            },
         )
         return AnswerBundle(
             query_id=search_result.query.id,
@@ -90,6 +136,7 @@ class AnswerOrchestrator:
             query_language=search_result.query.language,
             query_intent=search_result.query.intent,
             route_mode=search_result.query.route_mode,
+            route_reason=search_result.route_reason,
             plan_type=plan_type,
             answer=answer,
             citations=citations,
@@ -97,6 +144,52 @@ class AnswerOrchestrator:
             prompt=prompt,
             draft_text=draft_text,
             verification=verification,
+        )
+
+    @staticmethod
+    def _should_retry_generation(verification: VerificationResult, citations: list[Citation]) -> bool:
+        if verification.verdict in {AnswerVerdict.UNVERIFIED, AnswerVerdict.CONFLICTING}:
+            return True
+        if verification.grounding_score < 0.55:
+            return True
+        return not citations
+
+    @staticmethod
+    def _is_better_attempt(
+        previous: VerificationResult,
+        previous_citations: list[Citation],
+        current: VerificationResult,
+        current_citations: list[Citation],
+    ) -> bool:
+        verdict_rank = {
+            AnswerVerdict.UNVERIFIED: 0,
+            AnswerVerdict.CONFLICTING: 1,
+            AnswerVerdict.PARTIALLY_VERIFIED: 2,
+            AnswerVerdict.VERIFIED: 3,
+        }
+        previous_tuple = (
+            verdict_rank[previous.verdict],
+            previous.grounding_score,
+            len(previous_citations),
+            -len(previous.issues),
+        )
+        current_tuple = (
+            verdict_rank[current.verdict],
+            current.grounding_score,
+            len(current_citations),
+            -len(current.issues),
+        )
+        return current_tuple > previous_tuple
+
+    @staticmethod
+    def _build_repair_prompt(prompt: str, issues: list[str]) -> str:
+        issue_text = ", ".join(issues) if issues else "low grounding"
+        return (
+            f"{prompt}\n\n"
+            "### Verification Repair\n"
+            f"The previous draft had these problems: {issue_text}.\n"
+            "Regenerate the answer with only grounded claims, explicit inline citations like [1], [2], and clear uncertainty if evidence is insufficient.\n"
+            "Do not add claims without support in the evidence block.\n"
         )
 
     async def _generate(self, prompt: str, plan_type: str) -> str:
@@ -118,6 +211,7 @@ class AnswerOrchestrator:
     def _build_prompt(self, search_result: SearchResult, plan_type: str, generation_profile: str) -> str:
         template = self._load_prompt(plan_type)
         evidence_block = self._format_evidence(search_result.evidence_pack.items)
+        reduce_instructions = self._load_prompt("hierarchical_reduce") if plan_type == "hierarchical_synthesis" else ""
         uncertainty_policy = (
             "If evidence is weak or contradictory, say so explicitly and prefer uncertainty over invention."
         )
@@ -126,10 +220,12 @@ class AnswerOrchestrator:
             "{{NORMALIZED_QUERY}}": search_result.query.normalized_text,
             "{{PLAN}}": plan_type,
             "{{ROUTE_MODE}}": search_result.query.route_mode,
+            "{{ROUTE_REASON}}": search_result.route_reason,
             "{{LANGUAGE}}": search_result.query.language,
             "{{GENERATION_PROFILE}}": generation_profile,
             "{{EVIDENCE}}": evidence_block,
             "{{UNCERTAINTY_POLICY}}": uncertainty_policy,
+            "{{REDUCE_INSTRUCTIONS}}": reduce_instructions,
         }
         for key, value in replacements.items():
             template = template.replace(key, value)
@@ -146,6 +242,7 @@ class AnswerOrchestrator:
             "Query: {{QUERY}}\n"
             "Plan: {{PLAN}}\n"
             "Evidence:\n{{EVIDENCE}}\n"
+            "{{REDUCE_INSTRUCTIONS}}\n"
             "{{UNCERTAINTY_POLICY}}\n"
         )
 
@@ -183,31 +280,40 @@ class AnswerOrchestrator:
             marker = f"[{index}]"
             if marker not in draft_text:
                 continue
-            start = draft_text.find(marker)
+            source_text = str(item.metadata.get("source_text") or item.snippet)
+            start, end = self._locate_source_span(source_text, item.snippet)
             citations.append(
                 Citation(
                     id=new_id(),
                     answer_id="",
                     document_id=item.document_id or "",
                     page_number=item.page_number,
-                    node_id=item.metadata.get("node_id") if item.metadata else None,
+                    node_id=self._extract_node_id(item),
                     char_start=start,
-                    char_end=start + len(marker),
+                    char_end=end,
                     snippet=item.snippet[:240],
+                    bbox=self._extract_bbox(item),
+                    heading_path=self._extract_heading_path(item),
+                    page_asset_path=self._extract_page_asset_path(item),
                 )
             )
         if not citations:
             for item in items[:3]:
+                source_text = str(item.metadata.get("source_text") or item.snippet)
+                start, end = self._locate_source_span(source_text, item.snippet)
                 citations.append(
                     Citation(
                         id=new_id(),
                         answer_id="",
                         document_id=item.document_id or "",
                         page_number=item.page_number,
-                        node_id=item.metadata.get("node_id") if item.metadata else None,
-                        char_start=None,
-                        char_end=None,
+                        node_id=self._extract_node_id(item),
+                        char_start=start,
+                        char_end=end,
                         snippet=item.snippet[:240],
+                        bbox=self._extract_bbox(item),
+                        heading_path=self._extract_heading_path(item),
+                        page_asset_path=self._extract_page_asset_path(item),
                     )
                 )
         return citations
@@ -235,7 +341,7 @@ class AnswerOrchestrator:
             text = re.sub(r"^\s*the evidence supports\s*:\s*", "Evidencia principal: ", text, flags=re.IGNORECASE)
             text = re.sub(
                 r"^\s*i could not find grounded evidence for this query\.?\s*$",
-                "No encontré evidencia suficiente para esta consulta.",
+                "No encontre evidencia suficiente para esta consulta.",
                 text,
                 flags=re.IGNORECASE,
             )
@@ -274,11 +380,10 @@ class AnswerOrchestrator:
                 code="LOW_GROUNDING_SCORE",
             )
 
-    def _verify(
+    async def _verify(
         self,
+        search_result: SearchResult,
         answer_text: str,
-        evidence_items: list[EvidenceItem],
-        contradictions: list[EvidenceItem],
         plan_type: str,
         citations: list[Citation],
     ) -> VerificationResult:
@@ -286,6 +391,8 @@ class AnswerOrchestrator:
         if not answer_text.strip():
             return VerificationResult(verdict=AnswerVerdict.UNVERIFIED, grounding_score=0.0, issues=["empty_answer"])
 
+        evidence_items = search_result.evidence_pack.items
+        contradictions = search_result.evidence_pack.contradictions
         answer_tokens = [token for token in TOKEN_RE.findall(answer_text.lower()) if len(token) > 2]
         evidence_text = " ".join(item.snippet for item in evidence_items).lower()
         overlap = sum(1 for token in answer_tokens if token in evidence_text)
@@ -305,6 +412,11 @@ class AnswerOrchestrator:
             verdict = AnswerVerdict.PARTIALLY_VERIFIED
         else:
             verdict = AnswerVerdict.VERIFIED
+        llm_verification = await self._verify_with_llm(search_result, answer_text)
+        if llm_verification is not None:
+            verdict = llm_verification.verdict
+            grounding_score = max(grounding_score, llm_verification.grounding_score)
+            issues = sorted(set([*issues, *llm_verification.issues]))
         return VerificationResult(verdict=verdict, grounding_score=round(grounding_score, 3), issues=issues)
 
     def _build_generator(self, backend: str) -> LLMGateway:
@@ -312,6 +424,76 @@ class AnswerOrchestrator:
         if backend == "llamacpp":
             return LlamaCppAdapter(url=settings.llm_url, required=settings.llm_required)
         return OllamaAdapter(url=settings.llm_url, model=settings.llm_model, required=settings.llm_required)
+
+    async def _verify_with_llm(self, search_result: SearchResult, answer_text: str) -> VerificationResult | None:
+        template = self._load_prompt("verification")
+        prompt = (
+            template.replace("{{QUERY}}", search_result.query.text)
+            .replace("{{ANSWER}}", answer_text)
+            .replace("{{EVIDENCE}}", self._format_evidence(search_result.evidence_pack.items))
+        )
+        try:
+            result = await self._generator.generate(prompt, max_tokens=256, temperature=0.0)
+        except Exception:
+            return None
+        if not result.strip():
+            return None
+
+        lowered = result.lower()
+        verdict = AnswerVerdict.PARTIALLY_VERIFIED
+        if "conflicting" in lowered:
+            verdict = AnswerVerdict.CONFLICTING
+        elif "unverified" in lowered:
+            verdict = AnswerVerdict.UNVERIFIED
+        elif "verified" in lowered and "partially" not in lowered:
+            verdict = AnswerVerdict.VERIFIED
+
+        score_match = re.search(r"grounding[_\s-]*score\s*:\s*([0-9]*\.?[0-9]+)", lowered)
+        grounding_score = float(score_match.group(1)) if score_match else 0.0
+        issues_line = next((line for line in result.splitlines() if line.lower().startswith("issues:")), "")
+        issues = [part.strip() for part in issues_line.split(":", 1)[1].split(",") if part.strip()] if issues_line else []
+        return VerificationResult(verdict=verdict, grounding_score=grounding_score, issues=issues)
+
+    @staticmethod
+    def _locate_source_span(source_text: str, snippet: str) -> tuple[int | None, int | None]:
+        normalized_source = " ".join(source_text.split())
+        normalized_snippet = " ".join(snippet.split())
+        if not normalized_source or not normalized_snippet:
+            return None, None
+        start = normalized_source.lower().find(normalized_snippet.lower())
+        if start >= 0:
+            return start, start + len(normalized_snippet)
+        prefix = normalized_snippet[: min(len(normalized_snippet), 80)]
+        start = normalized_source.lower().find(prefix.lower())
+        if start >= 0:
+            return start, start + len(prefix)
+        return 0, min(len(normalized_source), len(prefix))
+
+    @staticmethod
+    def _extract_node_id(item: EvidenceItem) -> str | None:
+        if item.metadata.get("node_id"):
+            return str(item.metadata["node_id"])
+        node_ids = item.metadata.get("node_ids")
+        if isinstance(node_ids, list) and node_ids:
+            return str(node_ids[0])
+        return None
+
+    @staticmethod
+    def _extract_bbox(item: EvidenceItem) -> dict[str, object] | None:
+        bbox = item.metadata.get("bbox")
+        return bbox if isinstance(bbox, dict) else None
+
+    @staticmethod
+    def _extract_heading_path(item: EvidenceItem) -> list[str]:
+        heading_path = item.metadata.get("heading_path")
+        if isinstance(heading_path, list):
+            return [str(part) for part in heading_path]
+        return []
+
+    @staticmethod
+    def _extract_page_asset_path(item: EvidenceItem) -> str | None:
+        value = item.metadata.get("image_path") or item.metadata.get("page_asset_path")
+        return str(value) if value else None
 
 
 def normalize_citation_answer_ids(answer_id: str, citations: list[Citation]) -> list[Citation]:

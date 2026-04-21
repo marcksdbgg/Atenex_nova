@@ -58,12 +58,23 @@ async def create_all_tables() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
         if conn.dialect.name == "sqlite":
-            pragma_rows = await conn.exec_driver_sql("PRAGMA table_info(documents)")
-            columns = {row[1] for row in pragma_rows.fetchall()}
-            if "collection_path" not in columns:
-                await conn.exec_driver_sql(
-                    "ALTER TABLE documents ADD COLUMN collection_path VARCHAR(800) NOT NULL DEFAULT ''"
-                )
+            await _ensure_sqlite_columns(conn, "documents", {
+                "collection_path": "ALTER TABLE documents ADD COLUMN collection_path VARCHAR(800) NOT NULL DEFAULT ''",
+            })
+            await _ensure_sqlite_columns(conn, "retrieval_chunks", {
+                "metadata_json": "ALTER TABLE retrieval_chunks ADD COLUMN metadata_json TEXT NULL",
+            })
+            await _ensure_sqlite_columns(conn, "answers", {
+                "prompt_version": "ALTER TABLE answers ADD COLUMN prompt_version VARCHAR(50) NOT NULL DEFAULT 'v1'",
+                "draft_text": "ALTER TABLE answers ADD COLUMN draft_text TEXT NOT NULL DEFAULT ''",
+                "verification_issues_json": "ALTER TABLE answers ADD COLUMN verification_issues_json TEXT NOT NULL DEFAULT '[]'",
+                "evidence_trace_json": "ALTER TABLE answers ADD COLUMN evidence_trace_json TEXT NOT NULL DEFAULT '{}'",
+            })
+            await _ensure_sqlite_columns(conn, "citations", {
+                "bbox_json": "ALTER TABLE citations ADD COLUMN bbox_json TEXT NULL",
+                "heading_path_json": "ALTER TABLE citations ADD COLUMN heading_path_json TEXT NOT NULL DEFAULT '[]'",
+                "page_asset_path": "ALTER TABLE citations ADD COLUMN page_asset_path VARCHAR(1000) NULL",
+            })
             await conn.exec_driver_sql(
                 "CREATE INDEX IF NOT EXISTS ix_documents_collection_path ON documents (collection_path)"
             )
@@ -75,11 +86,43 @@ async def create_all_tables() -> None:
                 "ALTER TABLE documents ADD COLUMN IF NOT EXISTS collection_path VARCHAR(800) NOT NULL DEFAULT ''"
             )
             await conn.exec_driver_sql(
+                "ALTER TABLE retrieval_chunks ADD COLUMN IF NOT EXISTS metadata_json TEXT NULL"
+            )
+            await conn.exec_driver_sql(
+                "ALTER TABLE answers ADD COLUMN IF NOT EXISTS prompt_version VARCHAR(50) NOT NULL DEFAULT 'v1'"
+            )
+            await conn.exec_driver_sql(
+                "ALTER TABLE answers ADD COLUMN IF NOT EXISTS draft_text TEXT NOT NULL DEFAULT ''"
+            )
+            await conn.exec_driver_sql(
+                "ALTER TABLE answers ADD COLUMN IF NOT EXISTS verification_issues_json TEXT NOT NULL DEFAULT '[]'"
+            )
+            await conn.exec_driver_sql(
+                "ALTER TABLE answers ADD COLUMN IF NOT EXISTS evidence_trace_json TEXT NOT NULL DEFAULT '{}'"
+            )
+            await conn.exec_driver_sql(
+                "ALTER TABLE citations ADD COLUMN IF NOT EXISTS bbox_json TEXT NULL"
+            )
+            await conn.exec_driver_sql(
+                "ALTER TABLE citations ADD COLUMN IF NOT EXISTS heading_path_json TEXT NOT NULL DEFAULT '[]'"
+            )
+            await conn.exec_driver_sql(
+                "ALTER TABLE citations ADD COLUMN IF NOT EXISTS page_asset_path VARCHAR(1000) NULL"
+            )
+            await conn.exec_driver_sql(
                 "CREATE INDEX IF NOT EXISTS ix_documents_collection_path ON documents (collection_path)"
             )
             await conn.exec_driver_sql(
                 "CREATE INDEX IF NOT EXISTS ix_documents_collection_checksum ON documents (collection_id, checksum)"
             )
+
+
+async def _ensure_sqlite_columns(conn, table_name: str, column_sql: dict[str, str]) -> None:
+    pragma_rows = await conn.exec_driver_sql(f"PRAGMA table_info({table_name})")
+    columns = {row[1] for row in pragma_rows.fetchall()}
+    for column_name, statement in column_sql.items():
+        if column_name not in columns:
+            await conn.exec_driver_sql(statement)
 
 
 async def dispose_engine() -> None:

@@ -1,5 +1,7 @@
 """SQL repository: Citation."""
 
+import json
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +24,9 @@ class SqlCitationRepository:
                 char_start=citation.char_start,
                 char_end=citation.char_end,
                 snippet=citation.snippet,
+                bbox_json=json.dumps(citation.bbox) if citation.bbox else None,
+                heading_path_json=json.dumps(citation.heading_path),
+                page_asset_path=citation.page_asset_path,
             )
             for citation in citations
         ]
@@ -46,4 +51,7 @@ class SqlCitationRepository:
             char_start=model.char_start,
             char_end=model.char_end,
             snippet=model.snippet,
+            bbox=json.loads(model.bbox_json) if model.bbox_json else None,
+            heading_path=json.loads(model.heading_path_json) if model.heading_path_json else [],
+            page_asset_path=model.page_asset_path,
         )

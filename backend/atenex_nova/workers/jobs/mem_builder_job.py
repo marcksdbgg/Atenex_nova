@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 
 from atenex_nova.domain.entities.chunk import Chunk
 from atenex_nova.domain.entities.job import Job
-from atenex_nova.domain.value_objects.identifiers import JobType, new_id
+from atenex_nova.domain.value_objects.identifiers import DocumentStatus, JobType, new_id
 from atenex_nova.infrastructure.db.repositories.sql_chunk_repo import SqlChunkRepository
 from atenex_nova.infrastructure.db.repositories.sql_collection_repo import SqlCollectionRepository
 from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocumentRepository
@@ -41,8 +41,14 @@ class SegmentDocumentJobHandler(BaseJobHandler):
             doc = await doc_repo.get_by_id(document_id)
             if not doc:
                 raise ValueError(f"Document {document_id} not found")
+            if doc.status == DocumentStatus.FAILED:
+                return {"chunks_created": 0, "skipped": "document_failed"}
 
             nodes = await node_repo.get_by_document(document_id)
+            if doc.status in {DocumentStatus.SEGMENTED, DocumentStatus.EMBEDDED, DocumentStatus.INDEXED, DocumentStatus.READY}:
+                existing_chunks = await chunk_repo.get_by_document(document_id)
+                if existing_chunks:
+                    return {"chunks_created": len(existing_chunks), "skipped": "already_segmented"}
 
             async with audit.step(
                 run_id=job.id,
@@ -55,34 +61,62 @@ class SegmentDocumentJobHandler(BaseJobHandler):
                 chunks: list[Chunk] = []
                 current_text = ""
                 current_nodes: list[str] = []
-                max_chars = 1000
+                current_metadata: dict[str, object] = {"heading_path": [], "pages": []}
+                min_tokens = 400
+                max_tokens = 800
 
                 for node in nodes:
                     text = node.normalized_text or node.raw_text
                     if not text.strip():
                         continue
 
-                    if len(current_text) + len(text) > max_chars and current_nodes:
+                    estimated_next_tokens = (len(current_text) + len(text)) // 4
+                    heading_path = node.metadata.get("heading_path", []) if isinstance(node.metadata, dict) else []
+                    chunk_boundary = (
+                        node.node_type.value in {"heading", "table", "caption", "image"}
+                        or (estimated_next_tokens > max_tokens and current_nodes)
+                    )
+                    if chunk_boundary and current_nodes and (len(current_text) // 4) >= min_tokens:
                         chunks.append(Chunk(
                             id=new_id(),
                             document_id=document_id,
                             text=current_text,
-                            token_count=len(current_text) // 4,
+                            summary=current_text[:280],
+                            token_count=max(1, len(current_text) // 4),
                             node_ids=current_nodes,
+                            metadata=current_metadata,
                         ))
                         current_text = text
                         current_nodes = [node.id]
+                        current_metadata = {
+                            "heading_path": heading_path,
+                            "pages": [node.page_number] if node.page_number is not None else [],
+                            "node_types": [node.node_type.value],
+                            "bbox": [node.bbox] if node.bbox else [],
+                        }
                     else:
                         current_text += ("\n\n" if current_text else "") + text
                         current_nodes.append(node.id)
+                        current_metadata.setdefault("heading_path", heading_path)
+                        if node.page_number is not None:
+                            current_metadata.setdefault("pages", [])
+                            if node.page_number not in current_metadata["pages"]:
+                                current_metadata["pages"].append(node.page_number)
+                        current_metadata.setdefault("node_types", [])
+                        current_metadata["node_types"].append(node.node_type.value)
+                        if node.bbox:
+                            current_metadata.setdefault("bbox", [])
+                            current_metadata["bbox"].append(node.bbox)
 
                 if current_nodes:
                     chunks.append(Chunk(
                         id=new_id(),
                         document_id=document_id,
                         text=current_text,
-                        token_count=len(current_text) // 4,
+                        summary=current_text[:280],
+                        token_count=max(1, len(current_text) // 4),
                         node_ids=current_nodes,
+                        metadata=current_metadata,
                     ))
 
                 await chunk_repo.create_many(chunks)
@@ -108,11 +142,14 @@ class EmbedDocumentJobHandler(BaseJobHandler):
         async with self.session_factory() as session:
             doc_repo = SqlDocumentRepository(session)
             chunk_repo = SqlChunkRepository(session)
+            node_repo = SqlDocumentNodeRepository(session)
             audit = PipelineAuditService(session=session)
 
             doc = await doc_repo.get_by_id(document_id)
             if not doc:
                 raise ValueError(f"Document {document_id} not found")
+            if doc.status == DocumentStatus.FAILED:
+                return {"embedded": 0, "skipped": "document_failed"}
 
             chunks = await chunk_repo.get_by_document(document_id)
             if not chunks:
@@ -151,11 +188,37 @@ class EmbedDocumentJobHandler(BaseJobHandler):
                     )
                     collection_name = f"collection_{doc.collection_id}"
                     await qdrant.init_collection(collection_name, embedder.embedding_dim)
+                    document_nodes = {node.id: node for node in await node_repo.get_by_document(document_id)}
 
                     vector_docs: list[QdrantDocument] = []
                     for chunk, vector in zip(chunks_to_embed, vectors, strict=False):
                         point_id = str(uuid.uuid4())
                         chunk.embedding_ref = point_id
+                        sparse_terms = {
+                            token.lower().strip(".,:;!?()[]{}")
+                            for token in chunk.text.split()
+                            if len(token.strip(".,:;!?()[]{}")) > 3
+                        }
+                        chunk.sparse_ref = " ".join(sorted(sparse_terms)[:32])
+                        linked_nodes = [document_nodes[node_id] for node_id in chunk.node_ids if node_id in document_nodes]
+                        page_numbers = sorted({node.page_number for node in linked_nodes if node.page_number is not None})
+                        heading_path = []
+                        for node in linked_nodes:
+                            candidate_path = node.metadata.get("heading_path", []) if isinstance(node.metadata, dict) else []
+                            if candidate_path:
+                                heading_path = [str(item) for item in candidate_path]
+                                break
+                        bbox_candidates = [node.bbox for node in linked_nodes if node.bbox]
+                        chunk.metadata = {
+                            **chunk.metadata,
+                            "document_title": doc.title,
+                            "page_numbers": page_numbers,
+                            "heading_path": heading_path,
+                            "node_types": [node.node_type.value for node in linked_nodes],
+                            "source_text": chunk.text,
+                            "summary": chunk.summary,
+                            "bbox": bbox_candidates[0] if bbox_candidates else None,
+                        }
                         await chunk_repo.update(chunk)
 
                         vector_docs.append(QdrantDocument(
@@ -165,7 +228,14 @@ class EmbedDocumentJobHandler(BaseJobHandler):
                                 "document_id": document_id,
                                 "collection_id": doc.collection_id,
                                 "chunk_id": chunk.id,
+                                "title": doc.title,
                                 "text": chunk.text,
+                                "summary": chunk.summary,
+                                "node_ids": chunk.node_ids,
+                                "sparse_ref": chunk.sparse_ref,
+                                "page_numbers": page_numbers,
+                                "heading_path": heading_path,
+                                "bbox": bbox_candidates[0] if bbox_candidates else None,
                             },
                         ))
 

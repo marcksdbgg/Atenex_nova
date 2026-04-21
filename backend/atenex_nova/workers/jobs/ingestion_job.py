@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 
 from atenex_nova.domain.entities.job import Job
+from atenex_nova.application.policies.query_routing_policy import QueryRoutingPolicy
 from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocumentRepository
 from atenex_nova.infrastructure.db.repositories.sql_node_repo import SqlDocumentNodeRepository
 from atenex_nova.infrastructure.parsing.docling_adapter import DoclingParserAdapter
@@ -123,9 +124,13 @@ class NormalizeDocumentJobHandler(BaseJobHandler):
                 stage="normalize",
                 context={"node_count": len(nodes)},
             ) as step:
-                # Simple normalization: trim whitespace, basic language guess (optional)
+                language_samples: list[str] = []
                 for node in nodes:
-                    node.normalized_text = " ".join(node.raw_text.split())
+                    normalized = "\n".join(" ".join(line.split()) for line in node.raw_text.splitlines())
+                    normalized = normalized.strip()
+                    node.normalized_text = normalized
+                    if normalized:
+                        language_samples.append(normalized[:500])
 
                 from sqlalchemy import select
 
@@ -135,12 +140,16 @@ class NormalizeDocumentJobHandler(BaseJobHandler):
                 result = await session.execute(stmt)
                 models = result.scalars().all()
                 for m in models:
-                    m.normalized_text = " ".join(m.raw_text.split())
+                    normalized = "\n".join(" ".join(line.split()) for line in m.raw_text.splitlines()).strip()
+                    m.normalized_text = normalized
                     session.add(m)
 
+                document_text = "\n".join(language_samples[:20])
+                if document_text:
+                    doc.language = QueryRoutingPolicy.detect_language(document_text)
                 doc.mark_normalized()
                 await doc_repo.update(doc)
-                step.metrics(nodes_normalized=len(models))
+                step.metrics(nodes_normalized=len(models), detected_language=doc.language)
 
             # Enqueue Segment Job
             from atenex_nova.domain.entities.job import Job

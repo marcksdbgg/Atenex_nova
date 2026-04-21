@@ -1,5 +1,7 @@
 """SQL repository: Answer."""
 
+import json
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +21,10 @@ class SqlAnswerRepository:
             text=answer.text,
             grounding_score=answer.grounding_score,
             verdict=answer.verdict,
+            prompt_version=answer.prompt_version,
+            draft_text=answer.draft_text,
+            verification_issues_json=json.dumps(answer.verification_issues),
+            evidence_trace_json=json.dumps(answer.evidence_trace),
             created_at=answer.created_at,
         )
         self._session.add(model)
@@ -37,6 +43,10 @@ class SqlAnswerRepository:
             text=model.text,
             grounding_score=model.grounding_score,
             verdict=model.verdict,
+            prompt_version=model.prompt_version,
+            draft_text=model.draft_text,
+            verification_issues=json.loads(model.verification_issues_json) if model.verification_issues_json else [],
+            evidence_trace=json.loads(model.evidence_trace_json) if model.evidence_trace_json else {},
             created_at=model.created_at,
         )
 
@@ -52,5 +62,9 @@ class SqlAnswerRepository:
             text=model.text,
             grounding_score=model.grounding_score,
             verdict=model.verdict,
+            prompt_version=model.prompt_version,
+            draft_text=model.draft_text,
+            verification_issues=json.loads(model.verification_issues_json) if model.verification_issues_json else [],
+            evidence_trace=json.loads(model.evidence_trace_json) if model.evidence_trace_json else {},
             created_at=model.created_at,
         )

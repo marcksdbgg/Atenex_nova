@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
+from typing import ClassVar
 
 from atenex_nova.domain.value_objects.identifiers import QueryIntent, QueryMode
 
@@ -27,16 +28,54 @@ class QueryFeatures:
 class QueryRoutingPolicy:
     """Heuristic router that selects the best retrieval mode."""
 
-    exact_markers = {"id", "uuid", "code", "código", "fecha", "date", "reference"}
-    comparison_markers = {"vs", "versus", "compare", "comparison", "difference", "diferencia", "mejor"}
-    contradiction_markers = {"but", "however", "although", "sin embargo", "contradict", "contra"}
-    global_markers = {"overall", "summary", "resumen", "global", "general", "corpus", "visión"}
-    visual_markers = {"table", "tabla", "figure", "figura", "chart", "layout", "page", "página"}
+    exact_markers: ClassVar[set[str]] = {"id", "uuid", "code", "codigo", "fecha", "date", "reference"}
+    comparison_markers: ClassVar[set[str]] = {
+        "vs",
+        "versus",
+        "compare",
+        "comparison",
+        "difference",
+        "diferencia",
+        "mejor",
+    }
+    contradiction_markers: ClassVar[set[str]] = {
+        "but",
+        "however",
+        "although",
+        "sin embargo",
+        "contradict",
+        "contra",
+        "conflict",
+    }
+    global_markers: ClassVar[set[str]] = {
+        "overall",
+        "summary",
+        "resumen",
+        "global",
+        "general",
+        "corpus",
+        "vision",
+        "panorama",
+    }
+    visual_markers: ClassVar[set[str]] = {
+        "table",
+        "tabla",
+        "figure",
+        "figura",
+        "chart",
+        "layout",
+        "page",
+        "pagina",
+        "diagram",
+        "scan",
+    }
 
     def extract_features(self, text: str) -> QueryFeatures:
         normalized = self.normalize(text)
         tokens = set(TOKEN_RE.findall(normalized))
-        has_exact_tokens = any(len(token) >= 8 and any(char.isdigit() for char in token) for token in tokens)
+        has_exact_tokens = any(
+            len(token) >= 8 and any(char.isdigit() for char in token) for token in tokens
+        ) or any(marker in tokens for marker in self.exact_markers)
         has_comparison = any(marker in normalized for marker in self.comparison_markers)
         has_contradiction = any(marker in normalized for marker in self.contradiction_markers)
         has_global_terms = any(marker in normalized for marker in self.global_markers)
@@ -45,6 +84,7 @@ class QueryRoutingPolicy:
             normalized.count(" and ")
             + normalized.count(" y ")
             + normalized.count(",")
+            + normalized.count(";")
             >= 1
             or normalized.count("?") > 0
         )
@@ -86,6 +126,26 @@ class QueryRoutingPolicy:
             return QueryIntent.EXACT
         return QueryIntent.FACTUAL
 
+    def explain_route(self, features: QueryFeatures, mode: str) -> str:
+        reasons: list[str] = []
+        if features.has_exact_tokens:
+            reasons.append("exact identifiers or literal lookup cues detected")
+        if features.has_comparison:
+            reasons.append("comparison cues detected")
+        if features.has_contradiction:
+            reasons.append("contradiction or debate cues detected")
+        if features.has_global_terms:
+            reasons.append("global summary cues detected")
+        if features.has_visual_terms:
+            reasons.append("visual or layout-heavy cues detected")
+        if features.multi_clause:
+            reasons.append("multi-clause query detected")
+
+        if not reasons:
+            reasons.append("default factual local retrieval path")
+
+        return f"{mode}: " + "; ".join(reasons)
+
     @staticmethod
     def normalize(text: str) -> str:
         return " ".join(text.strip().lower().split())
@@ -96,26 +156,22 @@ class QueryRoutingPolicy:
         if not lower:
             return "en"
 
-        # Strong hints first.
-        if any(char in lower for char in "áéíóúñ¿¡"):
-            return "es"
+        if any(char in lower for char in "aeioun¿¡"):
+            accent_hits = sum(char in lower for char in ("á", "é", "í", "ó", "ú", "ñ", "¿", "¡"))
+            if accent_hits:
+                return "es"
 
         tokens = TOKEN_RE.findall(lower)
         spanish_markers = {
             "que",
-            "qué",
             "como",
-            "cuál",
+            "cual",
             "donde",
-            "dónde",
             "explica",
             "resume",
             "analiza",
             "compara",
             "porque",
-            "porqué",
-            "por",
-            "qué",
             "cita",
             "citas",
             "documento",
@@ -124,6 +180,7 @@ class QueryRoutingPolicy:
             "evidencia",
             "evidencias",
             "idioma",
+            "pagina",
         }
         english_markers = {
             "what",
@@ -145,12 +202,13 @@ class QueryRoutingPolicy:
             "answer",
             "evidence",
             "language",
+            "page",
         }
 
         spanish_score = sum(1 for token in tokens if token in spanish_markers)
         english_score = sum(1 for token in tokens if token in english_markers)
 
-        if re.search(r"\b(?:ción|ciones|mente|idad|ario|aria)\b", lower):
+        if re.search(r"\b(?:cion|ciones|mente|idad|ario|aria)\b", lower):
             spanish_score += 1
 
         if spanish_score == english_score == 0:

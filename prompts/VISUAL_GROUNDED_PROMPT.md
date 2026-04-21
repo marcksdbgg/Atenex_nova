@@ -2,6 +2,7 @@
 
 Query: {{QUERY}}
 Plan: {{PLAN}}
+Route Reason: {{ROUTE_REASON}}
 Language: {{LANGUAGE}}
 
 Evidence:

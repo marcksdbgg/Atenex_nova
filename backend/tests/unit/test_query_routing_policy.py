@@ -39,3 +39,12 @@ class TestQueryRoutingPolicy:
             "Explain literary neoteny in three concise points and cite the source documents."
         )
         assert features.language == "en"
+
+    def test_explain_route_mentions_selected_mode_and_reason(self) -> None:
+        features = self.policy.extract_features("Compare the claims and contradictions in these documents")
+
+        explanation = self.policy.explain_route(features, "argumentative")
+
+        assert explanation.startswith("argumentative:")
+        assert "comparison cues detected" in explanation
+        assert "contradiction or debate cues detected" in explanation
