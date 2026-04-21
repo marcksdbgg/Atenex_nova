@@ -198,8 +198,9 @@ Atenex_nova/
 │       └── styles/              # CSS global y design system
 │
 ├── docs/                        # Documentación
-│   ├── plan.md                  # Arquitectura maestro
-│   └── baseline.md              # Diseño baseline
+│   ├── final-gap-inventory.md   # Inventario canónico del gap real contra baseline
+│   ├── baseline.md              # Diseño baseline
+│   └── plan_restante.md         # Referencia histórica resumida
 │
 ├── prompts/                     # Plantillas de prompts versionadas
 ├── scripts/                     # Scripts de utilidad
@@ -245,8 +246,9 @@ Pregunta → Preprocesamiento → Clasificación → Routing → Recuperación
 
 ## Documentación
 
-- [Plan maestro de arquitectura](docs/plan.md)
+- [Inventario final de brechas](docs/final-gap-inventory.md) — Fuente canónica del estado real y del gap restante contra baseline
 - [Diseño baseline](docs/baseline.md)
+- [Plan restante histórico](docs/plan_restante.md)
 - [AGENTS.md](AGENTS.md) — Referencia para sub-agentes IA
 
 ---

@@ -1,14 +1,16 @@
 # Atenex Nova Workspace Instructions
 
 ## Source of Truth
-- Use [docs/plan.md](docs/plan.md) and [docs/baseline.md](docs/baseline.md) for architecture and product rationale.
-- Use [docs/plan_restante.md](docs/plan_restante.md) to understand the remaining implementation phases and current roadmap gaps.
+- Use [docs/baseline.md](docs/baseline.md) for the product contract and rationale.
+- Use [docs/final-gap-inventory.md](docs/final-gap-inventory.md) as the canonical inventory of the real remaining gap against the baseline.
+- Use [docs/plan_restante.md](docs/plan_restante.md) only as historical context; if it differs from the final gap inventory, the inventory prevails.
 - Use [README.md](README.md) for quick start and runtime commands.
 - Do not duplicate those docs here; link to them instead.
 - [frontend/README.md](frontend/README.md) is the Vite template and is not operationally authoritative.
 
 ## Documentation To Read First
-- For backend or architecture work, read [docs/plan.md](docs/plan.md) and [docs/plan_restante.md](docs/plan_restante.md) before editing code.
+- For backend or architecture work, read [docs/baseline.md](docs/baseline.md) and [docs/final-gap-inventory.md](docs/final-gap-inventory.md) before editing code.
+- Use [docs/plan_restante.md](docs/plan_restante.md) only if historical context is needed.
 - For backend implementation details, also read [docs/architecture-backend.md](docs/architecture-backend.md) and [docs/jobs-and-workers.md](docs/jobs-and-workers.md).
 - For product framing or tradeoff context, read [docs/baseline.md](docs/baseline.md).
 - For frontend structure and API contracts, also read [docs/architecture-frontend.md](docs/architecture-frontend.md) and [docs/api-endpoints.md](docs/api-endpoints.md).
@@ -45,4 +47,4 @@
 - The backend CORS setup already allows localhost and 127.0.0.1 on ports 5173 and 5174.
 - When changing jobs, review [backend/atenex_nova/workers/main.py](backend/atenex_nova/workers/main.py) and [backend/atenex_nova/workers/runner.py](backend/atenex_nova/workers/runner.py) together.
 - For frontend API behavior and fallback rules, check [frontend/src/services/api.ts](frontend/src/services/api.ts).
-- Update [docs/plan.md](docs/plan.md) or [docs/baseline.md](docs/baseline.md) if a change affects product behavior or architecture.
+- Update [docs/final-gap-inventory.md](docs/final-gap-inventory.md) or [docs/baseline.md](docs/baseline.md) if a change affects product behavior, architecture, or the declared remaining gap.
