@@ -22,9 +22,16 @@ def test_retrieval_scorer_detects_keyword_matches() -> None:
 
 def test_answer_scorer_reports_grounding_and_relevance() -> None:
     scorer = AnswerScorer()
-    metrics = scorer.score("EmbeddingGemma supports 384d embeddings.", "384d embeddings", 2)
+    metrics = scorer.score(
+        "EmbeddingGemma supports 384d embeddings.",
+        "384d embeddings",
+        2,
+        evidence_texts=["EmbeddingGemma supports 384d embeddings."],
+    )
 
     assert metrics["relevance"] > 0
+    assert metrics["support_coverage"] > 0
+    assert metrics["citation_coverage"] > 0
     assert metrics["grounding"] > 0
     assert metrics["overall"] > 0
 

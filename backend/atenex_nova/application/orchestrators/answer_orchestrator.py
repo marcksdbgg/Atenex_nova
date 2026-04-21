@@ -156,7 +156,7 @@ class AnswerOrchestrator:
             if item.page_number is not None:
                 location += f" page={item.page_number}"
             lines.append(
-                f"[{index}] {item.source_type} score={item.score:.3f} {location} :: {item.snippet}"
+                f"[{index}] {item.source_type} rank={item.rank} score={item.score:.3f} {location} :: {item.snippet}"
             )
         return "\n".join(lines) if lines else "[No evidence items available]"
 

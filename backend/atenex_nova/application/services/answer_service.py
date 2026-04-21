@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from io import BytesIO
 from dataclasses import dataclass
+from io import BytesIO
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -57,6 +57,9 @@ class AnswerService:
         ) as audit:
             audit.metrics(
                 evidence_items=len(search_result.evidence_pack.items),
+                evidence_budget=search_result.evidence_pack.token_budget,
+                evidence_tokens=search_result.evidence_pack.estimated_tokens,
+                evidence_budget_utilization=search_result.evidence_pack.budget_utilization,
                 route_mode=search_result.query.route_mode,
                 intent=search_result.query.intent,
             )
@@ -138,7 +141,7 @@ class AnswerService:
 
         buffer = BytesIO()
         pdf = canvas.Canvas(buffer, pagesize=A4)
-        width, height = A4
+        _width, height = A4
         y = height - 48
         pdf.setTitle(f"Answer {detail.answer.id}")
 

@@ -16,13 +16,14 @@ from atenex_nova.domain.entities.collection import Collection
 from atenex_nova.domain.entities.document import Document
 from atenex_nova.domain.entities.document_node import DocumentNode
 from atenex_nova.domain.entities.job import Job
-from atenex_nova.domain.value_objects.identifiers import NodeType, new_id, JobType
+from atenex_nova.domain.value_objects.identifiers import JobType, NodeType, new_id
 from atenex_nova.infrastructure.db.models import tables as _tables  # noqa: F401
 from atenex_nova.infrastructure.db.repositories.sql_chunk_repo import SqlChunkRepository
 from atenex_nova.infrastructure.db.repositories.sql_collection_repo import SqlCollectionRepository
 from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocumentRepository
 from atenex_nova.infrastructure.db.repositories.sql_job_repo import SqlJobRepository
 from atenex_nova.infrastructure.db.repositories.sql_node_repo import SqlDocumentNodeRepository
+from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
 from atenex_nova.workers.jobs.memory_enrichment_job import (
     BuildGraphJobHandler,
     EmbedPropositionsJobHandler,
@@ -45,6 +46,18 @@ async def session_factory(tmp_path: Path):
         yield factory
     finally:
         await engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def _use_local_fallback_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fast_init(self, model_name: str = "google/embeddinggemma-300m", dim: int = 384, required: bool | None = None) -> None:
+        self._model_name = model_name or "google/embeddinggemma-300m"
+        self._dim = dim
+        self._required = False if required is None else required
+        self.model = None
+        self._fallback_only = True
+
+    monkeypatch.setattr(EmbeddingGemmaAdapter, "__init__", _fast_init)
 
 
 async def _seed_full_corpus(factory) -> tuple[str, str]:
@@ -162,6 +175,9 @@ async def test_evaluation_service_runs_and_persists_reports(session_factory) -> 
         assert second.deltas
         assert second.run.retrieval_recall_at_k >= 0.0
         assert second.run.answer_grounding_score >= 0.0
+        assert "answer_support_coverage" in second.run.summary
+        assert "answer_citation_coverage" in second.run.summary
+        assert "benchmark_pass_rate" in second.run.summary
 
         loaded = await service.get_run(second.run.id)
         assert loaded is not None

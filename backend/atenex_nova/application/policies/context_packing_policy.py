@@ -15,6 +15,9 @@ class EvidencePack:
     contradictions: list[EvidenceItem] = field(default_factory=list)
     summaries: list[EvidenceItem] = field(default_factory=list)
     token_budget: int = 2048
+    estimated_tokens: int = 0
+    selected_count: int = 0
+    budget_utilization: float = 0.0
 
 
 class ContextPackingPolicy:
@@ -30,7 +33,16 @@ class ContextPackingPolicy:
             seen_signatures.add(signature)
             deduplicated.append(item)
 
-        selected = deduplicated[: min(len(deduplicated), 12)]
+        selected: list[EvidenceItem] = []
+        estimated_tokens = 0
+        budget = max(int(token_budget), 1)
+        for item in deduplicated:
+            item_tokens = self._estimate_tokens(item)
+            if selected and estimated_tokens + item_tokens > budget:
+                break
+            selected.append(item)
+            estimated_tokens += item_tokens
+
         contradictions = [item for item in selected if self._is_contradictory(item.snippet)]
         summaries = [item for item in selected if item.source_type == "summary"]
         return EvidencePack(
@@ -40,7 +52,17 @@ class ContextPackingPolicy:
             contradictions=contradictions,
             summaries=summaries,
             token_budget=token_budget,
+            estimated_tokens=estimated_tokens,
+            selected_count=len(selected),
+            budget_utilization=min(1.0, round(estimated_tokens / budget, 3)),
         )
+
+    @staticmethod
+    def _estimate_tokens(item: EvidenceItem) -> int:
+        snippet_tokens = len(item.snippet.split())
+        title_tokens = len(item.title.split()) if item.title else 0
+        metadata_tokens = sum(len(str(value).split()) for value in item.metadata.values()) if item.metadata else 0
+        return max(1, snippet_tokens + title_tokens + metadata_tokens + 8)
 
     @staticmethod
     def _is_contradictory(text: str) -> bool:

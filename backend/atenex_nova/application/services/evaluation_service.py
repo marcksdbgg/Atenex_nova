@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from atenex_nova.application.services.answer_service import AnswerService
 from atenex_nova.application.services.query_service import QueryService
-from atenex_nova.domain.entities.evidence_item import EvidenceItem
 from atenex_nova.domain.value_objects.identifiers import new_id
 from atenex_nova.evaluation.datasets.manager import GoldenSetManager
 from atenex_nova.evaluation.models import EvaluationCaseResult, EvaluationRun
@@ -65,6 +63,7 @@ class EvaluationService:
                 answer_bundle.answer.text,
                 case.expected_answer,
                 len(answer_bundle.citations),
+                evidence_texts=[item.snippet for item in search_result.evidence_pack.items],
             )
             cases.append(
                 EvaluationCaseResult(
@@ -141,8 +140,17 @@ class EvaluationService:
                 "retrieval_ndcg": 0.0,
                 "answer_grounding_score": 0.0,
                 "answer_relevance_score": 0.0,
+                "answer_support_coverage": 0.0,
+                "answer_citation_coverage": 0.0,
+                "answer_overall_score": 0.0,
+                "benchmark_pass_rate": 0.0,
             }
         count = len(cases)
+        benchmark_passes = sum(
+            1
+            for case in cases
+            if case.answer_metrics["overall"] >= 0.7 and case.answer_metrics["grounding"] >= 0.7
+        )
         return {
             "case_count": count,
             "retrieval_recall_at_k": round(sum(case.retrieval_metrics["recall_at_k"] for case in cases) / count, 3),
@@ -150,4 +158,8 @@ class EvaluationService:
             "retrieval_ndcg": round(sum(case.retrieval_metrics["ndcg"] for case in cases) / count, 3),
             "answer_grounding_score": round(sum(case.answer_metrics["grounding"] for case in cases) / count, 3),
             "answer_relevance_score": round(sum(case.answer_metrics["relevance"] for case in cases) / count, 3),
+            "answer_support_coverage": round(sum(case.answer_metrics["support_coverage"] for case in cases) / count, 3),
+            "answer_citation_coverage": round(sum(case.answer_metrics["citation_coverage"] for case in cases) / count, 3),
+            "answer_overall_score": round(sum(case.answer_metrics["overall"] for case in cases) / count, 3),
+            "benchmark_pass_rate": round(benchmark_passes / count, 3),
         }
