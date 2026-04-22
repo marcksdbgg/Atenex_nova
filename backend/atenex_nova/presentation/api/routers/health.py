@@ -6,7 +6,11 @@ import httpx
 from fastapi import APIRouter
 
 from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
-from atenex_nova.presentation.api.dto.schemas import DependencyHealthResponse, HealthResponse, RuntimeHealthResponse
+from atenex_nova.presentation.api.dto.schemas import (
+    DependencyHealthResponse,
+    HealthResponse,
+    RuntimeHealthResponse,
+)
 from atenex_nova.shared.config.settings import Settings, get_settings
 
 router = APIRouter(tags=["system"])

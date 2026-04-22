@@ -1,14 +1,16 @@
 """Answer retrieval router."""
 
-from io import BytesIO
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from atenex_nova.application.services.answer_service import AnswerService
 from atenex_nova.dependencies import get_answer_service
-from atenex_nova.presentation.api.dto.schemas import AnswerResponse, CitationResponse, QueryHitResponse
+from atenex_nova.presentation.api.dto.schemas import (
+    AnswerResponse,
+    CitationResponse,
+    QueryHitResponse,
+)
 
 router = APIRouter(prefix="/answers", tags=["answers"])
 

@@ -1,14 +1,20 @@
 """Pipeline observability endpoints."""
 
-from fastapi import APIRouter, Depends
-from fastapi import HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocumentRepository
 from atenex_nova.infrastructure.db.repositories.sql_job_repo import SqlJobRepository
-from atenex_nova.infrastructure.db.repositories.sql_pipeline_audit_repo import SqlPipelineAuditRepository
+from atenex_nova.infrastructure.db.repositories.sql_pipeline_audit_repo import (
+    SqlPipelineAuditRepository,
+)
 from atenex_nova.infrastructure.db.session import get_session
-from atenex_nova.presentation.api.dto.schemas import DocumentEvidenceResponse, DocumentResponse, JobResponse, PipelineAuditResponse
+from atenex_nova.presentation.api.dto.schemas import (
+    DocumentEvidenceResponse,
+    DocumentResponse,
+    JobResponse,
+    PipelineAuditResponse,
+)
 
 router = APIRouter(prefix="/observability", tags=["observability"])
 

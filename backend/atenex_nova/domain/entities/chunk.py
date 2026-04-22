@@ -17,7 +17,7 @@ class Chunk:
     sparse_ref: str | None = None
     metadata: dict[str, object] = field(default_factory=dict)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, object]:
         return {
             "id": self.id,
             "document_id": self.document_id,

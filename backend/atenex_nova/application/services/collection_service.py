@@ -1,12 +1,13 @@
 """Application service: Collection management."""
 
 from atenex_nova.domain.entities.collection import Collection
+from atenex_nova.domain.repositories.collection_repository import CollectionRepository
 from atenex_nova.domain.value_objects.identifiers import new_id
 from atenex_nova.shared.exceptions.base import EntityNotFoundError
 
 
 class CollectionService:
-    def __init__(self, repo) -> None:
+    def __init__(self, repo: CollectionRepository) -> None:
         self._repo = repo
 
     async def create(

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from math import log2
+from typing import Any
 
 
 class RetrievalScorer:
-    def score(self, hits: list[dict], expected_keywords: list[str], top_k: int = 5) -> dict[str, float]:
+    def score(self, hits: list[dict[str, Any]], expected_keywords: list[str], top_k: int = 5) -> dict[str, float]:
         if not expected_keywords:
             return {"recall_at_k": 0.0, "mrr": 0.0, "ndcg": 0.0}
 

@@ -1,6 +1,7 @@
 """Presentation DTOs — Pydantic models for API request/response."""
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -246,7 +247,7 @@ class EvaluationRunResponse(BaseModel):
     created_at: datetime
 
     @classmethod
-    def from_run(cls, run) -> "EvaluationRunResponse":
+    def from_run(cls, run: Any) -> "EvaluationRunResponse":
         return cls(
             id=run.id,
             dataset_name=run.dataset_name,
@@ -267,7 +268,7 @@ class EvaluationReportResponse(EvaluationRunResponse):
     cases: list[EvaluationCaseResponse]
 
     @classmethod
-    def from_report(cls, report) -> "EvaluationReportResponse":
+    def from_report(cls, report: Any) -> "EvaluationReportResponse":
         return cls(
             **EvaluationRunResponse.from_run(report.run).model_dump(),
             previous_run_id=report.previous_run_id,
@@ -291,7 +292,7 @@ class EvaluationReportResponse(EvaluationRunResponse):
 
 # --- Common ---
 class PaginatedResponse(BaseModel):
-    items: list
+    items: list[Any]
     total: int
     offset: int
     limit: int

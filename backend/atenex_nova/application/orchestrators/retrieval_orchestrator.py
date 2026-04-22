@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from atenex_nova.application.policies.context_packing_policy import ContextPackingPolicy, EvidencePack
+from atenex_nova.application.policies.context_packing_policy import (
+    ContextPackingPolicy,
+    EvidencePack,
+)
 from atenex_nova.application.policies.query_routing_policy import QueryRoutingPolicy
 from atenex_nova.domain.entities.chunk import Chunk
 from atenex_nova.domain.entities.evidence_item import EvidenceItem
@@ -24,7 +27,7 @@ from atenex_nova.infrastructure.db.repositories.sql_proposition_repo import SqlP
 from atenex_nova.infrastructure.db.repositories.sql_query_repo import SqlQueryRepository
 from atenex_nova.infrastructure.db.repositories.sql_relation_repo import SqlRelationRepository
 from atenex_nova.infrastructure.db.repositories.sql_summary_repo import SqlSummaryRepository
-from atenex_nova.infrastructure.embeddings.bm25_encoder import BM25SparseEncoder, tokenize
+from atenex_nova.infrastructure.embeddings.bm25_encoder import BM25SparseEncoder, StableSparseEncoder, tokenize
 from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
 from atenex_nova.infrastructure.qdrant.qdrant_adapter import QdrantAdapter
 from atenex_nova.infrastructure.visual.colpali_adapter import ColPaliAdapter
@@ -271,7 +274,7 @@ class RetrievalOrchestrator:
     ) -> list[SummaryNode]:
         summaries: list[SummaryNode] = []
         for document in documents:
-            document_id = str(getattr(document, "id"))
+            document_id = str(document.id)
             summaries.extend(await summary_repo.list_by_document(document_id))
             document_chunks = [chunk for chunk in chunks if chunk.document_id == document_id]
             if not document_chunks:
@@ -317,12 +320,19 @@ class RetrievalOrchestrator:
             document_titles=document_titles,
             query_text=query.normalized_text or query.text,
         )
-        sparse_hits = self._score_sparse_candidates(
-            query.normalized_text or query.text,
-            chunks,
-            lambda chunk, score: self._build_chunk_hit(chunk, document_titles, score, "sparse_local"),
-            text_getter=lambda chunk: chunk.text,
-            limit=40,
+        sparse_encoder = StableSparseEncoder()
+        sparse_indices, sparse_values = sparse_encoder.encode_query(query.normalized_text or query.text)
+        sparse_hits = self._convert_qdrant_hits(
+            await self._qdrant.search(
+                f"collection_{query.collection_id}",
+                query_vector=None,
+                limit=40,
+                query_sparse_indices=sparse_indices,
+                query_sparse_values=sparse_values,
+            ),
+            default_source_type="chunk",
+            document_titles=document_titles,
+            query_text=query.normalized_text or query.text,
         )
         if not dense_hits and not sparse_hits:
             return []
@@ -352,12 +362,19 @@ class RetrievalOrchestrator:
             document_titles=document_titles,
             query_text=query.normalized_text or query.text,
         )
-        sparse_hits = self._score_sparse_candidates(
-            query.normalized_text or query.text,
-            propositions,
-            lambda prop, score: self._build_proposition_hit(prop, document_titles, score, "sparse_local"),
-            text_getter=lambda prop: prop.text,
-            limit=40,
+        sparse_encoder = StableSparseEncoder()
+        sparse_indices, sparse_values = sparse_encoder.encode_query(query.normalized_text or query.text)
+        sparse_hits = self._convert_qdrant_hits(
+            await self._qdrant.search(
+                f"collection_{query.collection_id}_propositions",
+                query_vector=None,
+                limit=40,
+                query_sparse_indices=sparse_indices,
+                query_sparse_values=sparse_values,
+            ),
+            default_source_type="proposition",
+            document_titles=document_titles,
+            query_text=query.normalized_text or query.text,
         )
         if not dense_hits and not sparse_hits:
             return []
@@ -387,12 +404,19 @@ class RetrievalOrchestrator:
             document_titles=document_titles,
             query_text=query.normalized_text or query.text,
         )
-        sparse_hits = self._score_sparse_candidates(
-            query.normalized_text or query.text,
-            summaries,
-            lambda summary, score: self._build_summary_hit(summary, document_titles, score, "sparse_local"),
-            text_getter=lambda summary: summary.text,
-            limit=30,
+        sparse_encoder = StableSparseEncoder()
+        sparse_indices, sparse_values = sparse_encoder.encode_query(query.normalized_text or query.text)
+        sparse_hits = self._convert_qdrant_hits(
+            await self._qdrant.search(
+                f"collection_{query.collection_id}_summaries",
+                query_vector=None,
+                limit=30,
+                query_sparse_indices=sparse_indices,
+                query_sparse_values=sparse_values,
+            ),
+            default_source_type="summary",
+            document_titles=document_titles,
+            query_text=query.normalized_text or query.text,
         )
         if not dense_hits and not sparse_hits:
             return []

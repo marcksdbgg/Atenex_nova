@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from atenex_nova.application.orchestrators.retrieval_orchestrator import RetrievalOrchestrator, SearchResult
+from atenex_nova.application.orchestrators.retrieval_orchestrator import (
+    RetrievalOrchestrator,
+    SearchResult,
+)
 from atenex_nova.shared.observability.pipeline_audit import PipelineAuditService
 
 

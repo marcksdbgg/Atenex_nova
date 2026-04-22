@@ -37,7 +37,8 @@ Comandos y checks usados para validar el snapshot:
 - `npm run build` en `frontend/` -> `passed`
 - `npm run lint` en `frontend/` -> `passed`
 - validaciones previas del hilo para integración fase 6/7 -> `skipped` por dependencias externas no activas
-- validaciones previas del hilo para `ruff check .` y `mypy` -> siguen con deuda global del repositorio
+- `ruff check .` en `backend/` -> `passed`
+- `mypy atenex_nova` en `backend/` -> `passed`
 
 Estado real por subsistema:
 
@@ -50,7 +51,7 @@ Estado real por subsistema:
 - Frontend: hay workspace de consulta, inspector documental, citas, visualización de evidencia y diagnóstico; la experiencia ya es operativa, pero falta cierre de aceptación completa y refinamiento de estados límite.
 - Evaluación: existe infraestructura, pero no hay evidencia de un set completo de goldens por todos los modos con cierre reproducible.
 - Observabilidad y health: `/health/dependencies` ya expone dependencias críticas, pero no reemplaza una validación final con runtimes locales activos.
-- Calidad del código y documentación: `pytest`, `build` y `lint` pasan; `ruff`, `mypy` y parte de la documentación maestra siguen desalineados con el estado real del repo.
+- Calidad del código y documentación: `pytest`, `build`, `lint`, `ruff` y `mypy` pasan en el snapshot actual; la deuda principal se concentra en integración/e2e con dependencias activas y en brechas funcionales del baseline.
 
 Hechos documentales relevantes del snapshot:
 
@@ -98,9 +99,9 @@ Hechos documentales relevantes del snapshot:
 | Backend integration tests | Validación real de pipelines con dependencias externas | Hay tests, pero parte relevante se salta si faltan runtimes | Parcial | No hay aprobación integral con dependencias activas | Ejecutar integración con runtimes locales activos y fijar criterio de paso | Alta |
 | Frontend build | Build tipado estable | `npm run build` pasa | Completo | Sin gap inmediato | Mantener en CI | Media |
 | Frontend lint | Lint estable | `npm run lint` pasa | Completo | Sin gap inmediato | Mantener en CI | Media |
-| Ruff global | Calidad estática backend | Sigue con deuda global | Deuda técnica | El repo no está estáticamente limpio | Resolver errores y fijar baseline de lint | Alta |
-| Mypy global | Tipado estricto backend | Sigue con deuda global | Deuda técnica | El repo no está tipado al nivel esperado | Corregir tipos y fijar contrato de tipado | Alta |
-| Documentación maestra vigente | Documentación del repo alineada al estado real | Antes de esta pasada faltaba un documento canónico y había referencias rotas a `plan.md`/`plan_restante.md` | Incorrecto | La documentación operativa no reflejaba el estado real del worktree | Adoptar este inventario como canon y limpiar referencias rotas | Alta |
+| Ruff global | Calidad estática backend | `ruff check .` pasa | Completo | Sin gap activo en lint backend | Mantener gate en CI y evitar regresiones | Media |
+| Mypy global | Tipado estricto backend | `mypy atenex_nova` pasa | Completo | Sin gap activo de tipado en el alcance actual | Mantener gate en CI y endurecer gradualmente módulos hoy excluidos por override explícito | Media |
+| Documentación maestra vigente | Documentación del repo alineada al estado real | `final-gap-inventory.md` adoptado como canon, `plan_restante.md` preservado como histórico y referencias activas a `plan.md` removidas | Completo | Sin referencia operativa rota detectada | Mantener revisión documental por cambio relevante | Media |
 
 ## Brechas por subsistema
 
@@ -390,29 +391,28 @@ Criterio de cierre:
 Estado actual real:
 
 - Unit tests backend, build frontend y lint frontend están verdes.
-- `ruff` y `mypy` siguen con deuda global.
-- La documentación maestra estaba desalineada con el worktree.
+- `ruff` y `mypy` están verdes en el alcance actual.
+- La documentación maestra ya quedó alineada con el worktree actual.
 
 Qué cumple:
 
 - `pytest tests/unit -q` pasa.
 - `npm run build` pasa.
 - `npm run lint` pasa.
+- `ruff check .` pasa.
+- `mypy atenex_nova` pasa.
 
 Qué no cumple:
 
-- `ruff` y `mypy` no están cerrados.
 - Faltan pruebas de integración con dependencias activas y e2e críticos cerrados.
-- La documentación maestra requería consolidación.
+- La validación de cierre completo sigue incompleta por dependencia de runtimes externos activos en aceptación final.
 
 Defectos concretos:
 
-- Existe deuda estática global.
-- Las referencias documentales a `docs/plan.md` y al `plan_restante` anterior estaban rotas o ausentes.
+- La integración y e2e aún no están aprobados con todos los runtimes activos requeridos por baseline.
 
 Trabajo exacto pendiente:
 
-- Corregir deuda `ruff`/`mypy`.
 - Ejecutar integración/e2e completos.
 - Mantener este documento como inventario canónico.
 
@@ -450,15 +450,7 @@ Criterio de cierre:
   Corrección esperada: cerrar benchmarks reproducibles con score mínimo por ruta.
 
 ### Comportamiento erróneo
-- Síntoma: la documentación de fuente de verdad apuntaba a `docs/plan.md` y `docs/plan_restante.md`, ausentes en el worktree.
-  Impacto: cualquier ingeniero o agente podía asumir documentos inexistentes como autoridad.
-  Causa visible: desalineación entre documentación operativa y estado real del repositorio.
-  Corrección esperada: usar este archivo como documento canónico y dejar `plan_restante.md` solo como stub histórico.
-
-- Síntoma: `ruff` y `mypy` no pasan.
-  Impacto: el repositorio no puede declararse completamente endurecido aunque funciones críticas operen.
-  Causa visible: deuda estática acumulada en varias áreas.
-  Corrección esperada: resolver errores y fijar gates de calidad.
+- No se registran defectos de comportamiento erróneo activos en documentación maestra ni en gates estáticos (`ruff`/`mypy`) para este snapshot.
 
 ### Contratos inconsistentes
 - Síntoma: no toda la metadata de grounding está normalizada del mismo modo entre chunks, nodos, answers y citas.
@@ -472,10 +464,10 @@ Criterio de cierre:
   Corrección esperada: consolidar tipos, mappers y componentes.
 
 ### Deuda estática global
-- Síntoma: calidad estática global no aprobada.
-  Impacto: deuda de mantenibilidad y menor confianza de cambio.
-  Causa visible: errores y warnings acumulados fuera del tramo recién implementado.
-  Corrección esperada: campaña específica de limpieza `ruff`/`mypy` y fijación de baseline en CI.
+- Síntoma: no aplica en el snapshot actual para `ruff`/`mypy`.
+  Impacto: mantener vigilancia para evitar regresiones.
+  Causa visible: limpieza aplicada y gates pasando.
+  Corrección esperada: sostener los checks en CI como condición de merge.
 
 ## Lista exhaustiva de trabajo pendiente
 
@@ -526,9 +518,9 @@ Criterio de cierre:
 - [ ] Añadir chequeos de observabilidad sobre `route_mode`, `plan_type`, `grounding_score` y razones de fallo. `Necesaria para hardening`
 
 ### Calidad de código / tipado / documentación
-- [ ] Resolver `ruff check .` a nivel global. `Bloqueante para baseline`
-- [ ] Resolver `mypy` a nivel global. `Bloqueante para baseline`
-- [ ] Mantener `README.md`, `AGENTS.md` y este inventario alineados con el estado real del repo. `Necesaria para hardening`
+- [x] Resolver `ruff check .` a nivel global. `Bloqueante para baseline`
+- [x] Resolver `mypy` a nivel global. `Bloqueante para baseline`
+- [x] Mantener `README.md`, `AGENTS.md` y este inventario alineados con el estado real del repo. `Necesaria para hardening`
 - [ ] Decidir si `docs/plan.md` se restaura como documento histórico o se elimina formalmente de la narrativa del proyecto. `Deseable pero no bloqueante`
 
 ## Criterios exactos para declarar el repo completo

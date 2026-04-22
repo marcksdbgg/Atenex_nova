@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from atenex_nova.evaluation.models import GoldenCase, GoldenSet
 from atenex_nova.domain.value_objects.identifiers import new_id
+from atenex_nova.evaluation.models import GoldenCase, GoldenSet
 
 
 class GoldenSetManager:

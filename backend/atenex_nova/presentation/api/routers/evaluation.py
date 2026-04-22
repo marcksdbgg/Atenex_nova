@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from atenex_nova.application.services.evaluation_service import EvaluationService
 from atenex_nova.infrastructure.db.session import get_session
 from atenex_nova.presentation.api.dto.schemas import (
-    EvaluationCaseResponse,
     EvaluationReportResponse,
     EvaluationRunRequest,
     EvaluationRunResponse,

@@ -1,5 +1,6 @@
-from docling.document_converter import DocumentConverter
 import json
+
+from docling.document_converter import DocumentConverter
 
 with open("test_sample.md", "w", encoding="utf-8") as f:
     f.write("# Hello\nThis is a test paragraph.\n\n| a | b |\n|---|---|\n| 1 | 2 |")

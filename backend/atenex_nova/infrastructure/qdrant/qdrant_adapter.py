@@ -23,6 +23,8 @@ class QdrantDocument:
     id: str
     vector: list[float]
     payload: Mapping[str, Any]
+    sparse_indices: list[int] | None = None
+    sparse_values: list[float] | None = None
 
 
 class QdrantAdapter(HybridIndex):
@@ -89,9 +91,10 @@ class QdrantAdapter(HybridIndex):
             if not exists:
                 await self.client.create_collection(
                     collection_name=collection_name,
-                    vectors_config=models.VectorParams(
+                    vectors_config={"dense": models.VectorParams(
                         size=vector_size, distance=models.Distance.COSINE
-                    ),
+                    )},
+                    sparse_vectors_config={"sparse": models.SparseVectorParams()},
                 )
                 logger.info("Created Qdrant collection %s", collection_name)
             self._register_success()
@@ -141,10 +144,16 @@ class QdrantAdapter(HybridIndex):
             return
         if not self._guard("upsert"):
             return
-        points = [
-            models.PointStruct(id=doc.id, vector=doc.vector, payload=doc.payload)
-            for doc in documents
-        ]
+        points = []
+        for doc in documents:
+            vector_dict: dict[str, Any] = {"dense": doc.vector}
+            if doc.sparse_indices and doc.sparse_values:
+                vector_dict["sparse"] = models.SparseVector(
+                    indices=doc.sparse_indices, values=doc.sparse_values
+                )
+            points.append(
+                models.PointStruct(id=doc.id, vector=vector_dict, payload=doc.payload)
+            )
         try:
             await self.client.upsert(collection_name=collection_name, points=points)
             self._register_success()
@@ -154,9 +163,11 @@ class QdrantAdapter(HybridIndex):
     async def search(
         self,
         collection_name: str,
-        query_vector: list[float],
+        query_vector: list[float] | None = None,
         limit: int = 10,
         filter_dict: Mapping[str, str] | None = None,
+        query_sparse_indices: list[int] | None = None,
+        query_sparse_values: list[float] | None = None,
     ) -> list[dict[str, Any]]:
         if not self._guard("search"):
             return []
@@ -168,18 +179,43 @@ class QdrantAdapter(HybridIndex):
                 must.append(models.FieldCondition(key=k, match=models.MatchValue(value=v)))
             qdrant_filter = models.Filter(must=must)
 
+        if query_sparse_indices is not None and query_sparse_values is not None:
+            q_vector = models.NamedSparseVector(
+                name="sparse",
+                vector=models.SparseVector(
+                    indices=query_sparse_indices, values=query_sparse_values
+                ),
+            )
+        else:
+            q_vector = models.NamedVector(name="dense", vector=query_vector or [])
+
         try:
             results = await self.client.search(  # type: ignore[attr-defined]
                 collection_name=collection_name,
-                query_vector=query_vector,
+                query_vector=q_vector,
                 limit=limit,
                 query_filter=qdrant_filter,
                 with_payload=True,
             )
             self._register_success()
         except Exception as exc:
-            self._register_failure(f"search collection '{collection_name}'", exc)
-            return []
+            # Fallback to unnamed vector if named vector fails
+            if "Not found: Vector" in str(exc) and not isinstance(q_vector, models.NamedSparseVector):
+                try:
+                    results = await self.client.search(  # type: ignore[attr-defined]
+                        collection_name=collection_name,
+                        query_vector=query_vector or [],
+                        limit=limit,
+                        query_filter=qdrant_filter,
+                        with_payload=True,
+                    )
+                    self._register_success()
+                except Exception as inner_exc:
+                    self._register_failure(f"search collection fallback '{collection_name}'", inner_exc)
+                    return []
+            else:
+                self._register_failure(f"search collection '{collection_name}'", exc)
+                return []
         return [
             {
                 "id": str(res.id),

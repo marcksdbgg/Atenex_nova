@@ -6,8 +6,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from atenex_nova.domain.entities.chunk import Chunk
-from atenex_nova.infrastructure.db.models.tables import DocumentModel
-from atenex_nova.infrastructure.db.models.tables import ChunkModel
+from atenex_nova.infrastructure.db.models.tables import ChunkModel, DocumentModel
 
 
 class SqlChunkRepository:

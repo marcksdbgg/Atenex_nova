@@ -19,6 +19,7 @@ from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocu
 from atenex_nova.infrastructure.db.repositories.sql_job_repo import SqlJobRepository
 from atenex_nova.infrastructure.db.repositories.sql_proposition_repo import SqlPropositionRepository
 from atenex_nova.infrastructure.db.repositories.sql_summary_repo import SqlSummaryRepository
+from atenex_nova.infrastructure.embeddings.bm25_encoder import StableSparseEncoder
 from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
 from atenex_nova.infrastructure.graph.graph_store import GraphStore
 from atenex_nova.infrastructure.qdrant.qdrant_adapter import QdrantAdapter, QdrantDocument
@@ -165,6 +166,8 @@ class EmbedPropositionsJobHandler(BaseJobHandler):
                     required=settings.embeddings_required,
                 )
                 vectors = await embedder.embed([prop.text for prop in propositions])
+                sparse_encoder = StableSparseEncoder()
+                sparse_encodings = [sparse_encoder.encode_document(prop.text) for prop in propositions]
                 qdrant = None
                 try:
                     qdrant = QdrantAdapter(
@@ -189,8 +192,10 @@ class EmbedPropositionsJobHandler(BaseJobHandler):
                                     "kind": prop.kind,
                                     "source_chunk_id": prop.source_chunk_id,
                                 },
+                                sparse_indices=sparse[0],
+                                sparse_values=sparse[1],
                             )
-                            for prop, vector in zip(propositions, vectors, strict=False)
+                            for prop, vector, sparse in zip(propositions, vectors, sparse_encodings, strict=False)
                         ],
                     )
                 except Exception:
@@ -317,6 +322,8 @@ class EmbedSummariesJobHandler(BaseJobHandler):
                     required=settings.embeddings_required,
                 )
                 vectors = await embedder.embed([summary.text for summary in summaries])
+                sparse_encoder = StableSparseEncoder()
+                sparse_encodings = [sparse_encoder.encode_document(summary.text) for summary in summaries]
                 qdrant_unavailable = False
 
                 try:
@@ -340,8 +347,10 @@ class EmbedSummariesJobHandler(BaseJobHandler):
                                     "title": document.title,
                                     "text": summary.text,
                                 },
+                                sparse_indices=sparse[0],
+                                sparse_values=sparse[1],
                             )
-                            for summary, vector in zip(summaries, vectors, strict=False)
+                            for summary, vector, sparse in zip(summaries, vectors, sparse_encodings, strict=False)
                         ],
                     )
                 except Exception:

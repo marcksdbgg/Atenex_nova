@@ -1,12 +1,13 @@
 """Application service: Job management."""
 
 from atenex_nova.domain.entities.job import Job
+from atenex_nova.domain.repositories.job_repository import JobRepository
 from atenex_nova.domain.value_objects.identifiers import JobStatus, JobType
 from atenex_nova.shared.exceptions.base import EntityNotFoundError
 
 
 class JobService:
-    def __init__(self, repo) -> None:
+    def __init__(self, repo: JobRepository) -> None:
         self._repo = repo
 
     async def get(self, job_id: str) -> Job:

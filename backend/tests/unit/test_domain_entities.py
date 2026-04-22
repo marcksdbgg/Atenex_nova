@@ -1,10 +1,14 @@
 """Unit tests for domain entities."""
 import pytest
+
 from atenex_nova.domain.entities.collection import Collection
 from atenex_nova.domain.entities.document import Document
 from atenex_nova.domain.entities.job import Job
 from atenex_nova.domain.value_objects.identifiers import (
-    DocumentStatus, JobStatus, JobType, new_id,
+    DocumentStatus,
+    JobStatus,
+    JobType,
+    new_id,
 )
 from atenex_nova.shared.exceptions.base import InvalidStateTransitionError
 

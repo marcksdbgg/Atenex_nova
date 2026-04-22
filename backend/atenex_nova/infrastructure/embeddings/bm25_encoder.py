@@ -2,17 +2,63 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 from collections import Counter
 from dataclasses import dataclass
 
-
 TOKEN_RE = re.compile(r"[\w\-]+", re.UNICODE)
 
 
 def tokenize(text: str) -> list[str]:
-    return [token.lower() for token in TOKEN_RE.findall(text)]
+    return [token.lower() for token in TOKEN_RE.findall(text) if len(token) > 2]
+
+
+def hash_token(token: str) -> int:
+    return int(hashlib.md5(token.encode("utf-8")).hexdigest()[:8], 16)
+
+
+class StableSparseEncoder:
+    """Stable sparse encoder for persisting sparse vectors.
+    Uses term frequency with BM25-like saturation, assuming fixed document length."""
+
+    def __init__(self, k1: float = 1.5, b: float = 0.75):
+        self.k1 = k1
+        self.b = b
+        self.avg_dl = 200.0
+
+    def encode_document(self, text: str) -> tuple[list[int], list[float]]:
+        tokens = tokenize(text)
+        counts = Counter(tokens)
+        doc_length = max(1, len(tokens))
+        indices = []
+        values = []
+        for token, frequency in counts.items():
+            indices.append(hash_token(token))
+            numerator = frequency * (self.k1 + 1)
+            denominator = frequency + self.k1 * (1 - self.b + self.b * doc_length / self.avg_dl)
+            # Assuming average IDF of 3.0 for all terms as a simplistic approximation
+            values.append(3.0 * numerator / denominator)
+        
+        sorted_pairs = sorted(zip(indices, values))
+        if not sorted_pairs:
+            return [], []
+        return [p[0] for p in sorted_pairs], [p[1] for p in sorted_pairs]
+
+    def encode_query(self, text: str) -> tuple[list[int], list[float]]:
+        tokens = tokenize(text)
+        counts = Counter(tokens)
+        indices = []
+        values = []
+        for token, frequency in counts.items():
+            indices.append(hash_token(token))
+            values.append(float(frequency))
+            
+        sorted_pairs = sorted(zip(indices, values))
+        if not sorted_pairs:
+            return [], []
+        return [p[0] for p in sorted_pairs], [p[1] for p in sorted_pairs]
 
 
 @dataclass

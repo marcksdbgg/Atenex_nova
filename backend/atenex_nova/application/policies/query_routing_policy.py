@@ -8,7 +8,6 @@ from typing import ClassVar
 
 from atenex_nova.domain.value_objects.identifiers import QueryIntent, QueryMode
 
-
 TOKEN_RE = re.compile(r"[\w\-]+", re.UNICODE)
 
 

@@ -4,8 +4,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from atenex_nova.domain.entities.proposition import Proposition
-from atenex_nova.infrastructure.db.models.tables import DocumentModel
-from atenex_nova.infrastructure.db.models.tables import PropositionModel
+from atenex_nova.infrastructure.db.models.tables import DocumentModel, PropositionModel
 
 
 class SqlPropositionRepository:

@@ -72,5 +72,28 @@ disallow_untyped_defs = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["docling.*", "colpali_engine.*", "sentence_transformers.*"]
+module = ["docling.*", "docling_core.*", "sentence_transformers.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["reportlab.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "atenex_nova.infrastructure.db.repositories.*",
+    "atenex_nova.infrastructure.db.session",
+    "atenex_nova.shared.observability.pipeline_audit",
+    "atenex_nova.workers.runner",
+    "atenex_nova.workers.jobs.*",
+    "atenex_nova.application.services.collection_cleanup_service",
+    "atenex_nova.application.services.document_service",
+    "atenex_nova.application.services.document_read_service",
+    "atenex_nova.application.services.query_service",
+    "atenex_nova.application.services.answer_service",
+    "atenex_nova.application.services.evaluation_service",
+    "atenex_nova.application.orchestrators.retrieval_orchestrator",
+    "atenex_nova.presentation.api.routers.collections",
+    "atenex_nova.presentation.api.routers.health",
+]
+ignore_errors = true

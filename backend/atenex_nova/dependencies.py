@@ -3,11 +3,11 @@
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from atenex_nova.application.services.collection_service import CollectionService
 from atenex_nova.application.services.answer_service import AnswerService
-from atenex_nova.application.services.evaluation_service import EvaluationService
+from atenex_nova.application.services.collection_service import CollectionService
 from atenex_nova.application.services.document_read_service import DocumentReadService
 from atenex_nova.application.services.document_service import DocumentService
+from atenex_nova.application.services.evaluation_service import EvaluationService
 from atenex_nova.application.services.job_service import JobService
 from atenex_nova.application.services.query_service import QueryService
 from atenex_nova.infrastructure.db.repositories.sql_collection_repo import SqlCollectionRepository

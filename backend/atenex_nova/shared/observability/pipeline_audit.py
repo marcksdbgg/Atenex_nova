@@ -11,8 +11,10 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from atenex_nova.infrastructure.db.repositories.sql_pipeline_audit_repo import SqlPipelineAuditRepository
 from atenex_nova.domain.value_objects.identifiers import new_id
+from atenex_nova.infrastructure.db.repositories.sql_pipeline_audit_repo import (
+    SqlPipelineAuditRepository,
+)
 
 logger = logging.getLogger("atenex_nova.pipeline.audit")
 
@@ -48,7 +50,7 @@ class PipelineAuditEvent:
 class PipelineStageRecorder:
     def __init__(
         self,
-        service: "PipelineAuditService",
+        service: PipelineAuditService,
         *,
         run_id: str,
         entity_type: str,
@@ -77,7 +79,7 @@ class PipelineStageRecorder:
         for name, value in values.items():
             self.metric(name, value)
 
-    async def __aenter__(self) -> "PipelineStageRecorder":
+    async def __aenter__(self) -> PipelineStageRecorder:
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> bool:

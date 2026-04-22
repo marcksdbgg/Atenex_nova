@@ -127,9 +127,7 @@ class ContextPackingPolicy:
         snippet = item.snippet.strip()
         if len(snippet) < 24 and item.source_type != "graph_edge":
             return True
-        if item.source_type == "summary" and len(snippet.split()) < 6:
-            return True
-        return False
+        return item.source_type == "summary" and len(snippet.split()) < 6
 
     @staticmethod
     def _group_items(items: list[EvidenceItem]) -> dict[str, list[str]]:

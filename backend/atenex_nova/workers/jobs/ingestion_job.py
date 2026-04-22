@@ -3,8 +3,8 @@
 import logging
 from pathlib import Path
 
-from atenex_nova.domain.entities.job import Job
 from atenex_nova.application.policies.query_routing_policy import QueryRoutingPolicy
+from atenex_nova.domain.entities.job import Job
 from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocumentRepository
 from atenex_nova.infrastructure.db.repositories.sql_node_repo import SqlDocumentNodeRepository
 from atenex_nova.infrastructure.parsing.docling_adapter import DoclingParserAdapter

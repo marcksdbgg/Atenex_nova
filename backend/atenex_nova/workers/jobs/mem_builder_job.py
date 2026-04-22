@@ -16,6 +16,7 @@ from atenex_nova.infrastructure.db.repositories.sql_node_repo import SqlDocument
 from atenex_nova.infrastructure.db.repositories.sql_proposition_repo import SqlPropositionRepository
 from atenex_nova.infrastructure.db.repositories.sql_relation_repo import SqlRelationRepository
 from atenex_nova.infrastructure.db.repositories.sql_summary_repo import SqlSummaryRepository
+from atenex_nova.infrastructure.embeddings.bm25_encoder import StableSparseEncoder
 from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
 from atenex_nova.infrastructure.qdrant.qdrant_adapter import QdrantAdapter, QdrantDocument
 from atenex_nova.shared.config.settings import get_settings
@@ -186,6 +187,7 @@ class EmbedDocumentJobHandler(BaseJobHandler):
                         port=qdrant_port,
                         required=settings.qdrant_required,
                     )
+                    sparse_encoder = StableSparseEncoder()
                     collection_name = f"collection_{doc.collection_id}"
                     await qdrant.init_collection(collection_name, embedder.embedding_dim)
                     document_nodes = {node.id: node for node in await node_repo.get_by_document(document_id)}
@@ -200,6 +202,7 @@ class EmbedDocumentJobHandler(BaseJobHandler):
                             if len(token.strip(".,:;!?()[]{}")) > 3
                         }
                         chunk.sparse_ref = " ".join(sorted(sparse_terms)[:32])
+                        sparse_indices, sparse_values = sparse_encoder.encode_document(chunk.text)
                         linked_nodes = [document_nodes[node_id] for node_id in chunk.node_ids if node_id in document_nodes]
                         page_numbers = sorted({node.page_number for node in linked_nodes if node.page_number is not None})
                         heading_path = []
@@ -237,6 +240,8 @@ class EmbedDocumentJobHandler(BaseJobHandler):
                                 "heading_path": heading_path,
                                 "bbox": bbox_candidates[0] if bbox_candidates else None,
                             },
+                            sparse_indices=sparse_indices,
+                            sparse_values=sparse_values,
                         ))
 
                     await qdrant.upsert(collection_name, vector_docs)

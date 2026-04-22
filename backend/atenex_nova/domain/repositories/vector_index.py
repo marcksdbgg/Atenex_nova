@@ -8,6 +8,8 @@ class VectorDocument(Protocol):
     id: str
     vector: list[float]
     payload: Mapping[str, Any]
+    sparse_indices: list[int] | None = None
+    sparse_values: list[float] | None = None
 
 
 class HybridIndex(Protocol):
@@ -19,7 +21,9 @@ class HybridIndex(Protocol):
     async def search(
         self,
         collection_name: str,
-        query_vector: list[float],
+        query_vector: list[float] | None = None,
         limit: int = 10,
         filter_dict: Mapping[str, str] | None = None,
+        query_sparse_indices: list[int] | None = None,
+        query_sparse_values: list[float] | None = None,
     ) -> list[dict[str, Any]]: ...
