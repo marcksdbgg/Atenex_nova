@@ -68,7 +68,7 @@ class DoclingParserAdapter:
 
         if not self.converter or not self.chunker:
             logger.error("Cannot parse: Docling is not available")
-            return []
+            raise RuntimeError("Docling is not available but required for complex documents")
 
         logger.info(f"Parsing document {document_id} at {file_path} with Docling...")
 
@@ -89,48 +89,87 @@ class DoclingParserAdapter:
         nodes: list[DocumentNode] = []
         for idx, chunk in enumerate(chunks):
             # chunk is a Chunk object from docling_core
-            # We map it to our internal DocumentNode
             node_type = NodeType.PARAGRAPH
-
-            # Simple heuristic for tables based on text content since Chunk loses some exact types,
-            # though chunk.meta might have it.
             raw_text = chunk.text
-            if "|" in raw_text and "\n|" in raw_text:
-                node_type = NodeType.TABLE
-            elif raw_text.startswith("#"):
-                node_type = NodeType.HEADING
 
             headings = []
-            if hasattr(chunk, "meta") and hasattr(chunk.meta, "headings"):
-                headings = [str(item).strip() for item in (chunk.meta.headings or []) if str(item).strip()]
             page_number = None
-            if hasattr(chunk, "meta"):
-                for candidate_attr in ("page_number", "page_no"):
-                    candidate = getattr(chunk.meta, candidate_attr, None)
-                    if isinstance(candidate, int):
-                        page_number = candidate
-                        break
-                if page_number is None:
-                    provenance = getattr(chunk.meta, "doc_items", None)
-                    if provenance:
-                        try:
-                            first_item = provenance[0]
-                            prov = getattr(first_item, "prov", None)
-                            if prov:
-                                page_number = getattr(prov[0], "page_no", None)
-                        except Exception:
-                            page_number = None
-
             bbox = None
+            docling_label = None
+
             if hasattr(chunk, "meta"):
-                bbox_candidate = getattr(chunk.meta, "bbox", None)
-                if bbox_candidate is not None:
-                    bbox = {
-                        "l": getattr(bbox_candidate, "l", None),
-                        "t": getattr(bbox_candidate, "t", None),
-                        "r": getattr(bbox_candidate, "r", None),
-                        "b": getattr(bbox_candidate, "b", None),
-                    }
+                if hasattr(chunk.meta, "headings"):
+                    headings = [str(item).strip() for item in (chunk.meta.headings or []) if str(item).strip()]
+
+                # Check for doc_items to infer strict type and get provenance
+                provenance_items = getattr(chunk.meta, "doc_items", [])
+                if provenance_items:
+                    first_item = provenance_items[0]
+                    docling_label = getattr(first_item, "label", None)
+                    if hasattr(docling_label, "value"):
+                        docling_label = docling_label.value
+
+                    prov = getattr(first_item, "prov", [])
+                    if prov:
+                        first_prov = prov[0]
+                        page_number = getattr(first_prov, "page_no", None)
+                        bbox_obj = getattr(first_prov, "bbox", None)
+                        if bbox_obj:
+                            bbox = {
+                                "l": getattr(bbox_obj, "l", 0.0),
+                                "t": getattr(bbox_obj, "t", 0.0),
+                                "r": getattr(bbox_obj, "r", 0.0),
+                                "b": getattr(bbox_obj, "b", 0.0),
+                            }
+
+                # Fallbacks for page_number if prov is missing
+                if page_number is None:
+                    for candidate_attr in ("page_number", "page_no"):
+                        candidate = getattr(chunk.meta, candidate_attr, None)
+                        if isinstance(candidate, int):
+                            page_number = candidate
+                            break
+
+                # Fallback for bbox if prov is missing
+                if bbox is None:
+                    bbox_candidate = getattr(chunk.meta, "bbox", None)
+                    if bbox_candidate is not None:
+                        bbox = {
+                            "l": getattr(bbox_candidate, "l", 0.0),
+                            "t": getattr(bbox_candidate, "t", 0.0),
+                            "r": getattr(bbox_candidate, "r", 0.0),
+                            "b": getattr(bbox_candidate, "b", 0.0),
+                        }
+
+            # Mapping Docling labels to our NodeTypes
+            if docling_label:
+                label_lower = str(docling_label).lower()
+                if label_lower in ("table",):
+                    node_type = NodeType.TABLE
+                elif label_lower in ("list_item", "list"):
+                    node_type = NodeType.LIST_ITEM
+                elif label_lower in ("caption",):
+                    node_type = NodeType.CAPTION
+                elif label_lower in ("footnote",):
+                    node_type = NodeType.FOOTNOTE
+                elif label_lower in ("picture", "image", "figure"):
+                    node_type = NodeType.IMAGE
+                elif label_lower in ("formula", "equation"):
+                    node_type = NodeType.FORMULA
+                elif label_lower in ("section_header", "page_header", "title"):
+                    node_type = NodeType.HEADING
+            else:
+                # Heuristics if label is missing
+                if "|" in raw_text and "\n|" in raw_text:
+                    node_type = NodeType.TABLE
+                elif raw_text.startswith("#"):
+                    node_type = NodeType.HEADING
+
+            if node_type == NodeType.IMAGE and not raw_text.strip():
+                if headings:
+                    raw_text = f"[Imagen en sección: {' > '.join(headings)}]"
+                else:
+                    raw_text = "[Imagen]"
 
             node = DocumentNode(
                 id=new_id(),

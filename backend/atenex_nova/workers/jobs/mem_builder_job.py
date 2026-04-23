@@ -51,6 +51,8 @@ class SegmentDocumentJobHandler(BaseJobHandler):
                 if existing_chunks:
                     return {"chunks_created": len(existing_chunks), "skipped": "already_segmented"}
 
+            from atenex_nova.application.policies.token_budget_policy import TokenBudgetPolicy
+
             async with audit.step(
                 run_id=job.id,
                 entity_type="document",
@@ -62,28 +64,26 @@ class SegmentDocumentJobHandler(BaseJobHandler):
                 chunks: list[Chunk] = []
                 current_text = ""
                 current_nodes: list[str] = []
-                current_metadata: dict[str, object] = {"heading_path": [], "pages": []}
-                min_tokens = 400
-                max_tokens = 800
+                current_metadata: dict[str, object] = {"heading_path": [], "page_numbers": [], "bboxes": [], "node_types": []}
+
+                policy = TokenBudgetPolicy()
 
                 for node in nodes:
                     text = node.normalized_text or node.raw_text
                     if not text.strip():
                         continue
 
-                    estimated_next_tokens = (len(current_text) + len(text)) // 4
+                    current_tokens = policy.estimate_tokens(current_text)
+                    next_node_tokens = policy.estimate_tokens(text)
                     heading_path = node.metadata.get("heading_path", []) if isinstance(node.metadata, dict) else []
-                    chunk_boundary = (
-                        node.node_type.value in {"heading", "table", "caption", "image"}
-                        or (estimated_next_tokens > max_tokens and current_nodes)
-                    )
-                    if chunk_boundary and current_nodes and (len(current_text) // 4) >= min_tokens:
+
+                    if policy.should_split(current_tokens, next_node_tokens, node.node_type.value) and current_nodes:
                         chunks.append(Chunk(
                             id=new_id(),
                             document_id=document_id,
                             text=current_text,
                             summary=current_text[:280],
-                            token_count=max(1, len(current_text) // 4),
+                            token_count=max(1, current_tokens),
                             node_ids=current_nodes,
                             metadata=current_metadata,
                         ))
@@ -91,23 +91,23 @@ class SegmentDocumentJobHandler(BaseJobHandler):
                         current_nodes = [node.id]
                         current_metadata = {
                             "heading_path": heading_path,
-                            "pages": [node.page_number] if node.page_number is not None else [],
+                            "page_numbers": [node.page_number] if node.page_number is not None else [],
                             "node_types": [node.node_type.value],
-                            "bbox": [node.bbox] if node.bbox else [],
+                            "bboxes": [node.bbox] if node.bbox else [],
                         }
                     else:
                         current_text += ("\n\n" if current_text else "") + text
                         current_nodes.append(node.id)
                         current_metadata.setdefault("heading_path", heading_path)
                         if node.page_number is not None:
-                            current_metadata.setdefault("pages", [])
-                            if node.page_number not in current_metadata["pages"]:
-                                current_metadata["pages"].append(node.page_number)
+                            current_metadata.setdefault("page_numbers", [])
+                            if node.page_number not in current_metadata["page_numbers"]:
+                                current_metadata["page_numbers"].append(node.page_number)
                         current_metadata.setdefault("node_types", [])
                         current_metadata["node_types"].append(node.node_type.value)
                         if node.bbox:
-                            current_metadata.setdefault("bbox", [])
-                            current_metadata["bbox"].append(node.bbox)
+                            current_metadata.setdefault("bboxes", [])
+                            current_metadata["bboxes"].append(node.bbox)
 
                 if current_nodes:
                     chunks.append(Chunk(
@@ -115,7 +115,7 @@ class SegmentDocumentJobHandler(BaseJobHandler):
                         document_id=document_id,
                         text=current_text,
                         summary=current_text[:280],
-                        token_count=max(1, len(current_text) // 4),
+                        token_count=max(1, policy.estimate_tokens(current_text)),
                         node_ids=current_nodes,
                         metadata=current_metadata,
                     ))
@@ -177,8 +177,24 @@ class EmbedDocumentJobHandler(BaseJobHandler):
                         dim=settings.embedding_dimensions,
                         required=settings.embeddings_required,
                     )
-                    texts = [c.text for c in chunks_to_embed]
-                    vectors = await embedder.embed(texts)
+
+                    document_nodes = {node.id: node for node in await node_repo.get_by_document(document_id)}
+
+                    texts_to_embed = []
+                    for c in chunks_to_embed:
+                        linked_nodes = [document_nodes[node_id] for node_id in c.node_ids if node_id in document_nodes]
+                        heading_path = []
+                        for node in linked_nodes:
+                            candidate_path = node.metadata.get("heading_path", []) if isinstance(node.metadata, dict) else []
+                            if candidate_path:
+                                heading_path = [str(item) for item in candidate_path]
+                                break
+                        context_str = f"Documento: {doc.title}"
+                        if heading_path:
+                            context_str += f" > Sección: {' > '.join(heading_path)}"
+                        texts_to_embed.append(f"{context_str}\n\n{c.text}")
+
+                    vectors = await embedder.embed(texts_to_embed)
 
                     import uuid
 
@@ -190,7 +206,6 @@ class EmbedDocumentJobHandler(BaseJobHandler):
                     sparse_encoder = StableSparseEncoder()
                     collection_name = f"collection_{doc.collection_id}"
                     await qdrant.init_collection(collection_name, embedder.embedding_dim)
-                    document_nodes = {node.id: node for node in await node_repo.get_by_document(document_id)}
 
                     vector_docs: list[QdrantDocument] = []
                     for chunk, vector in zip(chunks_to_embed, vectors, strict=False):
@@ -220,7 +235,7 @@ class EmbedDocumentJobHandler(BaseJobHandler):
                             "node_types": [node.node_type.value for node in linked_nodes],
                             "source_text": chunk.text,
                             "summary": chunk.summary,
-                            "bbox": bbox_candidates[0] if bbox_candidates else None,
+                            "bboxes": bbox_candidates,
                         }
                         await chunk_repo.update(chunk)
 
@@ -238,7 +253,7 @@ class EmbedDocumentJobHandler(BaseJobHandler):
                                 "sparse_ref": chunk.sparse_ref,
                                 "page_numbers": page_numbers,
                                 "heading_path": heading_path,
-                                "bbox": bbox_candidates[0] if bbox_candidates else None,
+                                "bboxes": bbox_candidates,
                             },
                             sparse_indices=sparse_indices,
                             sparse_values=sparse_values,

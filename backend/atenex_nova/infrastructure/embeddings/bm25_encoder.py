@@ -40,8 +40,8 @@ class StableSparseEncoder:
             denominator = frequency + self.k1 * (1 - self.b + self.b * doc_length / self.avg_dl)
             # Assuming average IDF of 3.0 for all terms as a simplistic approximation
             values.append(3.0 * numerator / denominator)
-        
-        sorted_pairs = sorted(zip(indices, values))
+
+        sorted_pairs = sorted(zip(indices, values, strict=False))
         if not sorted_pairs:
             return [], []
         return [p[0] for p in sorted_pairs], [p[1] for p in sorted_pairs]
@@ -54,8 +54,8 @@ class StableSparseEncoder:
         for token, frequency in counts.items():
             indices.append(hash_token(token))
             values.append(float(frequency))
-            
-        sorted_pairs = sorted(zip(indices, values))
+
+        sorted_pairs = sorted(zip(indices, values, strict=False))
         if not sorted_pairs:
             return [], []
         return [p[0] for p in sorted_pairs], [p[1] for p in sorted_pairs]

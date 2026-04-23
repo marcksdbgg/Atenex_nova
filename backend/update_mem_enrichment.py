@@ -1,7 +1,6 @@
-import os
 
 file_path = 'g:/Atenex/Atenex_nova/backend/atenex_nova/workers/jobs/memory_enrichment_job.py'
-with open(file_path, 'r', encoding='utf-8') as f:
+with open(file_path, encoding='utf-8') as f:
     content = f.read()
 
 content = content.replace(

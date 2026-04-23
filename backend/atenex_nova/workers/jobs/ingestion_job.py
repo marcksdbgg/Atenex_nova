@@ -73,6 +73,8 @@ class ParseDocumentJobHandler(BaseJobHandler):
                 ) as step:
                     parser = DoclingParserAdapter()
                     nodes = await parser.parse(str(resolved_source_path), document_id)
+                    if not nodes:
+                        raise ValueError("No extractable nodes found in document")
                     node_repo = SqlDocumentNodeRepository(session)
                     await node_repo.create_many(nodes)
                     doc.mark_parsed()

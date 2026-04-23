@@ -27,7 +27,11 @@ from atenex_nova.infrastructure.db.repositories.sql_proposition_repo import SqlP
 from atenex_nova.infrastructure.db.repositories.sql_query_repo import SqlQueryRepository
 from atenex_nova.infrastructure.db.repositories.sql_relation_repo import SqlRelationRepository
 from atenex_nova.infrastructure.db.repositories.sql_summary_repo import SqlSummaryRepository
-from atenex_nova.infrastructure.embeddings.bm25_encoder import BM25SparseEncoder, StableSparseEncoder, tokenize
+from atenex_nova.infrastructure.embeddings.bm25_encoder import (
+    BM25SparseEncoder,
+    StableSparseEncoder,
+    tokenize,
+)
 from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
 from atenex_nova.infrastructure.qdrant.qdrant_adapter import QdrantAdapter
 from atenex_nova.infrastructure.visual.colpali_adapter import ColPaliAdapter
