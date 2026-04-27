@@ -42,6 +42,7 @@ ml = [
     "docling>=2.0.0",
     "colpali-engine>=0.3.0",
     "torch>=2.3.0",
+    "fastembed>=0.2.7",
 ]
 dev = [
     "pytest>=8.2.0",

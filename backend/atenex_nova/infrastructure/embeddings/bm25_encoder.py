@@ -19,46 +19,60 @@ def hash_token(token: str) -> int:
     return int(hashlib.md5(token.encode("utf-8")).hexdigest()[:8], 16)
 
 
+import logging
+logger = logging.getLogger(__name__)
+
 class StableSparseEncoder:
     """Stable sparse encoder for persisting sparse vectors.
-    Uses term frequency with BM25-like saturation, assuming fixed document length."""
+    Uses SPLADE via transformers to generate semantic sparse vectors."""
+    
+    _instance = None
+    _model = None
+    _tokenizer = None
 
-    def __init__(self, k1: float = 1.5, b: float = 0.75):
-        self.k1 = k1
-        self.b = b
-        self.avg_dl = 200.0
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(self, model_name: str = "prithivida/Splade_PP_en_v1"):
+        if self._model is not None:
+            return
+        logger.info("Initializing SpladeSparseEncoder with model: %s", model_name)
+        try:
+            import torch
+            from transformers import AutoModelForMaskedLM, AutoTokenizer
+            self._device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.__class__._tokenizer = AutoTokenizer.from_pretrained(model_name)
+            self.__class__._model = AutoModelForMaskedLM.from_pretrained(model_name).to(self._device)
+            self.__class__._model.eval()
+        except ImportError as e:
+            logger.warning("Failed to initialize SPLADE: %s. Using mock fallback.", e)
+            self.__class__._model = None
+            self.__class__._tokenizer = None
+
+    def _encode(self, text: str) -> tuple[list[int], list[float]]:
+        if self._model is None or self._tokenizer is None:
+            return [], []
+        import torch
+        inputs = self._tokenizer(text, return_tensors="pt", truncation=True, max_length=512).to(self._device)
+        with torch.no_grad():
+            outputs = self._model(**inputs)
+        vec = torch.max(
+            torch.log(1 + torch.relu(outputs.logits)) * inputs.attention_mask.unsqueeze(-1),
+            dim=1
+        )[0].squeeze()
+        indices = vec.nonzero().squeeze(-1)
+        values = vec[indices]
+        if indices.dim() == 0:
+            return [indices.item()], [values.item()]
+        return indices.tolist(), values.tolist()
 
     def encode_document(self, text: str) -> tuple[list[int], list[float]]:
-        tokens = tokenize(text)
-        counts = Counter(tokens)
-        doc_length = max(1, len(tokens))
-        indices = []
-        values = []
-        for token, frequency in counts.items():
-            indices.append(hash_token(token))
-            numerator = frequency * (self.k1 + 1)
-            denominator = frequency + self.k1 * (1 - self.b + self.b * doc_length / self.avg_dl)
-            # Assuming average IDF of 3.0 for all terms as a simplistic approximation
-            values.append(3.0 * numerator / denominator)
-
-        sorted_pairs = sorted(zip(indices, values, strict=False))
-        if not sorted_pairs:
-            return [], []
-        return [p[0] for p in sorted_pairs], [p[1] for p in sorted_pairs]
+        return self._encode(text)
 
     def encode_query(self, text: str) -> tuple[list[int], list[float]]:
-        tokens = tokenize(text)
-        counts = Counter(tokens)
-        indices = []
-        values = []
-        for token, frequency in counts.items():
-            indices.append(hash_token(token))
-            values.append(float(frequency))
-
-        sorted_pairs = sorted(zip(indices, values, strict=False))
-        if not sorted_pairs:
-            return [], []
-        return [p[0] for p in sorted_pairs], [p[1] for p in sorted_pairs]
+        return self._encode(text)
 
 
 @dataclass

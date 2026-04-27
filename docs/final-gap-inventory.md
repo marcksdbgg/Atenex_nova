@@ -477,7 +477,7 @@ Criterio de cierre:
 - [ ] Consolidar contratos de respuesta entre endpoints de inspección y answering. `Necesaria para hardening`
 
 ### Ingesta estructural
-- [ ] Cerrar la política de chunking estructural por presupuesto de tokens y registrarla como contrato explícito. `Bloqueante para baseline`
+- [x] Cerrar la política de chunking estructural por presupuesto de tokens y registrarla como contrato explícito. `Bloqueante para baseline`
 - [ ] Añadir fixtures de documentos complejos con tablas, captions, footnotes, imágenes y layouts densos. `Bloqueante para baseline`
 - [ ] Validar trazabilidad de nodo fuente hacia chunk, cita y page viewer. `Bloqueante para baseline`
 
@@ -486,9 +486,9 @@ Criterio de cierre:
 - [ ] Añadir verificaciones de integridad de metadata por tipo de memoria. `Necesaria para hardening`
 
 ### Retrieval / routing / reranking
-- [ ] Implementar sparse persisted real y conectarlo al retrieval online. `Bloqueante para baseline`
-- [ ] Implementar reranker real con fallback por perfil de hardware. `Bloqueante para baseline`
-- [ ] Endurecer graph expansion con relaciones tipadas y límites por modo. `Bloqueante para baseline`
+- [x] Implementar sparse persisted real y conectarlo al retrieval online. `Bloqueante para baseline`
+- [x] Implementar reranker real con fallback por perfil de hardware. `Bloqueante para baseline`
+- [x] Endurecer graph expansion con relaciones tipadas y límites por modo. `Bloqueante para baseline`
 - [ ] Añadir benchmarks comparativos de ranking por ruta. `Necesaria para hardening`
 - [ ] Documentar umbrales y políticas del evidence pack por modo. `Necesaria para hardening`
 

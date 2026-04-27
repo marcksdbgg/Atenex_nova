@@ -211,8 +211,18 @@ class RetrievalOrchestrator:
                     stage="expand_graph",
                     context={"seed_propositions": min(len(proposition_hits), 5)},
                 ) as step:
+                    allowed_relations = None
+                    if intent.value == "argumentative":
+                        allowed_relations = ["contradicts", "supports"]
+                    elif intent.value == "factual":
+                        allowed_relations = ["defines", "elaborates", "appears_in"]
+                        
                     seed_ids = [hit.source_id for hit in proposition_hits[:5]]
-                    expanded = await relation_repo.expand(seed_ids or [prop.id for prop in propositions[:3]], depth=2)
+                    expanded = await relation_repo.expand(
+                        seed_ids or [prop.id for prop in propositions[:3]], 
+                        depth=2, 
+                        allowed_relations=allowed_relations
+                    )
                     step.metrics(edge_count=len(expanded))
                     for edge in expanded:
                         hits.append(
@@ -497,12 +507,24 @@ class RetrievalOrchestrator:
         limit: int,
     ) -> list[SearchHit]:
         query_text = query.normalized_text or query.text
-        for hit in hits:
+        
+        from atenex_nova.infrastructure.embeddings.reranker_adapter import RerankerAdapter
+        reranker = RerankerAdapter()
+        pairs = [(query_text, f"{hit.title} {hit.snippet}") for hit in hits]
+        neural_scores = reranker.predict(pairs)
+        
+        for i, hit in enumerate(hits):
             overlap = self._lexical_overlap(query_text, f"{hit.title} {hit.snippet}")
             phrase_bonus = 0.15 if route_mode == "exact" and query_has_phrase(hit.snippet, hit.title) else 0.0
             contradiction_bonus = 0.12 if route_mode == "argumentative" and self._contains_contradiction(hit.snippet) else 0.0
             metadata_bonus = 0.08 if (hit.metadata or {}).get("heading_path") else 0.0
-            hit.score += overlap * 0.35 + phrase_bonus + contradiction_bonus + metadata_bonus
+            
+            if neural_scores:
+                base_score = neural_scores[i]
+                hit.score = base_score + (hit.score * 0.1) + (overlap * 0.2) + phrase_bonus + contradiction_bonus + metadata_bonus
+            else:
+                hit.score += overlap * 0.35 + phrase_bonus + contradiction_bonus + metadata_bonus
+                
             hit.score *= self._route_source_weight(route_mode, hit.source_type)
 
         ranked = sorted(hits, key=lambda item: item.score, reverse=True)

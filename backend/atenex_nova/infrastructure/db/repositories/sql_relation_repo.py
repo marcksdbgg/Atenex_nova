@@ -34,7 +34,12 @@ class SqlRelationRepository:
         )
         return [self._to_entity(model) for model in result.scalars().all()]
 
-    async def expand(self, seed_ids: list[str], depth: int = 2) -> list[RelationEdge]:
+    async def expand(
+        self,
+        seed_ids: list[str],
+        depth: int = 2,
+        allowed_relations: list[str] | None = None
+    ) -> list[RelationEdge]:
         frontier = list(seed_ids)
         seen: set[str] = set(seed_ids)
         expanded: list[RelationEdge] = []
@@ -42,11 +47,11 @@ class SqlRelationRepository:
         for _ in range(max(1, depth)):
             if not frontier:
                 break
-            result = await self._session.execute(
-                select(RelationEdgeModel).where(
-                    RelationEdgeModel.source_id.in_(frontier)
-                )
-            )
+            query = select(RelationEdgeModel).where(RelationEdgeModel.source_id.in_(frontier))
+            if allowed_relations:
+                query = query.where(RelationEdgeModel.relation.in_(allowed_relations))
+                
+            result = await self._session.execute(query)
             edges = [self._to_entity(model) for model in result.scalars().all()]
             expanded.extend(edges)
             frontier = []

@@ -4,9 +4,18 @@
 - Use [docs/baseline.md](docs/baseline.md) for the product contract and rationale.
 - Use [docs/final-gap-inventory.md](docs/final-gap-inventory.md) as the canonical inventory of the real remaining gap against the baseline.
 - Use [docs/plan_restante.md](docs/plan_restante.md) only as historical context; if it differs from the final gap inventory, the inventory prevails.
-- Use [README.md](README.md) for quick start and runtime commands.
+- Use [README.md](README.md) for the live repository snapshot, quick start, and current verification status.
 - Do not duplicate those docs here; link to them instead.
-- [frontend/README.md](frontend/README.md) is the Vite template and is not operationally authoritative.
+- [frontend/README.md](frontend/README.md) is the Vite scaffold template and is not operationally authoritative.
+
+## Current Verified Snapshot
+- Backend unit tests: 43 passed in the current checkout.
+- Frontend build: passed.
+- Frontend lint: passed.
+- Backend `ruff`: currently reports 19 issues in the checkout.
+- Backend `mypy`: currently reports 14 errors in the checkout.
+- The current workspace uses a Windows venv at `backend/.venv/`; prefer `backend/.venv/Scripts/python.exe` for backend commands when the global `python` alias points to the Microsoft Store stub.
+- The canonical gap inventory snapshot is still [docs/final-gap-inventory.md](docs/final-gap-inventory.md); treat it as a gap ledger, not a live test log.
 
 ## Documentation To Read First
 - For backend or architecture work, read [docs/baseline.md](docs/baseline.md) and [docs/final-gap-inventory.md](docs/final-gap-inventory.md) before editing code.
@@ -16,35 +25,39 @@
 - For frontend structure and API contracts, also read [docs/architecture-frontend.md](docs/architecture-frontend.md) and [docs/api-endpoints.md](docs/api-endpoints.md).
 - For setup, run commands, and local services, read [README.md](README.md).
 - For UI work, check [design-system/atenex-nova/MASTER.md](design-system/atenex-nova/MASTER.md) first and then any page override under [design-system/atenex-nova/pages/](design-system/atenex-nova/pages/).
-- Keep in mind that `frontend/README.md` is only the scaffold template.
 
-## Code Style
+## Architecture and Entry Points
 - Preserve the modular monolith + hexagonal layering: `presentation` -> `application` -> `domain` -> `infrastructure` -> `workers` -> `evaluation` -> `shared`.
 - Use absolute imports from `atenex_nova.*`.
-- Keep changes small and local; prefer existing patterns over introducing new abstractions.
-- Do not let routers call infrastructure directly; go through application services and orchestrators.
+- API entry point: [backend/atenex_nova/main.py](backend/atenex_nova/main.py).
+- Dependency wiring: [backend/atenex_nova/dependencies.py](backend/atenex_nova/dependencies.py).
+- Worker entry point: [backend/atenex_nova/workers/main.py](backend/atenex_nova/workers/main.py).
+- Worker dispatcher: [backend/atenex_nova/workers/runner.py](backend/atenex_nova/workers/runner.py).
+- Retrieval changes usually touch [backend/atenex_nova/application/orchestrators/retrieval_orchestrator.py](backend/atenex_nova/application/orchestrators/retrieval_orchestrator.py), [backend/atenex_nova/infrastructure/embeddings/bm25_encoder.py](backend/atenex_nova/infrastructure/embeddings/bm25_encoder.py), and the embedding / visual adapters together.
+- Frontend routes live in [frontend/src/App.tsx](frontend/src/App.tsx) and page implementations in [frontend/src/pages/Pages.tsx](frontend/src/pages/Pages.tsx).
+
+## Implementation Notes
+- Current backend flow is a modular monolith with FastAPI routers over application services and worker-driven ingestion jobs.
+- Current retrieval is hybrid: dense EmbeddingGemma, local sparse/BM25, reranking, and optional visual retrieval through ColPali-style adapters.
+- Current query UX is chat-first and includes history, evidence, citations, document drill-down, and page viewers.
+- Storage paths remain: uploads under `backend/storage/uploads/{collection_id}/{document_id}/{filename}` and visual page cache under `backend/storage/visual_pages/`.
+- Qdrant collections are namespaced per corpus for chunks, propositions, summaries, and visual pages.
+- If a change affects product behavior, architecture, or the declared remaining gap, update [README.md](README.md) and [docs/final-gap-inventory.md](docs/final-gap-inventory.md) together.
 
 ## Build and Test
 - Backend install: `pip install -e ".[dev]"` from `backend/`.
-- If your task touches parsing/embeddings/visual retrieval, install ML deps too: `pip install -e ".[all]"`.
-- Backend tests: `pytest tests -q`.
-- Backend quality checks: `ruff check .` and `mypy`.
+- If the task touches parsing, embeddings, or visual retrieval, install ML deps too: `pip install -e ".[all]"`.
+- Backend tests: `backend/.venv/Scripts/python.exe -m pytest tests -q` on Windows, or `pytest tests -q` when the environment already exposes the tools.
+- Backend quality checks: `backend/.venv/Scripts/python.exe -m ruff check .` and `backend/.venv/Scripts/python.exe -m mypy atenex_nova` on Windows.
 - Run API: `uvicorn atenex_nova.main:app --reload --port 8000`.
 - Run worker: `python -m atenex_nova.workers.main`.
 - Frontend dev: `npm run dev`.
 - Frontend checks: `npm run build` (includes `tsc -b`) and `npm run lint`.
 
-## Architecture and Entry Points
-- API entry point: [backend/atenex_nova/main.py](backend/atenex_nova/main.py).
-- Dependency wiring: [backend/atenex_nova/dependencies.py](backend/atenex_nova/dependencies.py).
-- Worker entry point: [backend/atenex_nova/workers/main.py](backend/atenex_nova/workers/main.py).
-- Retrieval changes usually touch [backend/atenex_nova/application/orchestrators/retrieval_orchestrator.py](backend/atenex_nova/application/orchestrators/retrieval_orchestrator.py), [backend/atenex_nova/infrastructure/embeddings/bm25_encoder.py](backend/atenex_nova/infrastructure/embeddings/bm25_encoder.py), and the embedding/visual adapters together.
-- Frontend routes live in [frontend/src/App.tsx](frontend/src/App.tsx) and page implementations in [frontend/src/pages/Pages.tsx](frontend/src/pages/Pages.tsx).
-
 ## Conventions and Pitfalls
-- Store uploads in `backend/storage/uploads/{collection_id}/{document_id}/{filename}` and visual page cache in `backend/storage/visual_pages/`.
-- Local services: Qdrant runs on `6333/6334`; PostgreSQL runs on `5432` only when started with `docker compose --profile prod up -d`; default LLM runtime is Ollama on `11434` with `gemma4:e4b` (llama.cpp on `8080` is optional alternative).
-- The backend CORS setup already allows localhost and 127.0.0.1 on ports 5173 and 5174.
+- Do not let routers call infrastructure directly; go through application services and orchestrators.
 - When changing jobs, review [backend/atenex_nova/workers/main.py](backend/atenex_nova/workers/main.py) and [backend/atenex_nova/workers/runner.py](backend/atenex_nova/workers/runner.py) together.
 - For frontend API behavior and fallback rules, check [frontend/src/services/api.ts](frontend/src/services/api.ts).
-- Update [docs/final-gap-inventory.md](docs/final-gap-inventory.md) or [docs/baseline.md](docs/baseline.md) if a change affects product behavior, architecture, or the declared remaining gap.
+- Local services: Qdrant runs on `6333/6334`; PostgreSQL runs on `5432` only when started with `docker compose --profile prod up -d`; default LLM runtime is Ollama on `11434` with `gemma4:e4b` (llama.cpp on `8080` is an optional alternative).
+- The backend CORS setup already allows localhost and 127.0.0.1 on ports 5173 and 5174.
+- Keep changes small and local; prefer existing patterns over introducing new abstractions.
