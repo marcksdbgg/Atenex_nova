@@ -2442,8 +2442,45 @@ h6,
   min-height: 120px;
 }
 
+.query-page-card__asset {
+  border: 1px solid rgba(120, 76, 43, 0.12);
+  border-radius: var(--radius-md);
+  background: rgba(248, 241, 228, 0.72);
+  overflow: hidden;
+}
+
+.query-page-card__asset img {
+  display: block;
+  width: 100%;
+  max-height: 320px;
+  object-fit: contain;
+  background: #fff;
+}
+
+.query-page-card__unavailable {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(181, 66, 60, 0.24);
+  background: rgba(255, 245, 242, 0.78);
+  color: var(--color-error);
+  line-height: var(--line-height-relaxed);
+  overflow-wrap: anywhere;
+}
+
+.query-page-card__unavailable span {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-xs);
+}
+
 .query-evidence {
   background: rgba(255, 255, 255, 0.78);
+}
+
+.query-evidence--graph {
+  border-left: 4px solid var(--color-warning) !important;
+  background: rgba(245, 158, 11, 0.04) !important;
 }
 
 .query-evidence__title-wrap {

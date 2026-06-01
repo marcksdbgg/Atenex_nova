@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from pathlib import Path
+from typing import Any
 
 from atenex_nova.domain.entities.document_node import DocumentNode
 from atenex_nova.domain.value_objects.identifiers import NodeType, new_id
@@ -14,9 +15,12 @@ class DoclingParserAdapter:
     """Adapter for Docling document parser using HierarchicalChunker."""
 
     def __init__(self) -> None:
+        self.converter: Any | None = None
+        self.chunker: Any | None = None
         try:
             from docling.document_converter import DocumentConverter
             from docling_core.transforms.chunker.hierarchical_chunker import HierarchicalChunker
+
             self.converter = DocumentConverter()
             self.chunker = HierarchicalChunker()
             logger.info("DoclingParserAdapter initialized")
@@ -106,8 +110,9 @@ class DoclingParserAdapter:
                 if provenance_items:
                     first_item = provenance_items[0]
                     docling_label = getattr(first_item, "label", None)
-                    if hasattr(docling_label, "value"):
-                        docling_label = docling_label.value
+                    label_value = getattr(docling_label, "value", None)
+                    if label_value is not None:
+                        docling_label = label_value
 
                     prov = getattr(first_item, "prov", [])
                     if prov:

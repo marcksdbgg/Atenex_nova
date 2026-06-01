@@ -2,12 +2,14 @@
 
 ## Base usada para esta auditoría
 
-Esta auditoría se apoya en cuatro fuentes que, juntas, sí fijan el estado técnico útil del sistema:
+Esta auditoría se apoya en cinco fuentes que, juntas, sí fijan el estado técnico útil del sistema:
 
 1. **Plan/base RAG**: plantea que Atenex Nova no debe ser “single prompt over top-k chunks”, sino un sistema de memoria documental multicapa, local-first, con `query routing` antes de generación, memoria por estructura/pasajes/proposiciones/resúmenes/páginas visuales y arquitectura hexagonal por capas. fileciteturn4file0
 2. **README**: define el stack operativo declarado, los modos de consulta, el monolito modular con motores locales y la estructura general del proyecto. fileciteturn4file3
 3. **AGENTS**: fija la precedencia documental, las reglas de arquitectura, los entry points y dónde viven los componentes críticos del backend y frontend. fileciteturn4file2
 4. **Inventario final de brechas**: es la fuente canónica del estado real del backend y del gap frente a `baseline.md`; además afirma explícitamente que el snapshot sí inspeccionó orquestadores, policies, routers, repositorios SQL, workers, tests, frontend y prompts. fileciteturn4file1
+
+5. **Contrato OpenAPI/documentación**: `docs/api-endpoints.md` lista la superficie HTTP pública y un test unitario compara esas rutas contra el OpenAPI generado por FastAPI para detectar drift.
 
 ## Hallazgo rector
 
@@ -386,10 +388,10 @@ El README contiene una vista útil, pero demasiado general. fileciteturn4f
 flowchart TD
     subgraph PRESENTATION
         R1[Collections router]
-        R2[Documents router]
+        R2[Documents drill-down router]
         R3[Queries router]
         R4[Answers router]
-        R5[Health / Jobs / Evaluation routers]
+        R5[Health / Jobs / Observability / Evaluation routers]
     end
 
     subgraph APPLICATION
@@ -428,6 +430,12 @@ El inventario marca como brecha alta que **ningún router debería acceder a inf
 
 ---
 
+### Superficie HTTP verificada
+
+La superficie pública actual no se debe reconstruir desde memoria ni desde el roadmap: queda anclada a `docs/api-endpoints.md` y al OpenAPI generado por `atenex_nova.main:create_app`. El contrato ligero cubre los grupos `health`, `collections`, `documents`, `queries`, `answers`, `jobs`, `observability` y `evaluation`, incluyendo `/health/dependencies` y el drill-down documental `/documents/{document_id}/nodes`, `/structure`, `/chunks`, `/propositions` y `/pages/{page_number}`. Este contrato pasa en aislamiento, aunque los gates globales de unit tests, frontend build/lint, `ruff` y `mypy` siguen abiertos en el checkout actual.
+
+---
+
 ## 11) Gap real resumido en una sola lámina
 
 ```mermaid
@@ -440,7 +448,7 @@ flowchart LR
         I5[Answer planning]
         I6[Verificación en dos pasos]
         I7[Workspace + inspector + viewer]
-        I8[Health checks]
+        I8[Health/dependencies + contrato API]
     end
 
     subgraph PARCIAL[Parcial / por cerrar]

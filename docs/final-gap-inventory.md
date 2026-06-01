@@ -3,7 +3,7 @@
 ## Propósito y regla de precedencia
 Este documento reemplaza a cualquier inventario implícito del gap contra `baseline.md`.
 
-Si `plan_restante.md` y este archivo difieren, prevalece este archivo.
+Este documento describe el estado real del repositorio frente a [docs/baseline.md](docs/baseline.md).
 
 Su propósito es describir el estado real del repositorio frente a [docs/baseline.md](docs/baseline.md), sin lenguaje aspiracional, sin mezclar intención con evidencia y sin dejar trabajo pendiente implícito. La lectura de este archivo debe bastar para saber:
 
@@ -14,7 +14,7 @@ Su propósito es describir el estado real del repositorio frente a [docs/baselin
 - qué validaciones faltan antes de declarar el repo completo.
 
 ## Snapshot real del repositorio
-Fecha del snapshot: `2026-04-21`.
+Fecha del snapshot: `2026-05-10`.
 
 Fuentes inspeccionadas para este snapshot:
 
@@ -25,6 +25,8 @@ Fuentes inspeccionadas para este snapshot:
 - `docs/architecture-backend.md`
 - `docs/architecture-frontend.md`
 - `docs/jobs-and-workers.md`
+- OpenAPI generado desde `atenex_nova.main:create_app`
+- `backend/tests/unit/test_openapi_documentation_contract.py`
 - backend: orquestadores, policies, routers, repositorios SQL, workers y tests
 - frontend: `pages`, `components`, `services`, `types`
 - prompts versionados bajo `prompts/`
@@ -33,12 +35,13 @@ Comandos y checks usados para validar el snapshot:
 
 - `git status --short`
 - `Get-ChildItem docs`
-- `pytest tests/unit -q` en `backend/` -> `36 passed`
-- `npm run build` en `frontend/` -> `passed`
-- `npm run lint` en `frontend/` -> `passed`
+- `pytest tests/unit/test_openapi_documentation_contract.py -q` en `backend/` -> `1 passed`
+- `pytest tests/unit -q` en `backend/` -> `1 failed, 43 passed`
+- `npm run build` en `frontend/` -> `failed`
+- `npm run lint` en `frontend/` -> `failed`
 - validaciones previas del hilo para integración fase 6/7 -> `skipped` por dependencias externas no activas
-- `ruff check .` en `backend/` -> `passed`
-- `mypy atenex_nova` en `backend/` -> `passed`
+- `ruff check .` en `backend/` -> `6 issues`
+- `mypy atenex_nova` en `backend/` -> `5 errors`
 
 Estado real por subsistema:
 
@@ -48,16 +51,15 @@ Estado real por subsistema:
 - Retrieval/routing/reranking: el retrieval ya usa Qdrant como fuente principal dense y combina sparse local, pero el sparse persisted real, el reranking fuerte y la expansión de grafo siguen por debajo del baseline.
 - Answering/verificación/citas: ya hay planificación, verificación en dos pasos, regeneración única y persistencia de evidencia; todavía faltan garantías más duras para grounding estricto.
 - Ruta visual: existe indexación y consumo visual, con assets de página y viewer, pero la política strict y la cobertura de render siguen parciales.
-- Frontend: hay workspace de consulta, inspector documental, citas, visualización de evidencia y diagnóstico; la experiencia ya es operativa, pero falta cierre de aceptación completa y refinamiento de estados límite.
+- Frontend: hay workspace de consulta, inspector documental, citas, visualización de evidencia y diagnóstico; la experiencia ya es operativa, pero el build actual falla por contrato de evaluación y el lint falla en `PageViewer`.
 - Evaluación: existe infraestructura, pero no hay evidencia de un set completo de goldens por todos los modos con cierre reproducible.
 - Observabilidad y health: `/health/dependencies` ya expone dependencias críticas, pero no reemplaza una validación final con runtimes locales activos.
-- Calidad del código y documentación: `pytest`, `build`, `lint`, `ruff` y `mypy` pasan en el snapshot actual; la deuda principal se concentra en integración/e2e con dependencias activas y en brechas funcionales del baseline.
+- Calidad del código y documentación: el contrato OpenAPI-vs-docs pasa, pero el suite unitario completo, `npm run build`, `npm run lint`, `ruff` y `mypy` todavía reportan deuda. La superficie HTTP queda anclada por un test ligero que compara OpenAPI contra `docs/api-endpoints.md`.
 
 Hechos documentales relevantes del snapshot:
 
-- `docs/plan.md` no está presente en el worktree actual.
-- `docs/plan_restante.md` tampoco estaba presente en el worktree al momento del snapshot y se recrea como stub histórico en esta pasada.
-- Por lo tanto, antes de esta actualización no existía un documento canónico vigente que cerrara el gap real contra `baseline.md`.
+- Se han removido las referencias a `docs/plan.md` y `docs/plan_restante.md` debido a que no están presentes en el worktree actual.
+- `docs/api-endpoints.md` ahora lista la superficie pública completa y queda protegido por un contrato OpenAPI-vs-documentación.
 
 ## Matriz de cumplimiento contra baseline.md
 
@@ -88,19 +90,20 @@ Hechos documentales relevantes del snapshot:
 | Persistencia rica en chunks/nodes | `page_number`, `bbox`, `heading_path`, `node_ids`, `chunk_type` y referencias utilitarias | Hay metadata útil, pero no toda la esperada está cerrada como contrato uniforme | Parcial | Falta homogeneidad y cobertura total de campos entre memorias | Normalizar DTOs, modelos y migraciones para metadata completa | Alta |
 | Ruta visual strict | La ruta visual debe fallar si falta evidencia visual suficiente en strict mode | Hay ruta visual funcional y viewer | Parcial | La política strict del baseline no está cerrada como regla dura | Implementar strict mode verificable y tests dedicados | Alta |
 | Page assets reales | Render de páginas reales desde PDF/imagen y no solo placeholders | Hay assets locales y page viewer | Parcial | No hay evidencia de cobertura total para todos los orígenes ni de eliminación completa de fallbacks | Cerrar pipeline de render por formato y documentar fallback exacto | Media |
-| Endpoints de inspección documental | `/documents/{id}/structure`, `/chunks`, `/propositions`, `/pages/{page}` | Implementados | Completo | Sin gap principal | Mantener compatibilidad y tests | Media |
+| Endpoints de inspección documental | `/documents/{id}/nodes`, `/structure`, `/chunks`, `/propositions`, `/pages/{page}` | Implementados y documentados contra OpenAPI | Completo | Sin gap principal | Mantener compatibilidad y el contrato OpenAPI-vs-docs | Media |
 | Workspace de consulta en frontend | Superficie principal de query con respuesta, evidencia y diagnósticos | Implementado | Completo | Sin gap principal | Afinar estados y aceptación e2e | Media |
 | Inspector documental en frontend | Drill-down real a estructura/chunks/propositions/pages | Implementado | Completo | Sin gap principal | Añadir cobertura de smoke/e2e | Media |
 | Route diagnostics y evidence trace en UI | Mostrar ruta usada, verificación y evidencia asociada | Implementado en buena parte de la UI | Parcial | La información existe pero no está cerrada como experiencia completa en todos los estados | Completar estados vacíos, errores y conflictos de evidencia | Media |
 | Evaluación formal por modos | Golden sets y runs reproducibles por `exact`, `factual_local`, `multi_hop`, `global`, `argumentative`, `visual` | Existe infraestructura de evaluación, no cierre demostrado de todos los modos | Parcial | Faltan datasets/runs de aceptación que cubran todo el baseline | Completar golden sets, runners y criterio de aprobación por modo | Alta |
 | Health/dependencies ampliado | Reporte de `llm`, `qdrant`, `embeddings`, `docling`, `visual` | Implementado | Completo | Sin gap funcional principal | Validar con runtimes activos como parte del cierre | Media |
 | Exportes consistentes | Exportes de respuesta y evidencia sin perder grounding | Existen exportes base | Parcial | No hay evidencia de cierre completo con metadata enriquecida nueva | Verificar/exportar con citations y evidence trace completos | Media |
-| Backend unit tests | Cobertura mínima del núcleo | `36 passed` en snapshot | Completo | Sin gap inmediato en este check | Extender cobertura a gaps abiertos | Media |
+| OpenAPI/docs contract | Detección de drift entre rutas FastAPI y documentación pública | `1 passed` en snapshot | Completo | Sin gap inmediato en este check | Mantenerlo como guardia de documentación | Media |
+| Backend unit tests | Cobertura mínima del núcleo | `1 failed, 43 passed` en snapshot | Parcial | `AnswerOrchestrator` compone evidencia pero no produce citas en el test actual | Corregir binding/generación de citas o ajustar el contrato si cambió de forma intencional | Alta |
 | Backend integration tests | Validación real de pipelines con dependencias externas | Hay tests, pero parte relevante se salta si faltan runtimes | Parcial | No hay aprobación integral con dependencias activas | Ejecutar integración con runtimes locales activos y fijar criterio de paso | Alta |
-| Frontend build | Build tipado estable | `npm run build` pasa | Completo | Sin gap inmediato | Mantener en CI | Media |
-| Frontend lint | Lint estable | `npm run lint` pasa | Completo | Sin gap inmediato | Mantener en CI | Media |
-| Ruff global | Calidad estática backend | `ruff check .` pasa | Completo | Sin gap activo en lint backend | Mantener gate en CI y evitar regresiones | Media |
-| Mypy global | Tipado estricto backend | `mypy atenex_nova` pasa | Completo | Sin gap activo de tipado en el alcance actual | Mantener gate en CI y endurecer gradualmente módulos hoy excluidos por override explícito | Media |
+| Frontend build | Build tipado estable | `npm run build` falla | Deuda técnica | `Pages.tsx` usa `run.cases`, campo ausente en `EvaluationRunResponse` | Alinear contrato frontend/backend de evaluation runs | Alta |
+| Frontend lint | Lint estable | `npm run lint` falla | Deuda técnica | `PageViewer.tsx` dispara `react-hooks/set-state-in-effect` | Ajustar el efecto sin cambiar UX | Alta |
+| Ruff global | Calidad estática backend | `ruff check .` reporta 6 issues | Deuda técnica | Hay deuda activa de formato/imports en backend | Resolver issues y dejar el gate verde | Alta |
+| Mypy global | Tipado estricto backend | `mypy atenex_nova` reporta 5 errors | Deuda técnica | Hay deuda activa de tipado en Qdrant, embeddings y visual adapter | Resolver errores y dejar el gate verde | Alta |
 | Documentación maestra vigente | Documentación del repo alineada al estado real | `final-gap-inventory.md` adoptado como canon, `plan_restante.md` preservado como histórico y referencias activas a `plan.md` removidas | Completo | Sin referencia operativa rota detectada | Mantener revisión documental por cambio relevante | Media |
 
 ## Brechas por subsistema
@@ -390,30 +393,39 @@ Criterio de cierre:
 ### Calidad de código / tipado / tests / documentación
 Estado actual real:
 
-- Unit tests backend, build frontend y lint frontend están verdes.
-- `ruff` y `mypy` están verdes en el alcance actual.
-- La documentación maestra ya quedó alineada con el worktree actual.
+- El contrato OpenAPI-vs-documentación pasa en aislamiento.
+- El suite unitario backend completo no está verde: reporta 1 fallo y 43 tests pasando.
+- `npm run build` y `npm run lint` del frontend no están verdes.
+- `ruff` y `mypy` no están verdes en el alcance actual: reportan 6 issues y 5 errores respectivamente.
+- La documentación maestra queda alineada con el worktree actual y la superficie HTTP tiene contrato ligero contra OpenAPI.
 
 Qué cumple:
 
-- `pytest tests/unit -q` pasa.
-- `npm run build` pasa.
-- `npm run lint` pasa.
-- `ruff check .` pasa.
-- `mypy atenex_nova` pasa.
+- `pytest tests/unit/test_openapi_documentation_contract.py -q` pasa.
+- `docs/api-endpoints.md` coincide con el OpenAPI generado por FastAPI.
 
 Qué no cumple:
 
+- `pytest tests/unit -q` falla en `test_compose_includes_all_selected_evidence_in_prompt`.
+- `npm run build` falla por el contrato de `EvaluationRunResponse`.
+- `npm run lint` falla por `PageViewer.tsx`.
 - Faltan pruebas de integración con dependencias activas y e2e críticos cerrados.
 - La validación de cierre completo sigue incompleta por dependencia de runtimes externos activos en aceptación final.
+- `ruff check .` y `mypy atenex_nova` siguen pendientes.
 
 Defectos concretos:
 
 - La integración y e2e aún no están aprobados con todos los runtimes activos requeridos por baseline.
+- El suite unitario tiene un fallo en citas vacías de `AnswerOrchestrator`.
+- El frontend no tiene build/lint verde en el checkout actual.
+- Hay deuda estática activa de lint y tipado en backend.
 
 Trabajo exacto pendiente:
 
+- Resolver el fallo unitario de `AnswerOrchestrator`.
+- Resolver build y lint frontend.
 - Ejecutar integración/e2e completos.
+- Resolver `ruff` y `mypy`.
 - Mantener este documento como inventario canónico.
 
 Criterio de cierre:
@@ -450,7 +462,7 @@ Criterio de cierre:
   Corrección esperada: cerrar benchmarks reproducibles con score mínimo por ruta.
 
 ### Comportamiento erróneo
-- No se registran defectos de comportamiento erróneo activos en documentación maestra ni en gates estáticos (`ruff`/`mypy`) para este snapshot.
+- No se registran defectos de comportamiento erróneo activos en la documentación maestra para este snapshot; los gates de unit tests, frontend build/lint, `ruff` y `mypy` siguen como deuda técnica abierta.
 
 ### Contratos inconsistentes
 - Síntoma: no toda la metadata de grounding está normalizada del mismo modo entre chunks, nodos, answers y citas.
@@ -464,10 +476,10 @@ Criterio de cierre:
   Corrección esperada: consolidar tipos, mappers y componentes.
 
 ### Deuda estática global
-- Síntoma: no aplica en el snapshot actual para `ruff`/`mypy`.
-  Impacto: mantener vigilancia para evitar regresiones.
-  Causa visible: limpieza aplicada y gates pasando.
-  Corrección esperada: sostener los checks en CI como condición de merge.
+- Síntoma: `ruff check .` reporta 6 issues y `mypy atenex_nova` reporta 5 errores.
+  Impacto: el repo aún no tiene gate estático backend verde.
+  Causa visible: deuda acumulada de formato/imports y contratos de tipado.
+  Corrección esperada: resolver lint y tipado hasta dejar ambos comandos en cero errores.
 
 ## Lista exhaustiva de trabajo pendiente
 
@@ -518,10 +530,14 @@ Criterio de cierre:
 - [ ] Añadir chequeos de observabilidad sobre `route_mode`, `plan_type`, `grounding_score` y razones de fallo. `Necesaria para hardening`
 
 ### Calidad de código / tipado / documentación
-- [x] Resolver `ruff check .` a nivel global. `Bloqueante para baseline`
-- [x] Resolver `mypy` a nivel global. `Bloqueante para baseline`
+- [ ] Resolver `tests/unit/test_answer_orchestrator_llm.py::test_compose_includes_all_selected_evidence_in_prompt`. `Bloqueante para baseline`
+- [ ] Resolver `npm run build` del frontend. `Bloqueante para baseline`
+- [ ] Resolver `npm run lint` del frontend. `Bloqueante para baseline`
+- [ ] Resolver `ruff check .` a nivel global. `Bloqueante para baseline`
+- [ ] Resolver `mypy` a nivel global. `Bloqueante para baseline`
 - [x] Mantener `README.md`, `AGENTS.md` y este inventario alineados con el estado real del repo. `Necesaria para hardening`
-- [ ] Decidir si `docs/plan.md` se restaura como documento histórico o se elimina formalmente de la narrativa del proyecto. `Deseable pero no bloqueante`
+- [x] Añadir contrato OpenAPI-vs-`docs/api-endpoints.md` para detectar drift de rutas FastAPI. `Necesaria para hardening`
+
 
 ## Criterios exactos para declarar el repo completo
 

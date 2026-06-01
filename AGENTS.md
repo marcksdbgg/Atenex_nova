@@ -3,23 +3,24 @@
 ## Source of Truth
 - Use [docs/baseline.md](docs/baseline.md) for the product contract and rationale.
 - Use [docs/final-gap-inventory.md](docs/final-gap-inventory.md) as the canonical inventory of the real remaining gap against the baseline.
-- Use [docs/plan_restante.md](docs/plan_restante.md) only as historical context; if it differs from the final gap inventory, the inventory prevails.
+
 - Use [README.md](README.md) for the live repository snapshot, quick start, and current verification status.
 - Do not duplicate those docs here; link to them instead.
 - [frontend/README.md](frontend/README.md) is the Vite scaffold template and is not operationally authoritative.
 
 ## Current Verified Snapshot
-- Backend unit tests: 43 passed in the current checkout.
-- Frontend build: passed.
-- Frontend lint: passed.
-- Backend `ruff`: currently reports 19 issues in the checkout.
-- Backend `mypy`: currently reports 14 errors in the checkout.
+- OpenAPI/docs contract test: 1 passed in the current checkout.
+- Backend unit tests: currently 1 failed and 43 passed in the current checkout.
+- Frontend build: currently failed in the current checkout.
+- Frontend lint: currently failed in the current checkout.
+- Backend `ruff`: currently reports 6 issues in the checkout.
+- Backend `mypy`: currently reports 5 errors in the checkout.
 - The current workspace uses a Windows venv at `backend/.venv/`; prefer `backend/.venv/Scripts/python.exe` for backend commands when the global `python` alias points to the Microsoft Store stub.
 - The canonical gap inventory snapshot is still [docs/final-gap-inventory.md](docs/final-gap-inventory.md); treat it as a gap ledger, not a live test log.
 
 ## Documentation To Read First
 - For backend or architecture work, read [docs/baseline.md](docs/baseline.md) and [docs/final-gap-inventory.md](docs/final-gap-inventory.md) before editing code.
-- Use [docs/plan_restante.md](docs/plan_restante.md) only if historical context is needed.
+
 - For backend implementation details, also read [docs/architecture-backend.md](docs/architecture-backend.md) and [docs/jobs-and-workers.md](docs/jobs-and-workers.md).
 - For product framing or tradeoff context, read [docs/baseline.md](docs/baseline.md).
 - For frontend structure and API contracts, also read [docs/architecture-frontend.md](docs/architecture-frontend.md) and [docs/api-endpoints.md](docs/api-endpoints.md).

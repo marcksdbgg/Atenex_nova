@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from math import sqrt
-from typing import cast
+from typing import Any, cast
 
 from atenex_nova.domain.repositories.embedder import Embedder
 from atenex_nova.shared.config.settings import get_settings
@@ -27,9 +27,11 @@ class EmbeddingGemmaAdapter(Embedder):
         self._model_name = model_name or "google/embeddinggemma-300m"
         self._dim = dim
         self._required = settings.embeddings_required if required is None else required
+        self.model: Any | None = None
 
         try:
             from sentence_transformers import SentenceTransformer
+
             self.model = SentenceTransformer(self._model_name, truncate_dim=dim)
             self._fallback_only = False
             logger.info("EmbeddingGemmaAdapter initialized model=%s dim=%d", self._model_name, dim)
@@ -46,7 +48,8 @@ class EmbeddingGemmaAdapter(Embedder):
     async def embed(self, texts: list[str]) -> list[list[float]]:
         """Generate vectors for a list of strings."""
         clean_texts = [str(t) for t in texts]
-        if self.model is None:
+        model = self.model
+        if model is None:
             if self._required:
                 raise ServiceUnavailableError(
                     service="embeddings",
@@ -61,7 +64,7 @@ class EmbeddingGemmaAdapter(Embedder):
         try:
             vectors = await loop.run_in_executor(
                 None,
-                lambda: self.model.encode(clean_texts, convert_to_numpy=True),
+                lambda: model.encode(clean_texts, convert_to_numpy=True),
             )
             return cast(list[list[float]], vectors.tolist())
         except Exception as exc:

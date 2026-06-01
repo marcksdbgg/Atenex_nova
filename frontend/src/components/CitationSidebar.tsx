@@ -2,9 +2,13 @@ import type { Citation } from '../types/api';
 
 interface CitationSidebarProps {
   citations: Citation[];
+  expectedCount?: number;
+  hydrationFailed?: boolean;
 }
 
-export function CitationSidebar({ citations }: CitationSidebarProps) {
+export function CitationSidebar({ citations, expectedCount = citations.length, hydrationFailed = false }: CitationSidebarProps) {
+  const hasHydrationFailure = hydrationFailed && expectedCount > 0 && citations.length === 0;
+
   return (
     <aside className="query-entity-card query-citation-panel">
       <div className="card__header">
@@ -12,10 +16,14 @@ export function CitationSidebar({ citations }: CitationSidebarProps) {
           <div className="card__title">Fuentes</div>
           <p className="query-panel-note">Citas exactas devueltas por el generador.</p>
         </div>
-        <span className="badge badge--accent">{citations.length}</span>
+        <span className="badge badge--accent">{hasHydrationFailure ? `${expectedCount}?` : citations.length}</span>
       </div>
 
-      {citations.length === 0 ? (
+      {hasHydrationFailure ? (
+        <p className="query-panel-note">
+          Fallo la hidratacion del detalle: el historial reporta citas, pero no se pudo cargar el paquete completo.
+        </p>
+      ) : citations.length === 0 ? (
         <p className="query-panel-note">No se generaron citas para esta respuesta.</p>
       ) : (
         <div className="query-citation-list">

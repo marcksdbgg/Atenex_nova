@@ -17,6 +17,7 @@ import type {
   DocumentNode,
   DocumentPage,
   DocumentEvidenceResponse,
+  EvaluationReportResponse,
   EvaluationRunResponse,
   PipelineAuditEntry,
   Proposition,
@@ -304,7 +305,16 @@ function mapSearchResultToTurn(response: QuerySearchResponse): ChatTurn {
   };
 }
 
+function getAnswerEvidence(response: AnswerResponse): QueryHit[] {
+  const selectedEvidence = response.selected_evidence ?? response.evidence_trace.selected_evidence;
+  return selectedEvidence && selectedEvidence.length > 0
+    ? selectedEvidence
+    : response.evidence;
+}
+
 function mapAnswerResultToTurn(response: AnswerResponse): ChatTurn {
+  const evidence = getAnswerEvidence(response);
+
   return {
     id: response.query_id,
     queryId: response.query_id,
@@ -319,7 +329,7 @@ function mapAnswerResultToTurn(response: AnswerResponse): ChatTurn {
     verdict: response.verdict,
     groundingScore: response.grounding_score,
     citationsCount: response.citations.length,
-    hits: response.evidence,
+    hits: evidence,
     citations: response.citations,
     isPending: false,
   };
@@ -2022,6 +2032,7 @@ export function QueryPage() {
   const [loadingCollections, setLoadingCollections] = useState(true);
   const [loadingContext, setLoadingContext] = useState(false);
   const [hydratingTurnId, setHydratingTurnId] = useState('');
+  const [hydrationFailedByTurnId, setHydrationFailedByTurnId] = useState<Record<string, boolean>>({});
   const [contextMobileOpen, setContextMobileOpen] = useState(false);
   const [pendingQuery, setPendingQuery] = useState('');
   const [pendingTurnId, setPendingTurnId] = useState('');
@@ -2063,20 +2074,22 @@ export function QueryPage() {
     setHydratingTurnId(turn.id);
     setActiveTurnId(turn.id);
     setError('');
+    setHydrationFailedByTurnId(current => ({ ...current, [turn.id]: false }));
 
     try {
       if (turn.kind === 'answer' && turn.answerId) {
         const cachedDetail = answerDetailByTurnIdRef.current[turn.id];
         if (cachedDetail) {
           setActiveAnswer(cachedDetail);
-          setActiveSearchHits(cachedDetail.evidence);
+          setActiveSearchHits(getAnswerEvidence(cachedDetail));
           return;
         }
 
         try {
           const detail = await api.getAnswer(turn.answerId);
           setActiveAnswer(detail);
-          setActiveSearchHits(detail.evidence);
+          const evidence = getAnswerEvidence(detail);
+          setActiveSearchHits(evidence);
           answerDetailByTurnIdRef.current[turn.id] = detail;
           setTurns(current => current.map(item => (
             item.id === turn.id
@@ -2087,7 +2100,7 @@ export function QueryPage() {
                   groundingScore: detail.grounding_score,
                   verdict: detail.verdict,
                   citationsCount: detail.citations.length,
-                  hits: detail.evidence,
+                  hits: evidence,
                   citations: detail.citations,
                 }
               : item
@@ -2095,6 +2108,7 @@ export function QueryPage() {
         } catch {
           setActiveAnswer(null);
           setActiveSearchHits(turn.hits ?? []);
+          setHydrationFailedByTurnId(current => ({ ...current, [turn.id]: true }));
           setError('No se pudo cargar el detalle completo de este turno. Mostrando datos disponibles.');
         }
         return;
@@ -2113,6 +2127,7 @@ export function QueryPage() {
       setActiveTurnId('');
       setActiveAnswer(null);
       setActiveSearchHits([]);
+      setHydrationFailedByTurnId({});
       setError('');
       return;
     }
@@ -2152,6 +2167,7 @@ export function QueryPage() {
           ? historyResult.value.slice().reverse().map(mapHistoryToTurn)
           : [];
         setTurns(historyTurns);
+        setHydrationFailedByTurnId({});
         const lastTurn = historyTurns.at(-1) ?? null;
 
         if (!lastTurn) {
@@ -2226,13 +2242,20 @@ export function QueryPage() {
   );
 
   const activeEvidence = useMemo(
-    () => activeAnswer?.evidence ?? activeSearchHits,
+    () => activeAnswer ? getAnswerEvidence(activeAnswer) : activeSearchHits,
     [activeAnswer, activeSearchHits],
   );
 
   const activeCitations = useMemo(
     () => activeAnswer?.citations ?? activeTurn?.citations ?? [],
     [activeAnswer, activeTurn],
+  );
+
+  const activeCitationHydrationFailed = Boolean(
+    activeTurn
+    && hydrationFailedByTurnId[activeTurn.id]
+    && (activeTurn.citationsCount ?? 0) > 0
+    && activeCitations.length === 0,
   );
 
   useEffect(() => {
@@ -2333,7 +2356,13 @@ export function QueryPage() {
     const viewport = threadViewportRef.current;
     if (!viewport) return;
     viewport.scrollTop = viewport.scrollHeight;
-  }, [visibleTurns.length, pendingTurnId]);
+
+    const timer = setTimeout(() => {
+      viewport.scrollTop = viewport.scrollHeight;
+    }, 50);
+
+    return () => clearTimeout(timer);
+  }, [visibleTurns.length, pendingTurnId, loading, visibleTurns.at(-1)?.answer]);
 
   const canSubmit = collectionId.length > 0 && query.trim().length > 0 && !loading && !loadingCollections;
   const routeModes = ['auto', 'exact', 'factual_local', 'multi_hop', 'global', 'argumentative', 'visual'];
@@ -2432,8 +2461,9 @@ export function QueryPage() {
         });
 
         submittedTurn = mapAnswerResultToTurn(response);
+        const evidence = getAnswerEvidence(response);
         setActiveAnswer(response);
-        setActiveSearchHits(response.evidence);
+        setActiveSearchHits(evidence);
         answerDetailByTurnIdRef.current[submittedTurn.id] = response;
       }
 
@@ -2651,7 +2681,11 @@ export function QueryPage() {
               <>
                 <div className="query-context__block">
                   <div className="query-panel-heading">Citas exactas</div>
-                  <CitationSidebar citations={activeCitations} />
+                  <CitationSidebar
+                    citations={activeCitations}
+                    expectedCount={activeTurn.citationsCount ?? activeCitations.length}
+                    hydrationFailed={activeCitationHydrationFailed}
+                  />
                 </div>
 
                 <div className="query-context__block">
@@ -3401,7 +3435,7 @@ export function EvaluationPage() {
   const [runs, setRuns] = useState<EvaluationRunResponse[]>([]);
   const [selectedCollectionId, setSelectedCollectionId] = useState('');
   const [selectedDataset, setSelectedDataset] = useState('baseline');
-  const [report, setReport] = useState<EvaluationRunResponse | null>(null);
+  const [report, setReport] = useState<EvaluationReportResponse | null>(null);
   const [bootstrapping, setBootstrapping] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');

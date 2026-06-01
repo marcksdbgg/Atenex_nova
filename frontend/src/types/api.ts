@@ -100,6 +100,19 @@ export interface DocumentPage {
   metadata: Record<string, unknown>;
 }
 
+export interface DependencyHealth {
+  name: string;
+  endpoint: string;
+  available: boolean;
+  detail?: string | null;
+}
+
+export interface RuntimeHealthStatus {
+  status: string;
+  version: string;
+  dependencies: DependencyHealth[];
+}
+
 export interface Job {
   id: string;
   job_type: string;
@@ -175,6 +188,25 @@ export interface AnswerRequest {
   generation_profile?: string;
 }
 
+export interface EvidenceTrace {
+  route_reason?: string;
+  evidence_groups?: Record<string, unknown>;
+  excluded_evidence_count?: number;
+  selected_count?: number;
+  selected_evidence?: QueryHit[];
+  generation_attempts?: number;
+  [key: string]: unknown;
+}
+
+export interface PromptTrace {
+  prompt_version?: string;
+  template_id?: string;
+  template_name?: string;
+  variables?: Record<string, unknown>;
+  messages?: Array<Record<string, unknown>>;
+  [key: string]: unknown;
+}
+
 export interface AnswerResponse {
   answer_id: string;
   query_id: string;
@@ -190,8 +222,10 @@ export interface AnswerResponse {
   verdict: string;
   grounding_score: number;
   prompt_version: string;
+  prompt_trace?: PromptTrace | null;
   verification_issues: string[];
-  evidence_trace: Record<string, unknown>;
+  evidence_trace: EvidenceTrace;
+  selected_evidence?: QueryHit[];
   citations: Citation[];
   evidence: QueryHit[];
 }
@@ -246,8 +280,11 @@ export interface EvaluationRunResponse {
   regression_delta: Record<string, number>;
   summary: Record<string, string | number>;
   created_at: string;
+}
+
+export interface EvaluationReportResponse extends EvaluationRunResponse {
   previous_run_id?: string | null;
-  cases?: EvaluationCase[];
+  cases: EvaluationCase[];
 }
 
 export interface HealthStatus {

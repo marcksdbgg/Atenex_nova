@@ -11,6 +11,7 @@ import type {
   DocumentNode,
   DocumentEvidenceResponse,
   EvaluationRunRequest,
+  EvaluationReportResponse,
   EvaluationRunResponse,
   HealthStatus,
   ImportLocalFolderResponse,
@@ -20,6 +21,7 @@ import type {
   QueryHistoryResponse,
   QuerySearchRequest,
   QuerySearchResponse,
+  RuntimeHealthStatus,
 } from '../types/api';
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -142,6 +144,7 @@ class ApiClient {
 
   /* Health */
   health = () => this.request<HealthStatus>('/health');
+  healthDependencies = () => this.request<RuntimeHealthStatus>('/health/dependencies');
 
   /* Collections */
   listCollections = () => this.request<Collection[]>('/collections');
@@ -273,14 +276,14 @@ class ApiClient {
   /* Evaluation */
   listEvaluationDatasets = () => this.request<string[]>('/evaluation/datasets');
   runEvaluation = (data: EvaluationRunRequest) =>
-    this.request<EvaluationRunResponse>('/evaluation/runs', {
+    this.request<EvaluationReportResponse>('/evaluation/runs', {
       method: 'POST',
       body: JSON.stringify(data),
       timeoutMs: EVALUATION_TIMEOUT_MS,
       timeoutMessage: 'La evaluación sigue en proceso y tardó más de lo esperado en responder.',
     });
   listEvaluationRuns = () => this.request<EvaluationRunResponse[]>('/evaluation/runs');
-  getEvaluationReport = (id: string) => this.request<EvaluationRunResponse>(`/evaluation/reports/${id}`);
+  getEvaluationReport = (id: string) => this.request<EvaluationReportResponse>(`/evaluation/reports/${id}`);
 }
 
 export const api = new ApiClient(API_BASE);

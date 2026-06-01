@@ -5,15 +5,20 @@ interface EvidenceCardProps {
 }
 
 export function EvidenceCard({ evidence }: EvidenceCardProps) {
+  const isGraph = evidence.source_type === 'graph_edge';
   return (
-    <article className="query-evidence">
+    <article className={`query-evidence ${isGraph ? 'query-evidence--graph' : ''}`}>
       <div className="query-evidence__top">
         <div className="query-evidence__title-wrap">
           <span className="badge badge--accent">#{evidence.rank}</span>
-          <span className="badge badge--info">{evidence.source_type}</span>
-          <span className="query-evidence__title" title={evidence.title || 'Fuente sin titulo'}>{evidence.title || 'Fuente sin titulo'}</span>
+          <span className={`badge ${isGraph ? 'badge--warning' : 'badge--info'}`}>
+            {isGraph ? 'Grafo' : evidence.source_type}
+          </span>
+          <span className="query-evidence__title" title={isGraph ? 'Expansión de Grafo de Conocimiento' : (evidence.title || 'Fuente sin título')}>
+            {isGraph ? 'Expansión de Grafo' : (evidence.title || 'Fuente sin título')}
+          </span>
         </div>
-        <span className="query-evidence__score">Puntuacion {evidence.score.toFixed(3)}</span>
+        <span className="query-evidence__score">Puntuación {evidence.score.toFixed(3)}</span>
       </div>
 
       <p className="query-evidence__snippet">{evidence.snippet}</p>

@@ -15,6 +15,9 @@ from atenex_nova.domain.value_objects.identifiers import AnswerVerdict, new_id
 from atenex_nova.infrastructure.llm.llm_gateway import LlamaCppAdapter, LLMGateway, OllamaAdapter
 from atenex_nova.shared.config.settings import get_settings
 from atenex_nova.shared.exceptions.base import ServiceUnavailableError, StrictModeViolationError
+from atenex_nova.shared.logging.logger import get_logger
+
+logger = get_logger(__name__)
 
 TOKEN_RE = re.compile(r"[\w\-]+", re.UNICODE)
 PROMPT_FILES = {
@@ -65,6 +68,11 @@ class AnswerOrchestrator:
 
     async def compose(self, search_result: SearchResult, generation_profile: str = "standard") -> AnswerBundle:
         plan_type = self._planner.choose_plan(search_result.evidence_pack)
+        logger.info(
+            f"Composing answer for query: '{search_result.query.text}' | "
+            f"Routed Mode: {search_result.evidence_pack.route_mode} | "
+            f"Plan Type: {plan_type} | Evidence Pack size: {len(search_result.evidence_pack.items)} hits"
+        )
         prompt = self._build_prompt(search_result, plan_type, generation_profile)
         draft_text = await self._generate(prompt, plan_type)
         citations = self._bind_citations(search_result.evidence_pack.items, draft_text)
@@ -109,7 +117,12 @@ class AnswerOrchestrator:
             except ServiceUnavailableError:
                 pass
 
-        self._enforce_strict_answer(answer_text, citations, verification)
+        logger.info(
+            f"Answer composition finished (attempts={attempts}) | Verdict: {verification.verdict} | "
+            f"Grounding Score: {verification.grounding_score:.3f} | Citations: {len(citations)} | Issues: {verification.issues}"
+        )
+
+        self._enforce_strict_answer(answer_text, citations, verification, search_result.query.route_mode)
         answer = Answer(
             id=new_id(),
             query_id=search_result.query.id,
@@ -125,7 +138,16 @@ class AnswerOrchestrator:
                 "evidence_groups": search_result.evidence_pack.evidence_groups,
                 "excluded_evidence_count": search_result.evidence_pack.excluded_count,
                 "selected_count": search_result.evidence_pack.selected_count,
+                "selected_evidence": [
+                    self._serialize_evidence_item(item) for item in search_result.evidence_pack.items
+                ],
                 "generation_attempts": attempts,
+                "prompt_trace": self._build_prompt_trace(
+                    search_result=search_result,
+                    plan_type=plan_type,
+                    generation_profile=generation_profile,
+                    prompt=prompt,
+                ),
             },
         )
         return AnswerBundle(
@@ -231,6 +253,49 @@ class AnswerOrchestrator:
             template = template.replace(key, value)
         return template
 
+    def _build_prompt_trace(
+        self,
+        search_result: SearchResult,
+        plan_type: str,
+        generation_profile: str,
+        prompt: str,
+    ) -> dict[str, object]:
+        trace: dict[str, object] = {
+            "template": PROMPT_FILES.get(plan_type, PROMPT_FILES["direct_answer"]),
+            "placeholders": {
+                "query": search_result.query.text,
+                "normalized_query": search_result.query.normalized_text,
+                "route_mode": search_result.query.route_mode,
+                "route_reason": search_result.route_reason,
+                "plan": plan_type,
+                "language": search_result.query.language,
+                "generation_profile": generation_profile,
+            },
+            "evidence_ids": [item.id for item in search_result.evidence_pack.items],
+            "llm_backend": self._settings.llm_backend,
+            "llm_model": self._settings.llm_model,
+        }
+        if self._settings.store_prompts:
+            trace["prompt"] = prompt
+        return trace
+
+    @staticmethod
+    def _serialize_evidence_item(item: EvidenceItem) -> dict[str, object]:
+        return {
+            "id": item.id,
+            "query_id": item.query_id,
+            "source_type": item.source_type,
+            "source_id": item.source_id,
+            "score": item.score,
+            "rank": item.rank,
+            "document_id": item.document_id,
+            "page_number": item.page_number,
+            "title": item.title,
+            "snippet": item.snippet,
+            "citation_candidate": item.citation_candidate,
+            "metadata": item.metadata,
+        }
+
     def _load_prompt(self, plan_type: str) -> str:
         prompts_dir = Path(__file__).resolve().parents[4] / "prompts"
         file_name = PROMPT_FILES.get(plan_type, PROMPT_FILES["direct_answer"])
@@ -280,43 +345,27 @@ class AnswerOrchestrator:
             marker = f"[{index}]"
             if marker not in draft_text:
                 continue
+            if not item.document_id:
+                continue
             source_text = str(item.metadata.get("source_text") or item.snippet)
             start, end = self._locate_source_span(source_text, item.snippet)
-            citations.append(
-                Citation(
-                    id=new_id(),
-                    answer_id="",
-                    document_id=item.document_id or "",
-                    page_number=item.page_number,
-                    node_id=self._extract_node_id(item),
-                    char_start=start,
-                    char_end=end,
-                    snippet=item.snippet[:240],
-                    bbox=self._extract_bbox(item),
-                    heading_path=self._extract_heading_path(item),
-                    page_asset_path=self._extract_page_asset_path(item),
-                )
+            citation = Citation(
+                id=new_id(),
+                answer_id="",
+                document_id=item.document_id,
+                page_number=item.page_number,
+                node_id=self._extract_node_id(item),
+                char_start=start,
+                char_end=end,
+                snippet=item.snippet[:240],
+                bbox=self._extract_bbox(item),
+                heading_path=self._extract_heading_path(item),
+                page_asset_path=self._extract_page_asset_path(item),
             )
-        if not citations:
-            for item in items[:3]:
-                source_text = str(item.metadata.get("source_text") or item.snippet)
-                start, end = self._locate_source_span(source_text, item.snippet)
-                citations.append(
-                    Citation(
-                        id=new_id(),
-                        answer_id="",
-                        document_id=item.document_id or "",
-                        page_number=item.page_number,
-                        node_id=self._extract_node_id(item),
-                        char_start=start,
-                        char_end=end,
-                        snippet=item.snippet[:240],
-                        bbox=self._extract_bbox(item),
-                        heading_path=self._extract_heading_path(item),
-                        page_asset_path=self._extract_page_asset_path(item),
-                    )
-                )
+            if self._citation_is_resolved(citation):
+                citations.append(citation)
         return citations
+
 
     def _finalize_text(
         self,
@@ -364,6 +413,7 @@ class AnswerOrchestrator:
         answer_text: str,
         citations: list[Citation],
         verification: VerificationResult,
+        route_mode: str,
     ) -> None:
         if not self._settings.strict_mode_enabled:
             return
@@ -371,6 +421,22 @@ class AnswerOrchestrator:
             raise StrictModeViolationError("strict mode requires non-empty answer text", code="EMPTY_ANSWER")
         if not citations:
             raise StrictModeViolationError("strict mode requires at least one citation", code="MISSING_CITATIONS")
+        unresolved = [citation.id for citation in citations if not self._citation_is_resolved(citation)]
+        if unresolved:
+            raise StrictModeViolationError(
+                "strict mode requires citations to resolve to a real span, node, or visual page",
+                code="UNRESOLVED_CITATION_BINDING",
+            )
+        if route_mode == "visual" and self._settings.visual_required:
+            has_visual_citation = any(
+                citation.page_number is not None and citation.page_asset_path
+                for citation in citations
+            )
+            if not has_visual_citation:
+                raise StrictModeViolationError(
+                    "strict visual mode requires at least one resolved visual citation with page asset path",
+                    code="MISSING_VISUAL_CITATION",
+                )
         if verification.grounding_score < float(self._settings.min_grounding_score):
             raise StrictModeViolationError(
                 message=(
@@ -399,9 +465,16 @@ class AnswerOrchestrator:
         coverage = overlap / max(len(answer_tokens), 1)
         citation_score = min(len(citations), 5) / 5.0
         grounding_score = min(1.0, 0.35 + (coverage * 0.45) + (citation_score * 0.2))
+        logger.info(
+            f"Verification details: overlap={overlap} | answer_tokens={len(answer_tokens)} | "
+            f"coverage={coverage:.3f} | citation_score={citation_score:.3f} | "
+            f"pre-LLM grounding_score={grounding_score:.3f}"
+        )
 
         if not citations:
             issues.append("missing_citations")
+        elif any(not self._citation_is_resolved(citation) for citation in citations):
+            issues.append("unresolved_citation_binding")
         if contradictions and plan_type != "argument_synthesis":
             issues.append("unresolved_contradiction")
         if grounding_score < 0.35:
@@ -414,9 +487,21 @@ class AnswerOrchestrator:
             verdict = AnswerVerdict.VERIFIED
         llm_verification = await self._verify_with_llm(search_result, answer_text)
         if llm_verification is not None:
-            verdict = llm_verification.verdict
-            grounding_score = max(grounding_score, llm_verification.grounding_score)
-            issues = sorted(set([*issues, *llm_verification.issues]))
+            deterministic_issues = list(issues)
+            issues = sorted(set([*issues, *llm_verification.issues]) - {"none"})
+            if deterministic_issues:
+                grounding_score = min(grounding_score, llm_verification.grounding_score or grounding_score)
+                if llm_verification.verdict == AnswerVerdict.UNVERIFIED:
+                    verdict = AnswerVerdict.UNVERIFIED
+                elif llm_verification.verdict == AnswerVerdict.CONFLICTING:
+                    verdict = AnswerVerdict.CONFLICTING
+            else:
+                verdict = llm_verification.verdict
+                grounding_score = max(grounding_score, llm_verification.grounding_score)
+        logger.info(
+            f"Verification finished: verdict={verdict} | final grounding_score={grounding_score:.3f} | "
+            f"issues={issues} | LLM verification={'none' if llm_verification is None else llm_verification}"
+        )
         return VerificationResult(verdict=verdict, grounding_score=round(grounding_score, 3), issues=issues)
 
     def _build_generator(self, backend: str) -> LLMGateway:
@@ -467,7 +552,14 @@ class AnswerOrchestrator:
         start = normalized_source.lower().find(prefix.lower())
         if start >= 0:
             return start, start + len(prefix)
-        return 0, min(len(normalized_source), len(prefix))
+        return None, None
+
+    @staticmethod
+    def _citation_is_resolved(citation: Citation) -> bool:
+        has_span = citation.char_start is not None and citation.char_end is not None
+        has_text_anchor = has_span
+        has_visual_anchor = bool(citation.page_number is not None and citation.page_asset_path)
+        return bool(citation.document_id and (has_text_anchor or has_visual_anchor))
 
     @staticmethod
     def _extract_node_id(item: EvidenceItem) -> str | None:

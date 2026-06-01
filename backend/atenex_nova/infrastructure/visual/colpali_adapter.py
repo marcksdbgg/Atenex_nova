@@ -6,7 +6,6 @@ import json
 import logging
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from textwrap import wrap
 from typing import Any, cast
 from urllib.parse import urlparse
 
@@ -15,7 +14,7 @@ from atenex_nova.infrastructure.embeddings.bm25_encoder import BM25SparseEncoder
 from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
 from atenex_nova.infrastructure.qdrant.qdrant_adapter import QdrantAdapter, QdrantDocument
 from atenex_nova.shared.config.settings import get_settings
-from atenex_nova.shared.exceptions.base import ServiceUnavailableError
+from atenex_nova.shared.exceptions.base import StrictModeViolationError
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +53,7 @@ class ColPaliAdapter:
             port=qdrant_port,
             required=(settings.qdrant_required or self._strict_visual),
         )
-        logger.info("ColPaliAdapter initialized")
+        logger.info("VisualPageRetriever initialized")
 
     async def upsert_pages(self, collection_id: str, pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         records = [self._normalize_page(collection_id, page) for page in pages]
@@ -73,6 +72,7 @@ class ColPaliAdapter:
                     payload={
                         **asdict(record),
                         "collection_id": collection_id,
+                        "retrieval_backend": "page_text_embedding",
                     },
                 )
                 for record, vector in zip(records, vectors, strict=False)
@@ -122,50 +122,87 @@ class ColPaliAdapter:
         source_page_id = str(page.get("id") or f"{page.get('document_id', 'doc')}:{page_number}")
         page_id = str(page.get("id") or new_id())
         text = str(page.get("text") or page.get("content") or "").strip()
-        image_path = self._render_page_image(collection_id, page_id, page.get("title", "Visual page"), text)
+        if self._strict_visual and not text:
+            raise StrictModeViolationError(
+                "visual strict mode requires OCR/text extraction for page-level evidence",
+                code="OCR_ENGINE_UNAVAILABLE",
+            )
+        document_id = str(page.get("document_id") or "")
+        source_path = str(page.get("source_path") or "")
+        image_path = self._render_page_image(
+            source_path=source_path,
+            document_id=document_id,
+            page_number=page_number,
+        )
+        metadata = {
+            **cast(dict[str, Any], page.get("metadata") or {}),
+            "source_page_id": source_page_id,
+            "retrieval_backend": "page_text_embedding",
+            "visual_asset_status": "rendered" if image_path else "unavailable",
+        }
         return VisualPage(
             id=page_id,
             collection_id=collection_id,
-            document_id=str(page.get("document_id") or ""),
+            document_id=document_id,
             page_number=page_number,
             title=str(page.get("title") or "Visual page"),
             text=text or str(page.get("title") or "Visual page"),
             is_complex=bool(page.get("is_complex", False)),
             image_path=str(image_path) if image_path else None,
-            metadata={**cast(dict[str, Any], page.get("metadata") or {}), "source_page_id": source_page_id},
+            metadata=metadata,
         )
 
-    def _render_page_image(self, collection_id: str, page_id: str, title: str, text: str) -> Path | None:
-        page_dir = self._storage_dir / collection_id
-        page_dir.mkdir(parents=True, exist_ok=True)
-        image_path = page_dir / f"{page_id}.png"
-        try:
-            from PIL import Image, ImageDraw, ImageFont  # type: ignore[import-not-found]
+    def _render_page_image(self, source_path: str, document_id: str, page_number: int) -> Path | None:
+        if not source_path:
+            if self._strict_visual:
+                raise StrictModeViolationError(
+                    "visual strict mode requires a source path to render page assets",
+                    code="VISUAL_ASSET_UNAVAILABLE",
+                )
+            return None
 
-            image = Image.new("RGB", (1400, 1800), color="white")
-            draw = ImageDraw.Draw(image)
-            try:
-                font = ImageFont.truetype("arial.ttf", 28)
-                title_font = ImageFont.truetype("arial.ttf", 36)
-            except Exception:
-                font = ImageFont.load_default()
-                title_font = ImageFont.load_default()
-            draw.text((64, 48), title, fill="black", font=title_font)
-            cursor_y = 120
-            for line in wrap(text or "No content", width=96):
-                draw.text((64, cursor_y), line, fill="black", font=font)
-                cursor_y += 38
-            image.save(image_path)
+        source = Path(source_path).expanduser()
+        if not source.exists():
+            if self._strict_visual:
+                raise StrictModeViolationError(
+                    f"visual strict mode could not find source file: {source}",
+                    code="VISUAL_ASSET_UNAVAILABLE",
+                )
+            return None
+
+        page_dir = self._storage_dir / document_id
+        page_dir.mkdir(parents=True, exist_ok=True)
+        image_path = page_dir / f"page-{page_number}.png"
+        if image_path.exists():
+            return image_path
+
+        try:
+            if source.suffix.lower() == ".pdf":
+                import pypdfium2 as pdfium  # type: ignore[import-untyped]
+
+                pdf = pdfium.PdfDocument(str(source))
+                index = max(page_number - 1, 0)
+                if index >= len(pdf):
+                    raise IndexError(f"PDF page {page_number} out of range")
+                page = pdf[index]
+                bitmap = page.render(scale=2.0)
+                pil_image = bitmap.to_pil()
+                pil_image.save(image_path)
+                return image_path
+
+            from PIL import Image
+
+            with Image.open(source) as image:
+                image.convert("RGB").save(image_path)
             return image_path
         except Exception as exc:
             if self._strict_visual:
-                raise ServiceUnavailableError(
-                    service="visual-render",
-                    message=f"page rendering failed in strict mode: {exc}",
+                raise StrictModeViolationError(
+                    f"visual strict mode could not render a real page asset: {exc}",
+                    code="VISUAL_ASSET_UNAVAILABLE",
                 ) from exc
-            placeholder = image_path.with_suffix(".txt")
-            placeholder.write_text(f"{title}\n\n{text}", encoding="utf-8")
-            return placeholder
+            logger.warning("Real page render unavailable for %s page %s: %s", source, page_number, exc)
+            return None
 
     async def _persist_local(self, collection_id: str, records: list[VisualPage]) -> None:
         path = self._storage_dir / f"{collection_id}.json"

@@ -6,13 +6,15 @@ This document catalogs the current public HTTP surface exposed by the backend.
 
 - The FastAPI app is created in [backend/atenex_nova/main.py](../backend/atenex_nova/main.py).
 - Routers live under [backend/atenex_nova/presentation/api/routers](../backend/atenex_nova/presentation/api/routers).
-- The endpoint set below is derived from the current code, not from the roadmap.
+- The endpoint set below is derived from the current FastAPI OpenAPI schema, not from the roadmap.
+- Drift between this document and the generated OpenAPI route set is guarded by [backend/tests/unit/test_openapi_documentation_contract.py](../backend/tests/unit/test_openapi_documentation_contract.py).
 
 ## Health
 
 | Method | Route | Purpose |
 |---|---|---|
 | GET | `/health` | Return basic service status |
+| GET | `/health/dependencies` | Probe local runtime dependencies: LLM, Qdrant, embeddings, Docling, and visual runtime |
 
 ## Collections
 
@@ -35,12 +37,16 @@ This document catalogs the current public HTTP surface exposed by the backend.
 |---|---|---|
 | GET | `/documents/{document_id}` | Fetch one document |
 | GET | `/documents/{document_id}/nodes` | List structural nodes for the document |
+| GET | `/documents/{document_id}/structure` | Alias for the structural nodes endpoint used by the document inspector |
+| GET | `/documents/{document_id}/chunks` | List persisted retrieval chunks for the document |
+| GET | `/documents/{document_id}/propositions` | List persisted propositions extracted from the document |
+| GET | `/documents/{document_id}/pages/{page_number}` | Fetch one visual page payload for the document |
 
 ## Queries
 
 | Method | Route | Purpose |
 |---|---|---|
-| GET | `/queries/history?collection_id=...&limit=...` | Show recent queries and answer metadata for a collection |
+| GET | `/queries/history` | Show recent queries and answer metadata for a collection |
 | POST | `/queries/search` | Run retrieval only and return ranked hits |
 | POST | `/queries/answer` | Run retrieval plus answer synthesis |
 
@@ -101,6 +107,10 @@ The answer endpoint returns:
 ### Collection document listing
 
 The backend supports `offset`, `limit`, and `status` parameters on the collection document listing endpoint. The frontend uses these parameters to fetch a full inventory when needed.
+
+### Query history
+
+The backend expects `collection_id` and accepts `limit` as query parameters on `/queries/history`.
 
 ### File uploads
 

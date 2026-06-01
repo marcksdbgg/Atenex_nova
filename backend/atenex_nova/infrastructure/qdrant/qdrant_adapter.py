@@ -91,9 +91,9 @@ class QdrantAdapter(HybridIndex):
             if not exists:
                 await self.client.create_collection(
                     collection_name=collection_name,
-                    vectors_config={"dense": models.VectorParams(
-                        size=vector_size, distance=models.Distance.COSINE
-                    )},
+                    vectors_config={
+                        "dense": models.VectorParams(size=vector_size, distance=models.Distance.COSINE)
+                    },
                     sparse_vectors_config={"sparse": models.SparseVectorParams()},
                 )
                 logger.info("Created Qdrant collection %s", collection_name)
@@ -179,43 +179,75 @@ class QdrantAdapter(HybridIndex):
                 must.append(models.FieldCondition(key=k, match=models.MatchValue(value=v)))
             qdrant_filter = models.Filter(must=must)
 
-        if query_sparse_indices is not None and query_sparse_values is not None:
-            q_vector = models.NamedSparseVector(
-                name="sparse",
-                vector=models.SparseVector(
-                    indices=query_sparse_indices, values=query_sparse_values
-                ),
-            )
-        else:
-            q_vector = models.NamedVector(name="dense", vector=query_vector or [])
-
         try:
-            results = await self.client.search(  # type: ignore[attr-defined]
-                collection_name=collection_name,
-                query_vector=q_vector,
-                limit=limit,
-                query_filter=qdrant_filter,
-                with_payload=True,
-            )
-            self._register_success()
-        except Exception as exc:
-            # Fallback to unnamed vector if named vector fails
-            if "Not found: Vector" in str(exc) and not isinstance(q_vector, models.NamedSparseVector):
+            if hasattr(self.client, "search"):
+                q_vector: models.NamedSparseVector | models.NamedVector
+                if query_sparse_indices is not None and query_sparse_values is not None:
+                    q_vector = models.NamedSparseVector(
+                        name="sparse",
+                        vector=models.SparseVector(
+                            indices=query_sparse_indices, values=query_sparse_values
+                        ),
+                    )
+                else:
+                    q_vector = models.NamedVector(name="dense", vector=query_vector or [])
+
                 try:
-                    results = await self.client.search(  # type: ignore[attr-defined]
+                    results = await self.client.search(
                         collection_name=collection_name,
-                        query_vector=query_vector or [],
+                        query_vector=q_vector,
                         limit=limit,
                         query_filter=qdrant_filter,
                         with_payload=True,
                     )
-                    self._register_success()
-                except Exception as inner_exc:
-                    self._register_failure(f"search collection fallback '{collection_name}'", inner_exc)
-                    return []
+                except Exception as exc:
+                    if not (query_sparse_indices is not None and query_sparse_values is not None):
+                        results = await self.client.search(
+                            collection_name=collection_name,
+                            query_vector=query_vector or [],
+                            limit=limit,
+                            query_filter=qdrant_filter,
+                            with_payload=True,
+                        )
+                    else:
+                        raise exc
             else:
-                self._register_failure(f"search collection '{collection_name}'", exc)
-                return []
+                if query_sparse_indices is not None and query_sparse_values is not None:
+                    query_val: Any = models.SparseVector(
+                        indices=query_sparse_indices, values=query_sparse_values
+                    )
+                    using_val = "sparse"
+                else:
+                    query_val = query_vector or []
+                    using_val = "dense"
+
+                try:
+                    res = await self.client.query_points(
+                        collection_name=collection_name,
+                        query=query_val,
+                        using=using_val,
+                        limit=limit,
+                        query_filter=qdrant_filter,
+                        with_payload=True,
+                    )
+                    results = res.points
+                except Exception as query_exc:
+                    if ("Not existing vector name" in str(query_exc) or "Not found" in str(query_exc)) and using_val == "dense":
+                        res = await self.client.query_points(
+                            collection_name=collection_name,
+                            query=query_val,
+                            using=None,
+                            limit=limit,
+                            query_filter=qdrant_filter,
+                            with_payload=True,
+                        )
+                        results = res.points
+                    else:
+                        raise query_exc
+            self._register_success()
+        except Exception as exc:
+            self._register_failure(f"search collection '{collection_name}'", exc)
+            return []
         return [
             {
                 "id": str(res.id),

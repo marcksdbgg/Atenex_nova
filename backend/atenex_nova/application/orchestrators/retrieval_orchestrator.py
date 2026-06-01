@@ -37,7 +37,10 @@ from atenex_nova.infrastructure.qdrant.qdrant_adapter import QdrantAdapter
 from atenex_nova.infrastructure.visual.colpali_adapter import ColPaliAdapter
 from atenex_nova.shared.config.settings import get_settings
 from atenex_nova.shared.exceptions.base import StrictModeViolationError
+from atenex_nova.shared.logging.logger import get_logger
 from atenex_nova.shared.observability.pipeline_audit import PipelineAuditService
+
+logger = get_logger(__name__)
 
 _TOKEN_RE = re.compile(r"[\w\-]+", re.UNICODE)
 
@@ -118,6 +121,10 @@ class RetrievalOrchestrator:
             route_mode=route_mode_name,
         )
         await query_repo.create(query)
+        logger.info(
+            f"Search started: '{query_text}' | Collection: {collection_id} | Mode: {mode} "
+            f"-> Routed Mode: {route_mode_name} | Intent: {intent.value} | Language: {features.language}"
+        )
 
         async with self._audit.step(
             run_id=query.id,
@@ -216,26 +223,70 @@ class RetrievalOrchestrator:
                         allowed_relations = ["contradicts", "supports"]
                     elif intent.value == "factual":
                         allowed_relations = ["defines", "elaborates", "appears_in"]
-                        
+
                     seed_ids = [hit.source_id for hit in proposition_hits[:5]]
                     expanded = await relation_repo.expand(
-                        seed_ids or [prop.id for prop in propositions[:3]], 
-                        depth=2, 
+                        seed_ids or [prop.id for prop in propositions[:3]],
+                        depth=2,
                         allowed_relations=allowed_relations
                     )
                     step.metrics(edge_count=len(expanded))
+
+                    proposition_by_id = {prop.id: prop for prop in propositions}
+                    relation_verbs = {
+                        "contradicts": "contradice a",
+                        "supports": "respalda/apoya a",
+                        "elaborates": "se detalla/elabora en",
+                        "defines": "define a",
+                        "appears_in": "aparece en",
+                        "mentions": "menciona a",
+                    }
+
+                    logger.info(f"Expanding graph: found {len(expanded)} relation edges from seeds {seed_ids or [prop.id for prop in propositions[:3]]}")
+
                     for edge in expanded:
+                        source_text = ""
+                        doc_id = None
+                        if edge.source_type == "proposition":
+                            prop = proposition_by_id.get(edge.source_id)
+                            if prop:
+                                source_text = f"'{prop.text}'"
+                                doc_id = prop.document_id
+                            else:
+                                source_text = f"Proposición {edge.source_id[:8]}"
+                        else:
+                            source_text = f"{edge.source_type} {edge.source_id[:8]}"
+
+                        target_text = ""
+                        if edge.target_type == "proposition":
+                            prop = proposition_by_id.get(edge.target_id)
+                            if prop:
+                                target_text = f"'{prop.text}'"
+                                if not doc_id:
+                                    doc_id = prop.document_id
+                            else:
+                                target_text = f"Proposición {edge.target_id[:8]}"
+                        elif edge.target_type == "document":
+                            doc_title = document_titles.get(edge.target_id)
+                            if doc_title:
+                                target_text = f"Documento '{doc_title}'"
+                            else:
+                                target_text = f"Documento {edge.target_id[:8]}"
+                        else:
+                            target_text = f"{edge.target_type} {edge.target_id[:8]}"
+
+                        verb = relation_verbs.get(edge.relation, edge.relation)
+                        snippet = f"Relación: la afirmación {source_text} {verb} {target_text}."
+                        logger.debug(f"Resolved edge {edge.id}: {source_text} -> {edge.relation} -> {target_text} (doc={doc_id})")
+
                         hits.append(
                             SearchHit(
                                 id=new_id(),
                                 source_type="graph_edge",
                                 source_id=edge.id,
-                                document_id=None,
+                                document_id=doc_id,
                                 title="Graph expansion",
-                                snippet=(
-                                    f"{edge.source_type}:{edge.source_id} -> "
-                                    f"{edge.relation} -> {edge.target_type}:{edge.target_id}"
-                                ),
+                                snippet=snippet,
                                 score=max(0.1, edge.weight * 0.8),
                                 rank=0,
                                 metadata={
@@ -507,24 +558,24 @@ class RetrievalOrchestrator:
         limit: int,
     ) -> list[SearchHit]:
         query_text = query.normalized_text or query.text
-        
+
         from atenex_nova.infrastructure.embeddings.reranker_adapter import RerankerAdapter
         reranker = RerankerAdapter()
         pairs = [(query_text, f"{hit.title} {hit.snippet}") for hit in hits]
         neural_scores = reranker.predict(pairs)
-        
+
         for i, hit in enumerate(hits):
             overlap = self._lexical_overlap(query_text, f"{hit.title} {hit.snippet}")
             phrase_bonus = 0.15 if route_mode == "exact" and query_has_phrase(hit.snippet, hit.title) else 0.0
             contradiction_bonus = 0.12 if route_mode == "argumentative" and self._contains_contradiction(hit.snippet) else 0.0
             metadata_bonus = 0.08 if (hit.metadata or {}).get("heading_path") else 0.0
-            
+
             if neural_scores:
                 base_score = neural_scores[i]
                 hit.score = base_score + (hit.score * 0.1) + (overlap * 0.2) + phrase_bonus + contradiction_bonus + metadata_bonus
             else:
                 hit.score += overlap * 0.35 + phrase_bonus + contradiction_bonus + metadata_bonus
-                
+
             hit.score *= self._route_source_weight(route_mode, hit.source_type)
 
         ranked = sorted(hits, key=lambda item: item.score, reverse=True)

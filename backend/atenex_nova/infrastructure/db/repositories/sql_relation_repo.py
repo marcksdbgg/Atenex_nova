@@ -50,7 +50,7 @@ class SqlRelationRepository:
             query = select(RelationEdgeModel).where(RelationEdgeModel.source_id.in_(frontier))
             if allowed_relations:
                 query = query.where(RelationEdgeModel.relation.in_(allowed_relations))
-                
+
             result = await self._session.execute(query)
             edges = [self._to_entity(model) for model in result.scalars().all()]
             expanded.extend(edges)

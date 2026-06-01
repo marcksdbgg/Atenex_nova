@@ -14,11 +14,12 @@ Este README refleja el checkout actual del repositorio, no solo la visión del p
 
 | Check | Resultado | Nota |
 | --- | --- | --- |
-| Backend unit tests | 43 passed | Ejecutado en `backend/.venv/Scripts/python.exe -m pytest tests/unit -q` |
-| Frontend build | passed | `npm run build` |
-| Frontend lint | passed | `npm run lint` |
-| Backend `ruff` | 19 issues | En el checkout actual todavía hay deuda de formato/imports |
-| Backend `mypy` | 14 errors | En el checkout actual todavía hay deuda de tipado |
+| OpenAPI/docs contract | 1 passed | `backend/.venv/Scripts/python.exe -m pytest tests/unit/test_openapi_documentation_contract.py -q` |
+| Backend unit tests | 1 failed, 43 passed | `tests/unit/test_answer_orchestrator_llm.py::test_compose_includes_all_selected_evidence_in_prompt` falla por citas vacías |
+| Frontend build | failed | `src/pages/Pages.tsx` usa `run.cases`, campo ausente en `EvaluationRunResponse` |
+| Frontend lint | failed | `src/components/PageViewer.tsx` dispara `react-hooks/set-state-in-effect` |
+| Backend `ruff` | 6 issues | Deuda existente de formato/imports; la nueva prueba de contrato queda limpia |
+| Backend `mypy` | 5 errors | Deuda existente en Qdrant, embeddings y visual adapter |
 | Integration / e2e | presentes | Existen, pero dependen de runtimes locales y no se revalidaron en esta pasada |
 
 La fuente canónica del gap restante sigue siendo [docs/final-gap-inventory.md](docs/final-gap-inventory.md).
@@ -259,7 +260,7 @@ El frontend usa un cliente `fetch` fino en [frontend/src/services/api.ts](fronte
 
 ## API surface principal
 
-La lista completa está en [docs/api-endpoints.md](docs/api-endpoints.md). Los grupos principales son:
+La lista completa está en [docs/api-endpoints.md](docs/api-endpoints.md). Ese documento se contrasta contra el OpenAPI generado por FastAPI mediante `backend/tests/unit/test_openapi_documentation_contract.py`. Los grupos principales son:
 
 | Método | Ruta | Propósito |
 | --- | --- | --- |
@@ -273,6 +274,7 @@ La lista completa está en [docs/api-endpoints.md](docs/api-endpoints.md). Los g
 | POST | `/collections/{id}/documents/import-folder` | Importar carpeta local |
 | POST | `/collections/{id}/rebuild` | Reencolar rebuild |
 | GET | `/documents/{id}/structure` | Árbol documental |
+| GET | `/documents/{id}/nodes` | Nodos estructurales |
 | GET | `/documents/{id}/chunks` | Chunks persistidos |
 | GET | `/documents/{id}/propositions` | Proposiciones persistidas |
 | GET | `/documents/{id}/pages/{page}` | Página visual |
@@ -430,6 +432,8 @@ Atenex_nova/
 
 El repo ya está bastante avanzado, pero no está cerrado al 100% contra el baseline. El inventario canónico de brechas sigue siendo [docs/final-gap-inventory.md](docs/final-gap-inventory.md). En este checkout todavía hay deuda visible en:
 
+- un fallo unitario en `AnswerOrchestrator` por citas vacías
+- `npm run build` y `npm run lint` del frontend
 - `ruff` y `mypy` del backend
 - cierre duro del sparse persisted
 - reranking más fuerte y medible

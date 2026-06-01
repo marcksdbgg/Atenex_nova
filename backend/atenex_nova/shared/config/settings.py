@@ -7,7 +7,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -98,6 +98,10 @@ class Settings(BaseSettings):
     require_llm: bool | None = None
     require_qdrant: bool | None = None
     require_visual: bool | None = None
+    require_reranker: bool | None = None
+    require_ocr: bool | None = None
+    enable_reranker: bool | None = None
+    store_prompts: bool = False
     min_evidence_items: int = 1
     min_grounding_score: float = 0.35
 
@@ -130,6 +134,21 @@ class Settings(BaseSettings):
         return self._require_flag(self.require_visual)
 
     @property
+    def reranker_required(self) -> bool:
+        return self._require_flag(self.require_reranker)
+
+    @property
+    def ocr_required(self) -> bool:
+        return self._require_flag(self.require_ocr)
+
+    @property
+    def reranker_enabled(self) -> bool:
+        if self.enable_reranker is not None:
+            return self.enable_reranker
+        # Desactivado en perfil LITE (perfil bajo), activado en estándar y max (perfil medio/alto)
+        return self.embedding_profile != EmbeddingProfile.LITE
+
+    @property
     def embedding_dimensions(self) -> int:
         """Get embedding dimensions based on profile."""
         dims = {
@@ -138,6 +157,13 @@ class Settings(BaseSettings):
             EmbeddingProfile.MAX: 768,
         }
         return dims[self.embedding_profile]
+
+    @model_validator(mode="after")
+    def adjust_defaults(self) -> "Settings":
+        default_sqlite = f"sqlite+aiosqlite:///{DEFAULT_SQLITE_DB_PATH.as_posix()}"
+        if self.database_url == default_sqlite and self.profile == Profile.PROD:
+            self.database_url = "postgresql+asyncpg://postgres:postgres@localhost:5432/atenex_nova"
+        return self
 
 
 def get_settings() -> Settings:

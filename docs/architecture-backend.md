@@ -4,7 +4,7 @@ This guide documents the current backend implementation of Atenex Nova as it exi
 
 ## Scope
 
-The backend is a modular monolith built around FastAPI, SQLAlchemy, and worker-driven background jobs. It follows the product contract in [docs/baseline.md](baseline.md) and the current implementation gap inventory in [docs/final-gap-inventory.md](final-gap-inventory.md). The [docs/plan_restante.md](plan_restante.md) file is retained only as historical context.
+The backend is a modular monolith built around FastAPI, SQLAlchemy, and worker-driven background jobs. It follows the product contract in [docs/baseline.md](baseline.md) and the current implementation gap inventory in [docs/final-gap-inventory.md](final-gap-inventory.md).
 
 ## Entry Points
 
@@ -162,6 +162,6 @@ In strict mode, missing evidence, empty LLM outputs, or unavailable required ser
 
 - [docs/baseline.md](baseline.md)
 - [docs/final-gap-inventory.md](final-gap-inventory.md)
-- [docs/plan_restante.md](plan_restante.md)
+
 - [docs/jobs-and-workers.md](jobs-and-workers.md)
 - [docs/api-endpoints.md](api-endpoints.md)

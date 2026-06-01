@@ -15,6 +15,7 @@ from atenex_nova.application.orchestrators.answer_orchestrator import (
 from atenex_nova.application.services.query_service import QueryService
 from atenex_nova.domain.entities.answer import Answer
 from atenex_nova.domain.entities.citation import Citation
+from atenex_nova.domain.entities.evidence_item import EvidenceItem
 from atenex_nova.infrastructure.db.repositories.sql_answer_repo import SqlAnswerRepository
 from atenex_nova.infrastructure.db.repositories.sql_citation_repo import SqlCitationRepository
 from atenex_nova.infrastructure.db.repositories.sql_query_repo import SqlQueryRepository
@@ -25,7 +26,7 @@ from atenex_nova.shared.observability.pipeline_audit import PipelineAuditService
 class AnswerDetail:
     answer: Answer
     citations: list[Citation]
-    evidence_items: list
+    evidence_items: list[EvidenceItem]
     query_id: str
     collection_id: str
     query_text: str
@@ -99,11 +100,11 @@ class AnswerService:
                 route_mode="factual_local",
                 route_reason="",
             )
-        search_result = await self._query_service.search_only(collection_id=query.collection_id, query=query.text, mode=query.route_mode or "auto")
+        evidence_items = self._evidence_from_trace(answer.evidence_trace)
         return AnswerDetail(
             answer=answer,
             citations=citations,
-            evidence_items=search_result.evidence_pack.items,
+            evidence_items=evidence_items,
             query_id=query.id,
             collection_id=query.collection_id,
             query_text=query.text,
@@ -111,8 +112,37 @@ class AnswerService:
             language=query.language,
             intent=query.intent,
             route_mode=query.route_mode,
-            route_reason=search_result.route_reason,
+            route_reason=str(answer.evidence_trace.get("route_reason") or ""),
         )
+
+    @staticmethod
+    def _evidence_from_trace(evidence_trace: dict[str, object]) -> list[EvidenceItem]:
+        raw_items = evidence_trace.get("selected_evidence")
+        if not isinstance(raw_items, list):
+            return []
+
+        items: list[EvidenceItem] = []
+        for raw_item in raw_items:
+            if not isinstance(raw_item, dict):
+                continue
+            metadata = raw_item.get("metadata")
+            items.append(
+                EvidenceItem(
+                    id=str(raw_item.get("id") or ""),
+                    query_id=str(raw_item.get("query_id") or ""),
+                    source_type=str(raw_item.get("source_type") or ""),
+                    source_id=str(raw_item.get("source_id") or ""),
+                    score=float(raw_item.get("score") or 0.0),
+                    rank=int(raw_item.get("rank") or 0),
+                    document_id=str(raw_item["document_id"]) if raw_item.get("document_id") else None,
+                    page_number=int(raw_item["page_number"]) if raw_item.get("page_number") is not None else None,
+                    title=str(raw_item.get("title") or ""),
+                    snippet=str(raw_item.get("snippet") or ""),
+                    citation_candidate=bool(raw_item.get("citation_candidate", True)),
+                    metadata=metadata if isinstance(metadata, dict) else {},
+                )
+            )
+        return items
 
     def export_markdown(self, detail: AnswerDetail) -> str:
         lines = [

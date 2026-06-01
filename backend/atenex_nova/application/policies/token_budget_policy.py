@@ -1,7 +1,7 @@
 """Policy for semantic chunking based on token budgets."""
 
 import logging
-from typing import Protocol
+from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -21,13 +21,16 @@ class DefaultTokenEstimator(TokenEstimator):
 
 class TransformersTokenEstimator(TokenEstimator):
     """Real token estimator using HuggingFace transformers AutoTokenizer."""
-    def __init__(self, model_name: str = "google/embeddinggemma-300m"):
+
+    def __init__(self, model_name: str = "google/embeddinggemma-300m") -> None:
+        self.tokenizer: Any | None = None
         try:
             from transformers import AutoTokenizer
+
             # fast loading, avoids downloading weights if not needed
             self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        except Exception as e:
-            logger.warning("Failed to load AutoTokenizer for '%s': %s. Falling back to heuristic.", model_name, e)
+        except Exception as exc:
+            logger.warning("Failed to load AutoTokenizer for '%s': %s. Falling back to heuristic.", model_name, exc)
             self.tokenizer = None
 
     def estimate(self, text: str) -> int:
@@ -41,7 +44,7 @@ class TransformersTokenEstimator(TokenEstimator):
 class TokenBudgetPolicy:
     """Evaluates boundaries for structural chunking to respect token budgets."""
 
-    def __init__(self, estimator: TokenEstimator | None = None):
+    def __init__(self, estimator: TokenEstimator | None = None) -> None:
         if estimator is None:
             estimator = TransformersTokenEstimator()
         self.estimator = estimator

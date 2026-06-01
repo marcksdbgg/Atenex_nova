@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 import re
 from collections import Counter
 from dataclasses import dataclass
+from typing import Any
 
+from atenex_nova.shared.exceptions.base import ServiceUnavailableError
+
+logger = logging.getLogger(__name__)
 TOKEN_RE = re.compile(r"[\w\-]+", re.UNICODE)
 
 
@@ -19,42 +24,57 @@ def hash_token(token: str) -> int:
     return int(hashlib.md5(token.encode("utf-8")).hexdigest()[:8], 16)
 
 
-import logging
-logger = logging.getLogger(__name__)
-
 class StableSparseEncoder:
-    """Stable sparse encoder for persisting sparse vectors.
-    Uses SPLADE via transformers to generate semantic sparse vectors."""
-    
-    _instance = None
-    _model = None
-    _tokenizer = None
+    """Stable sparse encoder for persisted sparse vectors.
 
-    def __new__(cls, *args, **kwargs):
+    SPLADE is preferred when available. In local/dev setups where the model is
+    absent, a deterministic lexical sparse vector is still persisted so sparse
+    retrieval remains real and inspectable instead of becoming a silent no-op.
+    """
+
+    _instance: StableSparseEncoder | None = None
+    _model: Any | None = None
+    _tokenizer: Any | None = None
+    _device: str = "cpu"
+    _uses_fallback: bool = True
+    _encoder_name: str = "lexical_hash"
+
+    def __new__(cls, *args: object, **kwargs: object) -> StableSparseEncoder:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(self, model_name: str = "prithivida/Splade_PP_en_v1"):
+    def __init__(self, model_name: str = "prithivida/Splade_PP_en_v1", required: bool = False) -> None:
         if self._model is not None:
             return
         logger.info("Initializing SpladeSparseEncoder with model: %s", model_name)
         try:
             import torch
             from transformers import AutoModelForMaskedLM, AutoTokenizer
+
             self._device = "cuda" if torch.cuda.is_available() else "cpu"
             self.__class__._tokenizer = AutoTokenizer.from_pretrained(model_name)
             self.__class__._model = AutoModelForMaskedLM.from_pretrained(model_name).to(self._device)
             self.__class__._model.eval()
-        except ImportError as e:
-            logger.warning("Failed to initialize SPLADE: %s. Using mock fallback.", e)
+            self.__class__._uses_fallback = False
+            self.__class__._encoder_name = model_name
+        except Exception as exc:
+            if required:
+                raise ServiceUnavailableError(
+                    service="sparse-encoder",
+                    message=f"failed to load sparse model '{model_name}': {exc}",
+                ) from exc
+            logger.warning("Failed to initialize SPLADE: %s. Using deterministic lexical sparse fallback.", exc)
             self.__class__._model = None
             self.__class__._tokenizer = None
+            self.__class__._uses_fallback = True
+            self.__class__._encoder_name = "lexical_hash"
 
     def _encode(self, text: str) -> tuple[list[int], list[float]]:
         if self._model is None or self._tokenizer is None:
-            return [], []
+            return self._encode_lexical(text)
         import torch
+
         inputs = self._tokenizer(text, return_tensors="pt", truncation=True, max_length=512).to(self._device)
         with torch.no_grad():
             outputs = self._model(**inputs)
@@ -65,14 +85,37 @@ class StableSparseEncoder:
         indices = vec.nonzero().squeeze(-1)
         values = vec[indices]
         if indices.dim() == 0:
-            return [indices.item()], [values.item()]
-        return indices.tolist(), values.tolist()
+            return [int(indices.item())], [float(values.item())]
+        return [int(index) for index in indices.tolist()], [float(value) for value in values.tolist()]
+
+    @staticmethod
+    def _encode_lexical(text: str) -> tuple[list[int], list[float]]:
+        counts = Counter(tokenize(text))
+        if not counts:
+            return [], []
+        max_count = max(counts.values()) or 1
+        weighted = sorted(
+            (
+                hash_token(token),
+                1.0 + (count / max_count),
+            )
+            for token, count in counts.items()
+        )
+        return [index for index, _value in weighted], [value for _index, value in weighted]
 
     def encode_document(self, text: str) -> tuple[list[int], list[float]]:
         return self._encode(text)
 
     def encode_query(self, text: str) -> tuple[list[int], list[float]]:
         return self._encode(text)
+
+    @property
+    def uses_fallback(self) -> bool:
+        return self._uses_fallback
+
+    @property
+    def encoder_name(self) -> str:
+        return self._encoder_name
 
 
 @dataclass

@@ -251,6 +251,8 @@ class EmbedDocumentJobHandler(BaseJobHandler):
                                 "summary": chunk.summary,
                                 "node_ids": chunk.node_ids,
                                 "sparse_ref": chunk.sparse_ref,
+                                "sparse_encoder": sparse_encoder.encoder_name,
+                                "sparse_fallback": sparse_encoder.uses_fallback,
                                 "page_numbers": page_numbers,
                                 "heading_path": heading_path,
                                 "bboxes": bbox_candidates,

@@ -5,7 +5,8 @@ from typing import NotRequired, TypedDict
 
 class BoundingBox(TypedDict, total=False):
     """Standard bounding box representation."""
-    l: float
+
+    l: float  # noqa: E741 - Docling/PDF bbox schema uses l/t/r/b keys.
     t: float
     r: float
     b: float

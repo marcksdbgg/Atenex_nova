@@ -31,11 +31,11 @@ async def test_plain_text_files_parse_without_docling(tmp_path: Path) -> None:
 async def test_docling_unavailable_raises_error_for_complex_documents(tmp_path: Path) -> None:
     source = tmp_path / "document.pdf"
     source.write_bytes(b"%PDF-1.4...")
-    
+
     adapter = DoclingParserAdapter()
     # Mocking docling as unavailable
     adapter.converter = None
     adapter.chunker = None
-    
+
     with pytest.raises(RuntimeError, match="Docling is not available but required for complex documents"):
         await adapter.parse(str(source), "document-1")

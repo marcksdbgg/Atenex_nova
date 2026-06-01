@@ -66,6 +66,7 @@ class IndexVisualPagesJobHandler(BaseJobHandler):
                             "document_id": document.id,
                             "source_page_id": f"{document.id}:{page_number}",
                             "collection_id": document.collection_id,
+                            "source_path": document.source_path,
                             "page_number": page_number,
                             "title": document.title,
                             "text": text or document.title,
