@@ -186,6 +186,7 @@ export interface AnswerRequest {
   query: string;
   mode?: string;
   generation_profile?: string;
+  chat_id?: string | null;
 }
 
 export interface EvidenceTrace {
@@ -228,6 +229,11 @@ export interface AnswerResponse {
   selected_evidence?: QueryHit[];
   citations: Citation[];
   evidence: QueryHit[];
+  full_prompt?: string | null;
+  input_token_count?: number | null;
+  output_token_count?: number | null;
+  chat_history_used?: boolean | null;
+  chat_history_json?: string | null;
 }
 
 export interface QuerySearchResponse {
@@ -295,4 +301,24 @@ export interface HealthStatus {
 export interface ApiError {
   code: string;
   message: string;
+}
+
+export interface Chat {
+  id: string;
+  collection_id: string;
+  title: string;
+  created_at: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  chat_id: string;
+  role: string;
+  content: string;
+  created_at: string;
+}
+
+export interface CreateChatRequest {
+  collection_id: string;
+  title: string;
 }

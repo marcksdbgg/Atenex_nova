@@ -1,10 +1,10 @@
 """Answer orchestration, verification and citation binding."""
 
-from __future__ import annotations
-
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from atenex_nova.application.orchestrators.retrieval_orchestrator import SearchResult
 from atenex_nova.application.policies.answer_planning_policy import AnswerPlanningPolicy
@@ -12,7 +12,12 @@ from atenex_nova.domain.entities.answer import Answer
 from atenex_nova.domain.entities.citation import Citation
 from atenex_nova.domain.entities.evidence_item import EvidenceItem
 from atenex_nova.domain.value_objects.identifiers import AnswerVerdict, new_id
-from atenex_nova.infrastructure.llm.llm_gateway import LlamaCppAdapter, LLMGateway, OllamaAdapter
+from atenex_nova.infrastructure.llm.llm_gateway import (
+    LlamaCppAdapter,
+    LLMGenerationResult,
+    LLMGateway,
+    OllamaAdapter,
+)
 from atenex_nova.shared.config.settings import get_settings
 from atenex_nova.shared.exceptions.base import ServiceUnavailableError, StrictModeViolationError
 from atenex_nova.shared.logging.logger import get_logger
@@ -66,15 +71,29 @@ class AnswerOrchestrator:
         self._planner = AnswerPlanningPolicy()
         self._generator = generator or self._build_generator(settings.llm_backend)
 
-    async def compose(self, search_result: SearchResult, generation_profile: str = "standard") -> AnswerBundle:
+    async def compose(
+        self,
+        search_result: SearchResult,
+        generation_profile: str = "standard",
+        chat_history: list[Any] | None = None,
+    ) -> AnswerBundle:
         plan_type = self._planner.choose_plan(search_result.evidence_pack)
         logger.info(
             f"Composing answer for query: '{search_result.query.text}' | "
             f"Routed Mode: {search_result.evidence_pack.route_mode} | "
             f"Plan Type: {plan_type} | Evidence Pack size: {len(search_result.evidence_pack.items)} hits"
         )
-        prompt = self._build_prompt(search_result, plan_type, generation_profile)
-        draft_text = await self._generate(prompt, plan_type)
+        
+        # Ensure chat history fits in token budget (e.g. max prompt size of 8000 tokens)
+        max_prompt_tokens = 8000
+        while chat_history and (len(self._build_prompt(search_result, plan_type, generation_profile, chat_history)) // 4) > max_prompt_tokens:
+            chat_history = chat_history[1:]
+
+        prompt = self._build_prompt(search_result, plan_type, generation_profile, chat_history)
+        gen_res = await self._generate(prompt, plan_type)
+        draft_text = gen_res.text
+        input_token_count = gen_res.prompt_tokens
+        output_token_count = gen_res.completion_tokens
         citations = self._bind_citations(search_result.evidence_pack.items, draft_text)
         answer_text = self._finalize_text(
             draft_text,
@@ -89,7 +108,8 @@ class AnswerOrchestrator:
         if self._should_retry_generation(verification, citations):
             repair_prompt = self._build_repair_prompt(prompt, verification.issues)
             try:
-                repaired_draft = await self._generate(repair_prompt, plan_type)
+                repaired_gen = await self._generate(repair_prompt, plan_type)
+                repaired_draft = repaired_gen.text
                 repaired_citations = self._bind_citations(search_result.evidence_pack.items, repaired_draft)
                 repaired_answer = self._finalize_text(
                     repaired_draft,
@@ -108,6 +128,8 @@ class AnswerOrchestrator:
                 if self._is_better_attempt(verification, citations, repaired_verification, repaired_citations):
                     prompt = repair_prompt
                     draft_text = repaired_draft
+                    input_token_count = repaired_gen.prompt_tokens
+                    output_token_count = repaired_gen.completion_tokens
                     citations = repaired_citations
                     answer_text = repaired_answer
                     verification = repaired_verification
@@ -123,6 +145,18 @@ class AnswerOrchestrator:
         )
 
         self._enforce_strict_answer(answer_text, citations, verification, search_result.query.route_mode)
+        
+        serialized_history = []
+        if chat_history:
+            for msg in chat_history:
+                if isinstance(msg, dict):
+                    serialized_history.append(msg)
+                else:
+                    serialized_history.append({
+                        "role": getattr(msg, "role", "user"),
+                        "content": getattr(msg, "content", "")
+                    })
+
         answer = Answer(
             id=new_id(),
             query_id=search_result.query.id,
@@ -149,6 +183,11 @@ class AnswerOrchestrator:
                     prompt=prompt,
                 ),
             },
+            full_prompt=prompt,
+            input_token_count=input_token_count,
+            output_token_count=output_token_count,
+            chat_history_used=bool(chat_history),
+            chat_history_json=json.dumps(serialized_history) if chat_history else None,
         )
         return AnswerBundle(
             query_id=search_result.query.id,
@@ -214,23 +253,40 @@ class AnswerOrchestrator:
             "Do not add claims without support in the evidence block.\n"
         )
 
-    async def _generate(self, prompt: str, plan_type: str) -> str:
+    async def _generate(self, prompt: str, plan_type: str) -> LLMGenerationResult:
         max_tokens = 1024 if plan_type in {"direct_answer", "visual_grounded_synthesis"} else 1536
         temperature = 0.15 if plan_type == "direct_answer" else 0.25
-        text = await self._generator.generate(
+        gen_res = await self._generator.generate(
             prompt,
             max_tokens=max_tokens,
             temperature=temperature,
             stop=["\n\n###", "\n<END>"] if plan_type != "visual_grounded_synthesis" else ["\n\n###"],
         )
-        if text.strip():
-            return text.strip()
+        
+        if isinstance(gen_res, str):
+            text = gen_res
+            prompt_tokens = max(1, len(prompt) // 4)
+            completion_tokens = max(1, len(text) // 4)
+            gen_res = LLMGenerationResult(
+                text=text,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+            )
+
+        if gen_res.text.strip():
+            return gen_res
         raise ServiceUnavailableError(
             service="llm",
             message="LLM returned empty draft text; non-LLM fallback answers are disabled",
         )
 
-    def _build_prompt(self, search_result: SearchResult, plan_type: str, generation_profile: str) -> str:
+    def _build_prompt(
+        self,
+        search_result: SearchResult,
+        plan_type: str,
+        generation_profile: str,
+        chat_history: list[Any] | None = None,
+    ) -> str:
         template = self._load_prompt(plan_type)
         evidence_block = self._format_evidence(search_result.evidence_pack.items)
         reduce_instructions = self._load_prompt("hierarchical_reduce") if plan_type == "hierarchical_synthesis" else ""
@@ -251,6 +307,21 @@ class AnswerOrchestrator:
         }
         for key, value in replacements.items():
             template = template.replace(key, value)
+
+        if chat_history:
+            turns = []
+            for msg in chat_history:
+                if isinstance(msg, dict):
+                    role = msg.get("role", "user")
+                    content = msg.get("content", "")
+                else:
+                    role = getattr(msg, "role", "user")
+                    content = getattr(msg, "content", "")
+                prefix = "[User]" if role == "user" else "[Assistant]"
+                turns.append(f"{prefix}: {content}")
+            history_str = "Conversation history:\n" + "\n".join(turns) + "\n\n"
+            template = history_str + template
+
         return template
 
     def _build_prompt_trace(
@@ -521,10 +592,18 @@ class AnswerOrchestrator:
             result = await self._generator.generate(prompt, max_tokens=256, temperature=0.0)
         except Exception:
             return None
-        if not result.strip():
+        
+        if isinstance(result, str):
+            text = result
+        elif hasattr(result, "text"):
+            text = result.text
+        else:
             return None
 
-        lowered = result.lower()
+        if not text or not text.strip():
+            return None
+
+        lowered = text.lower()
         verdict = AnswerVerdict.PARTIALLY_VERIFIED
         if "conflicting" in lowered:
             verdict = AnswerVerdict.CONFLICTING
@@ -535,7 +614,7 @@ class AnswerOrchestrator:
 
         score_match = re.search(r"grounding[_\s-]*score\s*:\s*([0-9]*\.?[0-9]+)", lowered)
         grounding_score = float(score_match.group(1)) if score_match else 0.0
-        issues_line = next((line for line in result.splitlines() if line.lower().startswith("issues:")), "")
+        issues_line = next((line for line in text.splitlines() if line.lower().startswith("issues:")), "")
         issues = [part.strip() for part in issues_line.split(":", 1)[1].split(",") if part.strip()] if issues_line else []
         return VerificationResult(verdict=verdict, grounding_score=grounding_score, issues=issues)
 

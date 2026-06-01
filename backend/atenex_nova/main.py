@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from atenex_nova.infrastructure.db.session import create_all_tables, dispose_engine
 from atenex_nova.presentation.api.routers import (
     answers,
+    chats,
     collections,
     documents,
     evaluation,
@@ -53,6 +54,7 @@ def create_app() -> FastAPI:
 
     # Routers
     app.include_router(health.router)
+    app.include_router(chats.router)
     app.include_router(collections.router)
     app.include_router(documents.router)
     app.include_router(jobs.router)

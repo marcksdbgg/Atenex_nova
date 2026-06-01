@@ -49,7 +49,11 @@ async def session_factory(tmp_path: Path):
 
 
 @pytest.fixture(autouse=True)
-def _use_local_fallback_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
+def _mock_llm_and_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
+    from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
+    from atenex_nova.application.orchestrators.answer_orchestrator import AnswerOrchestrator
+    from atenex_nova.infrastructure.llm.llm_gateway import LLMGenerationResult
+
     def _fast_init(self, model_name: str = "google/embeddinggemma-300m", dim: int = 384, required: bool | None = None) -> None:
         self._model_name = model_name or "google/embeddinggemma-300m"
         self._dim = dim
@@ -58,6 +62,28 @@ def _use_local_fallback_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
         self._fallback_only = True
 
     monkeypatch.setattr(EmbeddingGemmaAdapter, "__init__", _fast_init)
+
+    class MockGateway:
+        async def generate(
+            self,
+            prompt: str,
+            max_tokens: int = 2048,
+            temperature: float = 0.3,
+            stop: list[str] | None = None,
+        ) -> LLMGenerationResult:
+            if "verification" in prompt.lower() or "verdict" in prompt.lower():
+                return LLMGenerationResult(
+                    text="VERDICT: verified\nGROUNDING_SCORE: 1.0\nISSUES: none",
+                    prompt_tokens=10,
+                    completion_tokens=5,
+                )
+            return LLMGenerationResult(
+                text="EmbeddingGemma supports 384d embeddings for the standard profile [1], [2].",
+                prompt_tokens=20,
+                completion_tokens=15,
+            )
+
+    monkeypatch.setattr(AnswerOrchestrator, "_build_generator", lambda self, backend: MockGateway())
 
 
 async def _seed_full_corpus(factory) -> tuple[str, str]:

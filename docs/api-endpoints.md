@@ -9,6 +9,7 @@ This document catalogs the current public HTTP surface exposed by the backend.
 - The endpoint set below is derived from the current FastAPI OpenAPI schema, not from the roadmap.
 - Drift between this document and the generated OpenAPI route set is guarded by [backend/tests/unit/test_openapi_documentation_contract.py](../backend/tests/unit/test_openapi_documentation_contract.py).
 
+
 ## Health
 
 | Method | Route | Purpose |
@@ -30,6 +31,15 @@ This document catalogs the current public HTTP surface exposed by the backend.
 | POST | `/collections/{collection_id}/documents/import` | Register a local file path as a document |
 | POST | `/collections/{collection_id}/documents/import-folder` | Import a local folder into the collection |
 | POST | `/collections/{collection_id}/rebuild` | Requeue the collection rebuild pipeline |
+
+## Chats
+
+| Method | Route | Purpose |
+|---|---|---|
+| POST | `/chats` | Create a new chat session for a collection |
+| GET | `/collections/{collection_id}/chats` | List all chats for a collection |
+| GET | `/chats/{chat_id}/messages` | Get the message history of a chat |
+| DELETE | `/chats/{chat_id}` | Delete a chat and all its messages |
 
 ## Documents
 

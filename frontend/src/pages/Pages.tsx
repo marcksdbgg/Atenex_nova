@@ -24,6 +24,7 @@ import type {
   QueryHit,
   QueryHistoryResponse,
   QuerySearchResponse,
+  Chat,
 } from '../types/api';
 
 type UploadStatus = 'queued' | 'uploading' | 'done' | 'error';
@@ -269,26 +270,6 @@ function formatAuditValue(value: unknown): string {
 function pickDocumentByPriority(documents: Document[]): Document | null {
   return documents.find(document => document.status !== 'failed') ?? documents[0] ?? null;
 }
-
-function mapHistoryToTurn(item: QueryHistoryResponse): ChatTurn {
-  return {
-    id: item.query_id,
-    queryId: item.query_id,
-    query: item.query,
-    answerId: item.answer_id ?? undefined,
-    routeMode: item.route_mode,
-    intent: item.intent,
-    language: item.language,
-    createdAt: item.created_at,
-    kind: item.answer ? 'answer' : 'search',
-    answer: item.answer ?? undefined,
-    verdict: item.verdict ?? undefined,
-    groundingScore: item.grounding_score ?? undefined,
-    citationsCount: item.citations_count,
-    isPending: false,
-  };
-}
-
 function mapSearchResultToTurn(response: QuerySearchResponse): ChatTurn {
   return {
     id: response.query_id,
@@ -2046,6 +2027,21 @@ export function QueryPage() {
   const [inspectorPage, setInspectorPage] = useState<DocumentPage | null>(null);
   const [inspectorLoading, setInspectorLoading] = useState(false);
   const [inspectorError, setInspectorError] = useState('');
+  
+  // Chats & RAG Audit States
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [activeChatId, setActiveChatId] = useState<string>('');
+  const [newChatTitle, setNewChatTitle] = useState<string>('');
+  const [loadingChats, setLoadingChats] = useState<boolean>(false);
+  const [technicalTab, setTechnicalTab] = useState<'summary' | 'rag_audit'>('summary');
+  const [isLargeScreen, setIsLargeScreen] = useState(typeof window !== 'undefined' ? window.innerWidth > 1280 : true);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleResize = () => setIsLargeScreen(window.innerWidth > 1280);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   const answerDetailByTurnIdRef = useRef<Record<string, AnswerResponse>>({});
   const composerFormRef = useRef<HTMLFormElement | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -2121,66 +2117,26 @@ export function QueryPage() {
     }
   }, []);
 
+  // Load documents for collection
   useEffect(() => {
     if (!collectionId) {
-      setTurns([]);
-      setActiveTurnId('');
-      setActiveAnswer(null);
-      setActiveSearchHits([]);
-      setHydrationFailedByTurnId({});
-      setError('');
+      setDocumentsByCollection(current => ({ ...current, [collectionId]: [] }));
       return;
     }
 
     let mounted = true;
     setLoadingContext(true);
 
-    Promise.allSettled([api.listAllCollectionDocuments(collectionId), api.listQueryHistory(collectionId, 20)])
-      .then(async ([documentsResult, historyResult]) => {
+    api.listAllCollectionDocuments(collectionId)
+      .then(docs => {
         if (!mounted) return;
-
-        if (documentsResult.status === 'fulfilled') {
-          setDocumentsByCollection(current => ({
-            ...current,
-            [collectionId]: documentsResult.value,
-          }));
-        } else {
-          setDocumentsByCollection(current => ({
-            ...current,
-            [collectionId]: [],
-          }));
-        }
-
-        if (historyResult.status === 'fulfilled') {
-          setHistoryByCollection(current => ({
-            ...current,
-            [collectionId]: historyResult.value,
-          }));
-        } else {
-          setHistoryByCollection(current => ({
-            ...current,
-            [collectionId]: [],
-          }));
-        }
-
-        const historyTurns = historyResult.status === 'fulfilled'
-          ? historyResult.value.slice().reverse().map(mapHistoryToTurn)
-          : [];
-        setTurns(historyTurns);
-        setHydrationFailedByTurnId({});
-        const lastTurn = historyTurns.at(-1) ?? null;
-
-        if (!lastTurn) {
-          setActiveTurnId('');
-          setActiveAnswer(null);
-          setActiveSearchHits([]);
-        } else {
-          void hydrateTurn(lastTurn);
-        }
-
-        if (documentsResult.status === 'rejected' || historyResult.status === 'rejected') {
-          setError('No se pudieron cargar completamente los datos de contexto de la colección.');
-        }
+        setDocumentsByCollection(current => ({
+          ...current,
+          [collectionId]: docs,
+        }));
+      })
+      .catch(() => {
+        if (mounted) setError('No se pudieron cargar los documentos de la colección.');
       })
       .finally(() => {
         if (mounted) setLoadingContext(false);
@@ -2189,7 +2145,147 @@ export function QueryPage() {
     return () => {
       mounted = false;
     };
-  }, [collectionId, hydrateTurn]);
+  }, [collectionId]);
+
+  // Load chat threads when collectionId changes
+  useEffect(() => {
+    if (!collectionId) {
+      setChats([]);
+      setActiveChatId('');
+      setTurns([]);
+      return;
+    }
+
+    let mounted = true;
+    setLoadingChats(true);
+    api.listChats(collectionId)
+      .then(items => {
+        if (!mounted) return;
+        setChats(items);
+        if (items.length > 0) {
+          setActiveChatId(items[0].id);
+        } else {
+          setActiveChatId('');
+          setTurns([]);
+          setActiveTurnId('');
+          setActiveAnswer(null);
+          setActiveSearchHits([]);
+        }
+      })
+      .catch(() => {
+        if (mounted) setError('No se pudieron cargar las conversaciones.');
+      })
+      .finally(() => {
+        if (mounted) setLoadingChats(false);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [collectionId]);
+
+  // Load messages when activeChatId changes
+  useEffect(() => {
+    if (!activeChatId) {
+      setTurns([]);
+      setActiveTurnId('');
+      setActiveAnswer(null);
+      setActiveSearchHits([]);
+      return;
+    }
+
+    let mounted = true;
+    api.getChatMessages(activeChatId, 50)
+      .then(messages => {
+        if (!mounted) return;
+
+        const chatTurns: ChatTurn[] = [];
+        for (let i = 0; i < messages.length; i++) {
+          const msg = messages[i];
+          if (msg.role === 'user') {
+            const nextMsg = messages[i + 1];
+            const hasAssistant = nextMsg && nextMsg.role === 'assistant';
+            const assistantContent = hasAssistant ? nextMsg.content : undefined;
+            const assistantId = hasAssistant ? nextMsg.id : undefined;
+
+            chatTurns.push({
+              id: msg.id,
+              queryId: msg.id,
+              query: msg.content,
+              answerId: assistantId,
+              routeMode: 'auto',
+              intent: 'user_chat',
+              language: 'es',
+              createdAt: msg.created_at,
+              kind: 'answer',
+              answer: assistantContent,
+              isPending: false,
+            });
+
+            if (hasAssistant) {
+              i++;
+            }
+          }
+        }
+
+        setTurns(chatTurns);
+        setHydrationFailedByTurnId({});
+        const lastTurn = chatTurns.at(-1) ?? null;
+
+        if (!lastTurn) {
+          setActiveTurnId('');
+          setActiveAnswer(null);
+          setActiveSearchHits([]);
+        } else {
+          void hydrateTurn(lastTurn);
+        }
+      })
+      .catch(() => {
+        if (mounted) setError('No se pudieron cargar los mensajes de esta conversación.');
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [activeChatId, hydrateTurn]);
+
+  const handleCreateChat = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!collectionId || !newChatTitle.trim()) return;
+    try {
+      const chat = await api.createChat({
+        collection_id: collectionId,
+        title: newChatTitle.trim(),
+      });
+      setChats(current => [chat, ...current]);
+      setActiveChatId(chat.id);
+      setNewChatTitle('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo crear la conversación.');
+    }
+  };
+
+  const handleDeleteChat = async (chatId: string) => {
+    if (!window.confirm('¿Seguro que deseas eliminar esta conversación y todo su historial?')) return;
+    try {
+      await api.deleteChat(chatId);
+      setChats(current => current.filter(c => c.id !== chatId));
+      if (activeChatId === chatId) {
+        const remaining = chats.filter(c => c.id !== chatId);
+        if (remaining.length > 0) {
+          setActiveChatId(remaining[0].id);
+        } else {
+          setActiveChatId('');
+          setTurns([]);
+          setActiveTurnId('');
+          setActiveAnswer(null);
+          setActiveSearchHits([]);
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo eliminar la conversación.');
+    }
+  };
 
   const currentCollection = useMemo(
     () => collections.find(collection => collection.id === collectionId) ?? null,
@@ -2352,6 +2448,7 @@ export function QueryPage() {
     return `Se usaron ${activeEvidence.length} evidencias, ${documents.size} documentos y fuentes tipo ${Array.from(sources).join(', ')}.`;
   }, [activeEvidence, activeTurn]);
 
+  const lastTurnAnswer = visibleTurns.at(-1)?.answer;
   useEffect(() => {
     const viewport = threadViewportRef.current;
     if (!viewport) return;
@@ -2362,7 +2459,7 @@ export function QueryPage() {
     }, 50);
 
     return () => clearTimeout(timer);
-  }, [visibleTurns.length, pendingTurnId, loading, visibleTurns.at(-1)?.answer]);
+  }, [visibleTurns.length, pendingTurnId, loading, lastTurnAnswer]);
 
   const canSubmit = collectionId.length > 0 && query.trim().length > 0 && !loading && !loadingCollections;
   const routeModes = ['auto', 'exact', 'factual_local', 'multi_hop', 'global', 'argumentative', 'visual'];
@@ -2431,6 +2528,24 @@ export function QueryPage() {
     setLoading(true);
     setError('');
     const prompt = query.trim();
+
+    let chatIdToUse = activeChatId;
+    if (!chatIdToUse && action === 'answer') {
+      try {
+        const newChat = await api.createChat({
+          collection_id: collectionId,
+          title: prompt.slice(0, 30) + (prompt.length > 30 ? '...' : ''),
+        });
+        setChats(current => [newChat, ...current]);
+        setActiveChatId(newChat.id);
+        chatIdToUse = newChat.id;
+      } catch {
+        setError('No se pudo inicializar un chat nuevo.');
+        setLoading(false);
+        return;
+      }
+    }
+
     const pendingTurn = createPendingTurn(prompt, mode, action);
     setQuery('');
     setPendingQuery(prompt);
@@ -2458,6 +2573,7 @@ export function QueryPage() {
           query: prompt,
           mode,
           generation_profile: 'standard',
+          chat_id: chatIdToUse || null,
         });
 
         submittedTurn = mapAnswerResultToTurn(response);
@@ -2504,7 +2620,73 @@ export function QueryPage() {
 
   return (
     <div className="query-chat-page animate-fade-in-up">
-      <div className="query-chat-layout">
+      <div className="query-chat-layout" style={{ display: 'grid', gridTemplateColumns: isLargeScreen ? '240px minmax(0, 1fr) minmax(320px, 420px)' : '1fr', gap: 'var(--space-4)' }}>
+        {/* Sidebar de Chats/Conversaciones */}
+        <aside className="query-threads-sidebar card" style={{ padding: 'var(--space-3)', display: 'grid', gridTemplateRows: 'auto auto 1fr', gap: 'var(--space-3)', background: 'rgba(255, 252, 246, 0.55)', minWidth: 0, height: '100%' }}>
+          <div className="card__title" style={{ fontSize: 'var(--font-sm)', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--color-text-tertiary)' }}>Conversaciones</div>
+          
+          <form onSubmit={handleCreateChat} style={{ display: 'flex', gap: 'var(--space-2)' }}>
+            <input
+              type="text"
+              placeholder="Nueva conversación..."
+              value={newChatTitle}
+              onChange={e => setNewChatTitle(e.target.value)}
+              className="query-select"
+              style={{ flex: 1, padding: '0.4rem 0.6rem', fontSize: 'var(--font-xs)', border: '1px solid rgba(120,76,43,0.25)' }}
+            />
+            <button type="submit" className="btn btn-primary" style={{ padding: '0.4rem 0.6rem', fontSize: 'var(--font-xs)' }}>+</button>
+          </form>
+
+          <div style={{ overflow: 'auto', display: 'grid', gap: 'var(--space-2)', alignContent: 'start', maxHeight: '500px' }}>
+            {loadingChats ? (
+              <p className="query-panel-note">Cargando...</p>
+            ) : chats.length === 0 ? (
+              <p className="query-panel-note">No hay chats creados.</p>
+            ) : (
+              chats.map(c => {
+                const isActive = c.id === activeChatId;
+                return (
+                  <div
+                    key={c.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: 'var(--space-2)',
+                      borderRadius: 'var(--radius-md)',
+                      background: isActive ? 'rgba(99, 102, 241, 0.12)' : 'transparent',
+                      border: isActive ? '1px solid rgba(99, 102, 241, 0.35)' : '1px solid transparent',
+                      cursor: 'pointer',
+                    }}
+                    onClick={() => setActiveChatId(c.id)}
+                  >
+                    <span style={{ fontSize: 'var(--font-xs)', fontWeight: isActive ? 'bold' : 'normal', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, paddingRight: '0.5rem' }}>
+                      {c.title}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void handleDeleteChat(c.id);
+                      }}
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'var(--color-error)',
+                        cursor: 'pointer',
+                        padding: '0 0.2rem',
+                        fontSize: 'var(--font-xs)'
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </aside>
+
         <section className="query-chat card" aria-label="Chat principal de consulta">
           <header className="query-chat__header">
             <div>
@@ -2717,193 +2899,389 @@ export function QueryPage() {
             )}
           </section>
 
-          <section className="query-side-card card" aria-label="Panel técnico de contexto">
-            <div className="card__header">
-              <div>
-                <div className="card__title">Detalles técnicos</div>
-                <p className="query-panel-note">Contexto, etiquetas, métricas y accesos rápidos de sesión.</p>
+          <section className="query-side-card card" aria-label="Panel técnico de contexto" style={{ display: 'grid', gap: 'var(--space-4)' }}>
+            <div className="card__header" style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 'var(--space-2)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div className="card__title">Detalles técnicos</div>
+                  <p className="query-panel-note">Contexto, RAG Audit y métricas.</p>
+                </div>
+                <span className="badge badge--info">{activeTurn?.kind === 'answer' ? 'respuesta' : 'búsqueda'}</span>
               </div>
-              <span className="badge badge--info">{activeTurn?.kind === 'answer' ? 'respuesta' : 'búsqueda'}</span>
+
+              {/* Selector de pestañas */}
+              <div style={{ display: 'flex', gap: 'var(--space-2)', borderBottom: '1px solid rgba(255,255,255,0.08)', marginTop: 'var(--space-2)' }}>
+                <button
+                  type="button"
+                  onClick={() => setTechnicalTab('summary')}
+                  style={{
+                    padding: 'var(--space-2) var(--space-3)',
+                    background: 'transparent',
+                    border: 'none',
+                    borderBottom: technicalTab === 'summary' ? '2px solid rgba(99,102,241,0.85)' : '2px solid transparent',
+                    color: technicalTab === 'summary' ? 'var(--color-text-primary)' : 'var(--color-text-tertiary)',
+                    fontWeight: technicalTab === 'summary' ? 'bold' : 'normal',
+                    cursor: 'pointer',
+                    fontSize: 'var(--font-xs)',
+                  }}
+                >
+                  Resumen General
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTechnicalTab('rag_audit')}
+                  style={{
+                    padding: 'var(--space-2) var(--space-3)',
+                    background: 'transparent',
+                    border: 'none',
+                    borderBottom: technicalTab === 'rag_audit' ? '2px solid rgba(99,102,241,0.85)' : '2px solid transparent',
+                    color: technicalTab === 'rag_audit' ? 'var(--color-text-primary)' : 'var(--color-text-tertiary)',
+                    fontWeight: technicalTab === 'rag_audit' ? 'bold' : 'normal',
+                    cursor: 'pointer',
+                    fontSize: 'var(--font-xs)',
+                  }}
+                >
+                  RAG Audit (Trace)
+                </button>
+              </div>
             </div>
 
             {activeTurn ? (
-              <>
-                <section className="query-context__block query-active-turn">
-                  <div className="query-panel-heading">Turno activo</div>
-                  <p className="query-turn__query">{activeTurn.query}</p>
-                  <div className="query-turn__stats">
-                    {technicalTags.map(tag => <span key={tag} className="query-chip">{tag}</span>)}
-                  </div>
-                </section>
-
-                <section className="query-context__block">
-                  <div className="query-panel-heading">Métricas</div>
-                  <div className="query-answer__grid">
-                    <div className="query-answer__metric">
-                      <div className="query-answer__label">Grounding</div>
-                      <div className="query-answer__value">{activeTurn.groundingScore?.toFixed(3) ?? '—'}</div>
+              technicalTab === 'summary' ? (
+                <>
+                  <section className="query-context__block query-active-turn">
+                    <div className="query-panel-heading">Turno activo</div>
+                    <p className="query-turn__query">{activeTurn.query}</p>
+                    <div className="query-turn__stats">
+                      {technicalTags.map(tag => <span key={tag} className="query-chip">{tag}</span>)}
                     </div>
-                    <div className="query-answer__metric">
-                      <div className="query-answer__label">Citas</div>
-                      <div className="query-answer__value">{activeTurn.citationsCount ?? 0}</div>
-                    </div>
-                    <div className="query-answer__metric">
-                      <div className="query-answer__label">Evidencias</div>
-                      <div className="query-answer__value">{activeEvidence.length}</div>
-                    </div>
-                    <div className="query-answer__metric">
-                      <div className="query-answer__label">Documentos</div>
-                      <div className="query-answer__value">{collectionDocuments.length}</div>
-                    </div>
-                  </div>
-                </section>
-
-                <section className="query-context__block">
-                  <div className="query-panel-heading">Contexto usado</div>
-                  <p className="query-panel-note">{activeContextSummary}</p>
-                </section>
-
-                {activeTurn.kind === 'answer' ? (
-                  <>
-                    {activeAnswer ? (
-                      <section className="query-context__block query-answer">
-                        <AnswerPanel answer={activeAnswer} />
-                      </section>
-                    ) : null}
-                    <section className="query-context__block query-answer">
-                      <div className="query-panel-heading">Respuesta completa</div>
-                      <p className="query-answer__body">
-                        {normalizeAssistantText(activeAnswer?.answer ?? activeTurn.answer ?? '', activeTurn.language) || 'Sin respuesta textual disponible para este turno.'}
-                      </p>
-                    </section>
-                  </>
-                ) : null}
-
-                {qualityAlerts.length > 0 ? (
-                  <section className="query-context__block">
-                    <div className="query-panel-heading">Alertas de calidad</div>
-                    <ul className="query-alert-list">
-                      {qualityAlerts.map(alert => <li key={alert}>{alert}</li>)}
-                    </ul>
                   </section>
-                ) : null}
 
-                {activeAnswer ? (
                   <section className="query-context__block">
-                    <div className="query-panel-heading">Exportación</div>
-                    <div className="query-export__actions">
-                      <a className="btn btn-primary" href={api.exportAnswerMarkdown(activeAnswer.answer_id)} target="_blank" rel="noreferrer">Markdown</a>
-                      <a className="btn btn-secondary" href={api.exportAnswerPdf(activeAnswer.answer_id)} target="_blank" rel="noreferrer">PDF</a>
-                    </div>
-                    {Object.keys(activeAnswer.evidence_trace ?? {}).length > 0 ? (
-                      <pre style={{ marginTop: 'var(--space-3)', whiteSpace: 'pre-wrap', background: 'rgba(255,255,255,0.03)', borderRadius: 'var(--radius-md)', padding: 'var(--space-3)', color: 'var(--color-text-secondary)', fontSize: 'var(--font-xs)', lineHeight: 'var(--line-height-relaxed)' }}>
-                        {JSON.stringify(activeAnswer.evidence_trace, null, 2)}
-                      </pre>
-                    ) : null}
-                  </section>
-                ) : null}
-
-                <section className="query-context__block">
-                  <div className="query-panel-heading">Memoria reciente</div>
-                  <div className="query-rail__list">
-                    {recentMemory.length === 0 ? (
-                      <p className="query-panel-note">No hay consultas previas para esta colección.</p>
-                    ) : (
-                      recentMemory.map(item => (
-                        <button
-                          key={item.query_id}
-                          type="button"
-                          className="query-rail__item query-rail__item--button"
-                          onClick={() => setQuery(item.query)}
-                        >
-                          <div className="query-rail__item-title">{item.query}</div>
-                          <div className="query-rail__item-meta">{formatRelativeDate(item.created_at)} · {item.route_mode}</div>
-                        </button>
-                      ))
-                    )}
-                  </div>
-                </section>
-
-                <section className="query-context__block">
-                  <div className="query-panel-heading">Documentos en contexto</div>
-                  <p className="query-panel-note">Mostrando {visibleDocuments.length} de {collectionDocuments.length} documentos.</p>
-                  <div className="query-rail__list">
-                    {visibleDocuments.length === 0 ? (
-                      <p className="query-panel-note">No hay documentos disponibles en esta colección.</p>
-                    ) : (
-                      visibleDocuments.map(document => {
-                        const pipeline = getDocumentPipeline(document.status);
-                        const collectionPath = normalizeCollectionPath(document.collection_path || document.title);
-                        return (
-                          <article
-                            key={document.id}
-                            className="query-rail__item"
-                            role="button"
-                            tabIndex={0}
-                            onClick={() => setInspectorDocumentId(document.id)}
-                            onKeyDown={event => {
-                              if (event.key === 'Enter' || event.key === ' ') {
-                                event.preventDefault();
-                                setInspectorDocumentId(document.id);
-                              }
-                            }}
-                            style={{
-                              cursor: 'pointer',
-                              borderColor: inspectorDocumentId === document.id ? 'rgba(99,102,241,0.55)' : undefined,
-                            }}
-                          >
-                            <div className="query-rail__item-top">
-                              <div className="query-rail__item-title" title={getCollectionDisplayTitle(document)}>{getCollectionDisplayTitle(document)}</div>
-                              <span className={`badge badge--${pipeline.tone}`}>{pipeline.label}</span>
-                            </div>
-                            <div className="query-rail__item-meta" title={(collectionPath || document.source_path) ?? undefined}>{collectionPath || document.source_path || 'Ruta no disponible'}</div>
-                          </article>
-                        );
-                      })
-                    )}
-                  </div>
-                </section>
-                <section className="query-context__block">
-                  <div className="query-panel-heading">Inspector documental</div>
-                  {!inspectorDocumentId ? (
-                    <p className="query-panel-note">Selecciona un documento del corpus o de la evidencia para inspeccionarlo.</p>
-                  ) : inspectorLoading ? (
-                    <p className="query-panel-note">Cargando estructura, chunks y proposiciones...</p>
-                  ) : (
-                    <div style={{ display: 'grid', gap: 'var(--space-3)' }}>
-                      <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-                        <span className="query-chip">Documento {inspectorDocumentId}</span>
-                        <span className="query-chip">Nodos {inspectorNodes.length}</span>
-                        <span className="query-chip">Chunks {inspectorChunks.length}</span>
-                        <span className="query-chip">Proposiciones {inspectorPropositions.length}</span>
-                        {inspectorPage ? <span className="query-chip">Pagina {inspectorPage.page_number}</span> : null}
+                    <div className="query-panel-heading">Métricas</div>
+                    <div className="query-answer__grid">
+                      <div className="query-answer__metric">
+                        <div className="query-answer__label">Grounding</div>
+                        <div className="query-answer__value">{activeTurn.groundingScore?.toFixed(3) ?? '—'}</div>
                       </div>
-                      {inspectorError ? <p className="query-panel-note" style={{ color: 'var(--color-error)' }}>{inspectorError}</p> : null}
-                      {inspectorPage ? (
-                        <div className="card" style={{ background: 'rgba(10,14,23,0.96)', borderColor: 'var(--color-border)' }}>
-                          <div className="card__title">{inspectorPage.title}</div>
-                          <p className="query-panel-note" style={{ marginTop: 'var(--space-2)' }}>{inspectorPage.text}</p>
-                          {inspectorPage.image_path ? (
-                            <a href={inspectorPage.image_path} target="_blank" rel="noreferrer">Abrir pagina visual</a>
-                          ) : null}
-                        </div>
+                      <div className="query-answer__metric">
+                        <div className="query-answer__label">Citas</div>
+                        <div className="query-answer__value">{activeTurn.citationsCount ?? 0}</div>
+                      </div>
+                      <div className="query-answer__metric">
+                        <div className="query-answer__label">Evidencias</div>
+                        <div className="query-answer__value">{activeEvidence.length}</div>
+                      </div>
+                      <div className="query-answer__metric">
+                        <div className="query-answer__label">Documentos</div>
+                        <div className="query-answer__value">{collectionDocuments.length}</div>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className="query-context__block">
+                    <div className="query-panel-heading">Contexto usado</div>
+                    <p className="query-panel-note">{activeContextSummary}</p>
+                  </section>
+
+                  {activeTurn.kind === 'answer' ? (
+                    <>
+                      {activeAnswer ? (
+                        <section className="query-context__block query-answer">
+                          <AnswerPanel answer={activeAnswer} />
+                        </section>
                       ) : null}
-                      <div className="card" style={{ background: 'rgba(10,14,23,0.96)', borderColor: 'var(--color-border)' }}>
-                        <div className="card__title">Estructura</div>
-                        <pre style={{ marginTop: 'var(--space-3)', whiteSpace: 'pre-wrap', fontSize: 'var(--font-xs)', color: 'var(--color-text-secondary)' }}>
-                          {JSON.stringify(inspectorNodes.slice(0, 6), null, 2)}
-                        </pre>
+                      <section className="query-context__block query-answer">
+                        <div className="query-panel-heading">Respuesta completa</div>
+                        <p className="query-answer__body">
+                          {normalizeAssistantText(activeAnswer?.answer ?? activeTurn.answer ?? '', activeTurn.language) || 'Sin respuesta textual disponible para este turno.'}
+                        </p>
+                      </section>
+                    </>
+                  ) : null}
+
+                  {qualityAlerts.length > 0 ? (
+                    <section className="query-context__block">
+                      <div className="query-panel-heading">Alertas de calidad</div>
+                      <ul className="query-alert-list">
+                        {qualityAlerts.map(alert => <li key={alert}>{alert}</li>)}
+                      </ul>
+                    </section>
+                  ) : null}
+
+                  {activeAnswer ? (
+                    <section className="query-context__block">
+                      <div className="query-panel-heading">Exportación</div>
+                      <div className="query-export__actions">
+                        <a className="btn btn-primary" href={api.exportAnswerMarkdown(activeAnswer.answer_id)} target="_blank" rel="noreferrer">Markdown</a>
+                        <a className="btn btn-secondary" href={api.exportAnswerPdf(activeAnswer.answer_id)} target="_blank" rel="noreferrer">PDF</a>
                       </div>
-                      <div className="card" style={{ background: 'rgba(10,14,23,0.96)', borderColor: 'var(--color-border)' }}>
-                        <div className="card__title">Chunks y proposiciones</div>
-                        <pre style={{ marginTop: 'var(--space-3)', whiteSpace: 'pre-wrap', fontSize: 'var(--font-xs)', color: 'var(--color-text-secondary)' }}>
-                          {JSON.stringify({ chunks: inspectorChunks.slice(0, 4), propositions: inspectorPropositions.slice(0, 4) }, null, 2)}
+                      {Object.keys(activeAnswer.evidence_trace ?? {}).length > 0 ? (
+                        <pre style={{ marginTop: 'var(--space-3)', whiteSpace: 'pre-wrap', background: 'rgba(255,255,255,0.03)', borderRadius: 'var(--radius-md)', padding: 'var(--space-3)', color: 'var(--color-text-secondary)', fontSize: 'var(--font-xs)', lineHeight: 'var(--line-height-relaxed)' }}>
+                          {JSON.stringify(activeAnswer.evidence_trace, null, 2)}
                         </pre>
-                      </div>
+                      ) : null}
+                    </section>
+                  ) : null}
+
+                  <section className="query-context__block">
+                    <div className="query-panel-heading">Memoria reciente</div>
+                    <div className="query-rail__list">
+                      {recentMemory.length === 0 ? (
+                        <p className="query-panel-note">No hay consultas previas para esta colección.</p>
+                      ) : (
+                        recentMemory.map(item => (
+                          <button
+                            key={item.query_id}
+                            type="button"
+                            className="query-rail__item query-rail__item--button"
+                            onClick={() => setQuery(item.query)}
+                          >
+                            <div className="query-rail__item-title">{item.query}</div>
+                            <div className="query-rail__item-meta">{formatRelativeDate(item.created_at)} · {item.route_mode}</div>
+                          </button>
+                        ))
+                      )}
                     </div>
-                  )}
-                </section>
-              </>
+                  </section>
+
+                  <section className="query-context__block">
+                    <div className="query-panel-heading">Documentos en contexto</div>
+                    <p className="query-panel-note">Mostrando {visibleDocuments.length} de {collectionDocuments.length} documentos.</p>
+                    <div className="query-rail__list">
+                      {visibleDocuments.length === 0 ? (
+                        <p className="query-panel-note">No hay documentos disponibles en esta colección.</p>
+                      ) : (
+                        visibleDocuments.map(document => {
+                          const pipeline = getDocumentPipeline(document.status);
+                          const collectionPath = normalizeCollectionPath(document.collection_path || document.title);
+                          return (
+                            <article
+                              key={document.id}
+                              className="query-rail__item"
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => setInspectorDocumentId(document.id)}
+                              onKeyDown={event => {
+                                  if (event.key === 'Enter' || event.key === ' ') {
+                                    event.preventDefault();
+                                    setInspectorDocumentId(document.id);
+                                  }
+                              }}
+                              style={{
+                                cursor: 'pointer',
+                                borderColor: inspectorDocumentId === document.id ? 'rgba(99,102,241,0.55)' : undefined,
+                              }}
+                            >
+                              <div className="query-rail__item-top">
+                                <div className="query-rail__item-title" title={getCollectionDisplayTitle(document)}>{getCollectionDisplayTitle(document)}</div>
+                                <span className={`badge badge--${pipeline.tone}`}>{pipeline.label}</span>
+                              </div>
+                              <div className="query-rail__item-meta" title={(collectionPath || document.source_path) ?? undefined}>{collectionPath || document.source_path || 'Ruta no disponible'}</div>
+                            </article>
+                          );
+                        })
+                      )}
+                    </div>
+                  </section>
+                  <section className="query-context__block">
+                    <div className="query-panel-heading">Inspector documental</div>
+                    {!inspectorDocumentId ? (
+                      <p className="query-panel-note">Selecciona un documento del corpus o de la evidencia para inspeccionarlo.</p>
+                    ) : inspectorLoading ? (
+                      <p className="query-panel-note">Cargando estructura, chunks y proposiciones...</p>
+                    ) : (
+                      <div style={{ display: 'grid', gap: 'var(--space-3)' }}>
+                        <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                          <span className="query-chip">Documento {inspectorDocumentId}</span>
+                          <span className="query-chip">Nodos {inspectorNodes.length}</span>
+                          <span className="query-chip">Chunks {inspectorChunks.length}</span>
+                          <span className="query-chip">Proposiciones {inspectorPropositions.length}</span>
+                          {inspectorPage ? <span className="query-chip">Pagina {inspectorPage.page_number}</span> : null}
+                        </div>
+                        {inspectorError ? <p className="query-panel-note" style={{ color: 'var(--color-error)' }}>{inspectorError}</p> : null}
+                        {inspectorPage ? (
+                          <div className="card" style={{ background: 'rgba(10,14,23,0.96)', borderColor: 'var(--color-border)' }}>
+                            <div className="card__title">{inspectorPage.title}</div>
+                            <p className="query-panel-note" style={{ marginTop: 'var(--space-2)' }}>{inspectorPage.text}</p>
+                            {inspectorPage.image_path ? (
+                              <a href={inspectorPage.image_path} target="_blank" rel="noreferrer">Abrir pagina visual</a>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        <div className="card" style={{ background: 'rgba(10,14,23,0.96)', borderColor: 'var(--color-border)' }}>
+                          <div className="card__title">Estructura</div>
+                          <pre style={{ marginTop: 'var(--space-3)', whiteSpace: 'pre-wrap', fontSize: 'var(--font-xs)', color: 'var(--color-text-secondary)' }}>
+                            {JSON.stringify(inspectorNodes.slice(0, 6), null, 2)}
+                          </pre>
+                        </div>
+                        <div className="card" style={{ background: 'rgba(10,14,23,0.96)', borderColor: 'var(--color-border)' }}>
+                          <div className="card__title">Chunks y proposiciones</div>
+                          <pre style={{ marginTop: 'var(--space-3)', whiteSpace: 'pre-wrap', fontSize: 'var(--font-xs)', color: 'var(--color-text-secondary)' }}>
+                            {JSON.stringify({ chunks: inspectorChunks.slice(0, 4), propositions: inspectorPropositions.slice(0, 4) }, null, 2)}
+                          </pre>
+                        </div>
+                      </div>
+                    )}
+                  </section>
+                </>
+              ) : (
+                <div className="rag-audit-trace" style={{ display: 'grid', gap: 'var(--space-4)', color: 'var(--color-text-primary)' }}>
+                  {/* Paso 1: Router */}
+                  <div className="card" style={{ background: 'rgba(255,255,255,0.02)', padding: 'var(--space-3)', borderColor: 'rgba(255,255,255,0.06)' }}>
+                    <div style={{ fontWeight: 'var(--font-weight-bold)', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                      <span style={{ display: 'inline-flex', width: '1.4rem', height: '1.4rem', background: 'rgba(99,102,241,0.85)', borderRadius: '50%', color: '#fff', alignItems: 'center', justifyContent: 'center', fontSize: 'var(--font-xs)' }}>1</span>
+                      Router & Planificación
+                    </div>
+                    <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--font-sm)', display: 'grid', gap: 'var(--space-2)' }}>
+                      <div><strong>Modo seleccionado:</strong> <span className="query-chip" style={{ background: 'rgba(99,102,241,0.2)', color: '#818cf8', display: 'inline-block', margin: '0 0.2rem' }}>{activeTurn.routeMode}</span></div>
+                      <div><strong>Intento detectado:</strong> <code>{activeTurn.intent}</code></div>
+                      <div><strong>Razón del enrutamiento:</strong> {activeAnswer?.route_reason || 'Selección de ruta basada en la densidad y el formato de la consulta.'}</div>
+                    </div>
+                  </div>
+
+                  {/* Paso 2: Hybrid Retrieval */}
+                  <div className="card" style={{ background: 'rgba(255,255,255,0.02)', padding: 'var(--space-3)', borderColor: 'rgba(255,255,255,0.06)' }}>
+                    <div style={{ fontWeight: 'var(--font-weight-bold)', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                      <span style={{ display: 'inline-flex', width: '1.4rem', height: '1.4rem', background: 'rgba(99,102,241,0.85)', borderRadius: '50%', color: '#fff', alignItems: 'center', justifyContent: 'center', fontSize: 'var(--font-xs)' }}>2</span>
+                      Recuperación Híbrida & RRF
+                    </div>
+                    <div style={{ marginTop: 'var(--space-2)', display: 'grid', gap: 'var(--space-2)', maxHeight: '200px', overflow: 'auto', paddingRight: 'var(--space-1)' }}>
+                      {activeSearchHits.length === 0 ? (
+                        <p className="query-panel-note">No hay evidencias recuperadas en este turno.</p>
+                      ) : (
+                        activeSearchHits.map((hit, idx) => {
+                          const denseScore = hit.metadata?.dense_score ?? hit.metadata?.vector_score;
+                          const sparseScore = hit.metadata?.sparse_score ?? hit.metadata?.bm25_score;
+                          return (
+                            <div key={hit.id} style={{ fontSize: 'var(--font-xs)', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: 'var(--space-2)' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'var(--font-weight-semibold)' }}>
+                                <span>#{idx + 1} - {hit.title.slice(0, 30)}... ({hit.source_type})</span>
+                                <span style={{ color: '#818cf8' }}>Rank: {hit.rank}</span>
+                              </div>
+                              <div style={{ color: 'var(--color-text-tertiary)', marginTop: '0.15rem' }}>
+                                <span>Score RRF: {hit.score.toFixed(4)}</span>
+                                {denseScore !== undefined && <span> | Vector: {Number(denseScore).toFixed(4)}</span>}
+                                {sparseScore !== undefined && <span> | Sparse: {Number(sparseScore).toFixed(4)}</span>}
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Paso 3: Reranker */}
+                  <div className="card" style={{ background: 'rgba(255,255,255,0.02)', padding: 'var(--space-3)', borderColor: 'rgba(255,255,255,0.06)' }}>
+                    <div style={{ fontWeight: 'var(--font-weight-bold)', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                      <span style={{ display: 'inline-flex', width: '1.4rem', height: '1.4rem', background: 'rgba(99,102,241,0.85)', borderRadius: '50%', color: '#fff', alignItems: 'center', justifyContent: 'center', fontSize: 'var(--font-xs)' }}>3</span>
+                      Reranker Neuronal (Cross-Encoder)
+                    </div>
+                    <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--font-xs)' }}>
+                      {activeSearchHits.some(hit => hit.metadata?.rerank_score !== undefined) ? (
+                        <div style={{ display: 'grid', gap: 'var(--space-2)' }}>
+                          <p className="query-panel-note" style={{ color: 'var(--color-success)', margin: 0 }}>Reranking neuronal ejecutado con CUDA float16.</p>
+                          {activeSearchHits.slice(0, 3).map((hit) => {
+                            const rerankScore = hit.metadata?.rerank_score;
+                            const originalScore = typeof hit.metadata?.original_score === 'number' ? hit.metadata.original_score : hit.score;
+                            return (
+                              <div key={hit.id}>
+                                <strong>{hit.title.slice(0, 15)}...</strong>: original: {originalScore.toFixed(4)} → neural: {Number(rerankScore).toFixed(4)}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="query-panel-note" style={{ margin: 0 }}>Reranker no activo o sin cambios para este tipo de búsqueda.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Paso 4: Prompt Final */}
+                  <div className="card" style={{ background: 'rgba(255,255,255,0.02)', padding: 'var(--space-3)', borderColor: 'rgba(255,255,255,0.06)' }}>
+                    <div style={{ fontWeight: 'var(--font-weight-bold)', display: 'flex', alignItems: 'center', gap: 'var(--space-2)', justifyContent: 'space-between' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                        <span style={{ display: 'inline-flex', width: '1.4rem', height: '1.4rem', background: 'rgba(99,102,241,0.85)', borderRadius: '50%', color: '#fff', alignItems: 'center', justifyContent: 'center', fontSize: 'var(--font-xs)' }}>4</span>
+                        Prompt Final (LLM Input)
+                      </div>
+                      {activeAnswer?.full_prompt && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ padding: '0.1rem 0.4rem', fontSize: 'var(--font-xs)' }}
+                          onClick={() => {
+                            navigator.clipboard.writeText(activeAnswer.full_prompt || '');
+                            alert('Copiado al portapapeles');
+                          }}
+                        >
+                          Copiar
+                        </button>
+                      )}
+                    </div>
+                    <div style={{ marginTop: 'var(--space-2)' }}>
+                      {activeAnswer?.full_prompt ? (
+                        <pre style={{ margin: 0, padding: 'var(--space-2)', background: 'rgba(0,0,0,0.3)', borderRadius: 'var(--radius-md)', maxHeight: '180px', overflow: 'auto', whiteSpace: 'pre-wrap', fontSize: 'var(--font-xs)', color: 'var(--color-text-secondary)', fontFamily: 'monospace' }}>
+                          {activeAnswer.full_prompt}
+                        </pre>
+                      ) : (
+                        <p className="query-panel-note" style={{ margin: 0 }}>El prompt final no está cacheado para este turno.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Paso 5: Métricas */}
+                  <div className="card" style={{ background: 'rgba(255,255,255,0.02)', padding: 'var(--space-3)', borderColor: 'rgba(255,255,255,0.06)' }}>
+                    <div style={{ fontWeight: 'var(--font-weight-bold)', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                      <span style={{ display: 'inline-flex', width: '1.4rem', height: '1.4rem', background: 'rgba(99,102,241,0.85)', borderRadius: '50%', color: '#fff', alignItems: 'center', justifyContent: 'center', fontSize: 'var(--font-xs)' }}>5</span>
+                      Métricas & Tokens
+                    </div>
+                    <div style={{ marginTop: 'var(--space-2)', display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 'var(--space-2)' }}>
+                      <div className="query-answer__metric" style={{ background: 'rgba(0,0,0,0.2)', border: 'none' }}>
+                        <div className="query-answer__label">Input Tokens</div>
+                        <div className="query-answer__value">{activeAnswer?.input_token_count ?? '—'}</div>
+                      </div>
+                      <div className="query-answer__metric" style={{ background: 'rgba(0,0,0,0.2)', border: 'none' }}>
+                        <div className="query-answer__label">Output Tokens</div>
+                        <div className="query-answer__value">{activeAnswer?.output_token_count ?? '—'}</div>
+                      </div>
+                      <div className="query-answer__metric" style={{ background: 'rgba(0,0,0,0.2)', border: 'none', gridColumn: 'span 2' }}>
+                        <div className="query-answer__label">Chat History Usado</div>
+                        <div className="query-answer__value">{activeAnswer?.chat_history_used ? 'Sí' : 'No'}</div>
+                      </div>
+                      {activeAnswer?.chat_history_json && (
+                        <div style={{ gridColumn: 'span 2' }}>
+                          <span style={{ fontSize: 'var(--font-xs)', color: 'var(--color-text-tertiary)' }}>Turns serializados:</span>
+                          <pre style={{ margin: '0.2rem 0 0 0', padding: 'var(--space-2)', background: 'rgba(0,0,0,0.3)', borderRadius: 'var(--radius-sm)', maxHeight: '80px', overflow: 'auto', whiteSpace: 'pre-wrap', fontSize: 'var(--font-xs)' }}>
+                            {activeAnswer.chat_history_json}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Paso 6: Calidad */}
+                  <div className="card" style={{ background: 'rgba(255,255,255,0.02)', padding: 'var(--space-3)', borderColor: 'rgba(255,255,255,0.06)' }}>
+                    <div style={{ fontWeight: 'var(--font-weight-bold)', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                      <span style={{ display: 'inline-flex', width: '1.4rem', height: '1.4rem', background: 'rgba(99,102,241,0.85)', borderRadius: '50%', color: '#fff', alignItems: 'center', justifyContent: 'center', fontSize: 'var(--font-xs)' }}>6</span>
+                      Grounding & Auditoría
+                    </div>
+                    <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--font-sm)', display: 'grid', gap: 'var(--space-2)' }}>
+                      <div><strong>Verdict:</strong> <span className={`badge badge--${activeTurn.verdict === 'grounded' ? 'success' : activeTurn.verdict === 'partially_grounded' ? 'warning' : 'error'}`} style={{ marginLeft: '0.3rem' }}>{activeTurn.verdict}</span></div>
+                      <div><strong>Score Grounding:</strong> <code>{activeTurn.groundingScore?.toFixed(3) ?? '—'}</code></div>
+                      {activeAnswer?.verification_issues && activeAnswer.verification_issues.length > 0 ? (
+                        <div>
+                          <strong style={{ color: 'var(--color-error)' }}>Problemas hallados:</strong>
+                          <ul style={{ margin: '0.2rem 0 0 0', paddingLeft: '1.1rem', color: 'var(--color-text-secondary)', fontSize: 'var(--font-xs)' }}>
+                            {activeAnswer.verification_issues.map((issue, idx) => <li key={idx}>{issue}</li>)}
+                          </ul>
+                        </div>
+                      ) : (
+                        <div style={{ color: 'var(--color-success)', fontWeight: 'var(--font-weight-semibold)', fontSize: 'var(--font-xs)' }}>✓ Grounding verificado sin problemas.</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )
             ) : (
               <p className="query-panel-note">
                 {pendingQuery

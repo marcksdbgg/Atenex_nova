@@ -19,3 +19,9 @@ class Answer:
     verification_issues: list[str] = field(default_factory=list)
     evidence_trace: dict[str, object] = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    full_prompt: str | None = None
+    input_token_count: int | None = None
+    output_token_count: int | None = None
+    chat_history_used: bool | None = None
+    chat_history_json: str | None = None
+

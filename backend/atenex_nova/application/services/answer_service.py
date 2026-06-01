@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from io import BytesIO
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -47,7 +48,21 @@ class AnswerService:
         self._orchestrator = AnswerOrchestrator()
         self._audit = PipelineAuditService(session=session)
 
-    async def answer(self, collection_id: str, query: str, mode: str = "auto", generation_profile: str = "standard") -> AnswerBundle:
+    async def answer(
+        self,
+        collection_id: str,
+        query: str,
+        mode: str = "auto",
+        generation_profile: str = "standard",
+        chat_id: str | None = None,
+    ) -> AnswerBundle:
+        chat_history = None
+        chat_repo = None
+        if chat_id:
+            from atenex_nova.infrastructure.db.repositories.sql_chat_repo import SqlChatRepository
+            chat_repo = SqlChatRepository(self._session)
+            chat_history = await chat_repo.get_last_messages(chat_id, limit=5)
+
         search_result = await self._query_service.search_only(collection_id=collection_id, query=query, mode=mode)
         async with self._audit.step(
             run_id=search_result.query.id,
@@ -65,11 +80,34 @@ class AnswerService:
                 route_mode=search_result.query.route_mode,
                 intent=search_result.query.intent,
             )
-            bundle = await self._orchestrator.compose(search_result, generation_profile=generation_profile)
+            bundle = await self._orchestrator.compose(
+                search_result,
+                generation_profile=generation_profile,
+                chat_history=chat_history,
+            )
             citations = normalize_citation_answer_ids(bundle.answer.id, bundle.citations)
             await self._answer_repo.create(bundle.answer)
             if citations:
                 await self._citation_repo.create_many(citations)
+
+            if chat_id and chat_repo is not None:
+                from atenex_nova.domain.entities.chat import ChatMessage
+                
+                user_msg = ChatMessage(
+                    id=search_result.query.id,
+                    chat_id=chat_id,
+                    role="user",
+                    content=query,
+                )
+                assistant_msg = ChatMessage(
+                    id=bundle.answer.id,
+                    chat_id=chat_id,
+                    role="assistant",
+                    content=bundle.answer.text,
+                )
+                await chat_repo.add_message(user_msg)
+                await chat_repo.add_message(assistant_msg)
+
             await self._session.commit()
             audit.metrics(
                 answer_id=bundle.answer.id,

@@ -62,6 +62,7 @@ async def query_history(
                 verdict=verdict,
                 grounding_score=grounding_score,
                 created_at=query.created_at,
+
                 citations_count=citations_count,
             )
         )
@@ -134,6 +135,7 @@ async def answer_query(
             query=body.query,
             mode=body.mode,
             generation_profile=body.generation_profile,
+            chat_id=body.chat_id,
         )
     except StrictModeViolationError as exc:
         raise HTTPException(status_code=422, detail={"code": exc.code, "message": exc.message}) from exc
@@ -156,6 +158,11 @@ async def answer_query(
         prompt_version=result.answer.prompt_version,
         verification_issues=result.answer.verification_issues,
         evidence_trace=result.answer.evidence_trace,
+        full_prompt=result.answer.full_prompt,
+        input_token_count=result.answer.input_token_count,
+        output_token_count=result.answer.output_token_count,
+        chat_history_used=result.answer.chat_history_used,
+        chat_history_json=result.answer.chat_history_json,
         citations=[
             CitationResponse(
                 id=citation.id,

@@ -26,6 +26,11 @@ class SqlAnswerRepository:
             verification_issues_json=json.dumps(answer.verification_issues),
             evidence_trace_json=json.dumps(answer.evidence_trace),
             created_at=answer.created_at,
+            full_prompt=answer.full_prompt,
+            input_token_count=answer.input_token_count,
+            output_token_count=answer.output_token_count,
+            chat_history_used=answer.chat_history_used,
+            chat_history_json=answer.chat_history_json,
         )
         self._session.add(model)
         await self._session.flush()
@@ -48,6 +53,11 @@ class SqlAnswerRepository:
             verification_issues=json.loads(model.verification_issues_json) if model.verification_issues_json else [],
             evidence_trace=json.loads(model.evidence_trace_json) if model.evidence_trace_json else {},
             created_at=model.created_at,
+            full_prompt=model.full_prompt,
+            input_token_count=model.input_token_count,
+            output_token_count=model.output_token_count,
+            chat_history_used=model.chat_history_used,
+            chat_history_json=model.chat_history_json,
         )
 
     async def get_by_query_id(self, query_id: str) -> Answer | None:
@@ -67,4 +77,9 @@ class SqlAnswerRepository:
             verification_issues=json.loads(model.verification_issues_json) if model.verification_issues_json else [],
             evidence_trace=json.loads(model.evidence_trace_json) if model.evidence_trace_json else {},
             created_at=model.created_at,
+            full_prompt=model.full_prompt,
+            input_token_count=model.input_token_count,
+            output_token_count=model.output_token_count,
+            chat_history_used=model.chat_history_used,
+            chat_history_json=model.chat_history_json,
         )

@@ -54,6 +54,8 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 
 async def create_all_tables() -> None:
     """Create all tables (for development/testing only)."""
+    # Ensure all tables are registered on SQLModel.metadata
+    from atenex_nova.infrastructure.db.models import tables  # noqa: F401
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
@@ -69,6 +71,11 @@ async def create_all_tables() -> None:
                 "draft_text": "ALTER TABLE answers ADD COLUMN draft_text TEXT NOT NULL DEFAULT ''",
                 "verification_issues_json": "ALTER TABLE answers ADD COLUMN verification_issues_json TEXT NOT NULL DEFAULT '[]'",
                 "evidence_trace_json": "ALTER TABLE answers ADD COLUMN evidence_trace_json TEXT NOT NULL DEFAULT '{}'",
+                "full_prompt": "ALTER TABLE answers ADD COLUMN full_prompt TEXT NULL",
+                "input_token_count": "ALTER TABLE answers ADD COLUMN input_token_count INTEGER NULL",
+                "output_token_count": "ALTER TABLE answers ADD COLUMN output_token_count INTEGER NULL",
+                "chat_history_used": "ALTER TABLE answers ADD COLUMN chat_history_used BOOLEAN NULL",
+                "chat_history_json": "ALTER TABLE answers ADD COLUMN chat_history_json TEXT NULL",
             })
             await _ensure_sqlite_columns(conn, "citations", {
                 "bbox_json": "ALTER TABLE citations ADD COLUMN bbox_json TEXT NULL",
@@ -99,6 +106,21 @@ async def create_all_tables() -> None:
             )
             await conn.exec_driver_sql(
                 "ALTER TABLE answers ADD COLUMN IF NOT EXISTS evidence_trace_json TEXT NOT NULL DEFAULT '{}'"
+            )
+            await conn.exec_driver_sql(
+                "ALTER TABLE answers ADD COLUMN IF NOT EXISTS full_prompt TEXT NULL"
+            )
+            await conn.exec_driver_sql(
+                "ALTER TABLE answers ADD COLUMN IF NOT EXISTS input_token_count INTEGER NULL"
+            )
+            await conn.exec_driver_sql(
+                "ALTER TABLE answers ADD COLUMN IF NOT EXISTS output_token_count INTEGER NULL"
+            )
+            await conn.exec_driver_sql(
+                "ALTER TABLE answers ADD COLUMN IF NOT EXISTS chat_history_used BOOLEAN NULL"
+            )
+            await conn.exec_driver_sql(
+                "ALTER TABLE answers ADD COLUMN IF NOT EXISTS chat_history_json TEXT NULL"
             )
             await conn.exec_driver_sql(
                 "ALTER TABLE citations ADD COLUMN IF NOT EXISTS bbox_json TEXT NULL"

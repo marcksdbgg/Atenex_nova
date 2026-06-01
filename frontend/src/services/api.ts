@@ -22,6 +22,9 @@ import type {
   QuerySearchRequest,
   QuerySearchResponse,
   RuntimeHealthStatus,
+  Chat,
+  ChatMessage,
+  CreateChatRequest,
 } from '../types/api';
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -284,6 +287,16 @@ class ApiClient {
     });
   listEvaluationRuns = () => this.request<EvaluationRunResponse[]>('/evaluation/runs');
   getEvaluationReport = (id: string) => this.request<EvaluationReportResponse>(`/evaluation/reports/${id}`);
+
+  /* Chats */
+  listChats = (collectionId: string, limit = 50) =>
+    this.request<Chat[]>(`/collections/${encodeURIComponent(collectionId)}/chats?limit=${limit}`);
+  createChat = (data: CreateChatRequest) =>
+    this.request<Chat>('/chats', { method: 'POST', body: JSON.stringify(data) });
+  getChatMessages = (chatId: string, limit = 50) =>
+    this.request<ChatMessage[]>(`/chats/${encodeURIComponent(chatId)}/messages?limit=${limit}`);
+  deleteChat = (chatId: string) =>
+    this.request<void>(`/chats/${encodeURIComponent(chatId)}`, { method: 'DELETE' });
 }
 
 export const api = new ApiClient(API_BASE);

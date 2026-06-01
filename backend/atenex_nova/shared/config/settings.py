@@ -85,6 +85,12 @@ class Settings(BaseSettings):
     embedding_profile: EmbeddingProfile = EmbeddingProfile.STANDARD
     embedding_batch_size: int = 32
 
+    # --- Reranker ---
+    reranker_device: str = "cuda"
+    reranker_fp16: bool = True
+    reranker_batch_size: int = 32
+    reranker_path: str | None = None
+
     # --- Storage ---
     blob_store_path: Path = STORAGE_ROOT / "uploads"
     visual_pages_path: Path = STORAGE_ROOT / "visual_pages"
@@ -162,7 +168,7 @@ class Settings(BaseSettings):
     def adjust_defaults(self) -> "Settings":
         default_sqlite = f"sqlite+aiosqlite:///{DEFAULT_SQLITE_DB_PATH.as_posix()}"
         if self.database_url == default_sqlite and self.profile == Profile.PROD:
-            self.database_url = "postgresql+asyncpg://postgres:postgres@localhost:5432/atenex_nova"
+            self.database_url = "postgresql+asyncpg://atenex:atenex_dev_password@localhost:5432/atenex_nova"
         return self
 
 

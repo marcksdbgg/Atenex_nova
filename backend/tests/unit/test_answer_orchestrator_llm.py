@@ -95,7 +95,7 @@ async def test_generate_accepts_non_empty_llm_output() -> None:
 
     text = await orchestrator._generate("prompt", "direct_answer")
 
-    assert text == "respuesta valida"
+    assert text.text.strip() == "respuesta valida"
 
 
 @pytest.mark.asyncio
