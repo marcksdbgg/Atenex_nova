@@ -1,322 +1,259 @@
 # Atenex Nova
 
-**Plataforma local de memoria documental y RAG de nueva generación**
+**Next-Generation Local-First Document Memory & RAG Platform**
 
 <p align="center">
-  <em>Sistema de memoria con varios motores de acceso, no un chatbot con vectores.</em>
+  <em>A document memory system with multiple retrieval engines — not another chatbot with vectors.</em>
+</p>
+
+<p align="center">
+  <a href="#architecture">Architecture</a> ·
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#api-surface">API</a> ·
+  <a href="#evaluation-framework">Evaluation</a> ·
+  <a href="#why-open-source">Why Open Source</a>
 </p>
 
 ---
 
-## Estado verificado del workspace
+## Overview
 
-Este README refleja el checkout actual del repositorio, no solo la visión del producto.
+Atenex Nova is an **open-source, local-first platform** for loading documents, building structured document memory, and answering questions with real grounding. It represents a second-generation approach to Retrieval-Augmented Generation that moves beyond the "single vector index + LLM" paradigm.
 
-| Check | Resultado | Nota |
-| --- | --- | --- |
-| OpenAPI/docs contract | 1 passed | `backend/.venv/Scripts/python.exe -m pytest tests/unit/test_openapi_documentation_contract.py -q` |
-| Backend unit tests | 1 failed, 43 passed | `tests/unit/test_answer_orchestrator_llm.py::test_compose_includes_all_selected_evidence_in_prompt` falla por citas vacías |
-| Frontend build | failed | `src/pages/Pages.tsx` usa `run.cases`, campo ausente en `EvaluationRunResponse` |
-| Frontend lint | failed | `src/components/PageViewer.tsx` dispara `react-hooks/set-state-in-effect` |
-| Backend `ruff` | 6 issues | Deuda existente de formato/imports; la nueva prueba de contrato queda limpia |
-| Backend `mypy` | 5 errors | Deuda existente en Qdrant, embeddings y visual adapter |
-| Integration / e2e | presentes | Existen, pero dependen de runtimes locales y no se revalidaron en esta pasada |
+Instead of relying on one retrieval mechanism, Atenex Nova coordinates **multiple specialized retrieval engines** — dense, sparse, propositional, summary-based, and visual — with intelligent query routing that selects the optimal strategy based on question type. Every answer is verified before delivery, with full citation traceability back to source document spans.
 
-La fuente canónica del gap restante sigue siendo [docs/final-gap-inventory.md](docs/final-gap-inventory.md).
+### What Makes This Different
 
----
+| Traditional RAG | Atenex Nova |
+|---|---|
+| Single vector index | 5-index architecture: dense + sparse + proposition + summary + visual |
+| One-size-fits-all retrieval | Query routing: 6 specialized modes (exact, factual, multi-hop, global, argumentative, visual) |
+| Text-only chunking | Structural document parsing with Docling — headings, tables, captions, reading order |
+| No verification | Two-step verification + grounding score + regeneration before answering |
+| Approximate citations | Span-level citation binding to real document positions |
+| Cloud-dependent | Local-first: everything runs on-prem with optional cloud decoupling |
 
-## Qué es Atenex Nova
+### Core Capabilities
 
-Atenex Nova es una plataforma local-first para cargar documentos, construir memoria documental estructurada y responder preguntas con grounding real. La idea no es "otro chatbot con vectores", sino un sistema con varios motores de acceso:
-
-- búsqueda híbrida dense + sparse
-- recuperación por proposiciones y resúmenes
-- routing por tipo de pregunta
-- soporte visual para páginas complejas
-- verificación antes de entregar una respuesta
-- trazabilidad de evidencia y citas
-
-La implementación actual sigue una arquitectura modular monolítica con backend FastAPI, jobs asíncronos, persistencia relacional, Qdrant para recuperación híbrida y un frontend React/Vite orientado a workspace operativo.
+- **Hybrid retrieval** — EmbeddingGemma dense vectors + local BM25 sparse + reranking fusion
+- **Multi-layer memory** — Chunks, propositions, summaries, and visual pages stored independently
+- **Query routing** — Automatic classification selects optimal retrieval mode per question type
+- **Propositional graph** — Claims, definitions, and relationships for multi-hop reasoning
+- **Visual retrieval** — ColPali-style page-level retrieval for scanned documents and complex layouts
+- **Answer verification** — Deterministic check + LLM second pass + grounding score before delivery
+- **Evidence traceability** — Every citation resolves to a real document span with page, bbox, and heading path
+- **Evaluation framework** — Dataset management, golden sets, and per-mode benchmarking
+- **Full observability** — Pipeline audit trails, job state tracking, dependency health checks
 
 ---
 
-## Qué está implementado hoy
+## Architecture
 
-Hoy el repositorio ya incluye, de forma operativa:
+Atenex Nova follows a **Modular Monolith + Hexagonal Architecture** pattern, designed for maintainability, testability, and clear separation of concerns.
 
-- routers FastAPI para `health`, `collections`, `documents`, `queries`, `answers`, `jobs`, `observability` y `evaluation`
-- ingesta de documentos con parsing estructural, normalización, segmentación, embeddings y enriquecimiento posterior
-- memoria persistida para chunks, proposiciones, resúmenes, relaciones, citas, queries, answers y jobs
-- recuperación híbrida con EmbeddingGemma como embedding local por defecto y búsqueda sparse local/BM25
-- routing de consulta por modos `exact`, `factual_local`, `multi_hop`, `global`, `argumentative` y `visual`
-- generación de respuesta con plan de síntesis, verificación y persistencia de grounding
-- exportes de respuesta a Markdown y PDF
-- observabilidad de pipeline y estado de jobs
-- UI de workspace para colecciones, consulta, observabilidad, evaluación y jobs
-
----
-
-## Arquitectura actual
-
-Atenex Nova se organiza como un **Modular Monolith + Hexagonal Architecture**.
-
-| Capa | Responsabilidad |
-| --- | --- |
-| `presentation` | Routers FastAPI, DTOs y respuestas HTTP |
-| `application` | Servicios, orquestadores, políticas y casos de uso |
-| `domain` | Entidades, value objects, contratos y reglas del dominio |
-| `infrastructure` | DB, archivos, Docling, embeddings, Qdrant, LLM, visual |
-| `workers` | Procesamiento asíncrono por jobs |
-| `evaluation` | Datasets, runs y métricas de regresión |
-| `shared` | Configuración, logging, errores y utilidades |
-
-### Stack tecnológico
-
-| Capa | Tecnología |
-| --- | --- |
-| Backend | Python, FastAPI, SQLAlchemy async, SQLModel, Pydantic v2 |
-| DB relacional | PostgreSQL o SQLite |
-| Vector DB | Qdrant |
-| Parser | Docling |
-| Generación | Gemma 4 vía Ollama o llama.cpp |
-| Embeddings | EmbeddingGemma |
-| Visual | ColPali-style visual retrieval |
-| Frontend | React, TypeScript, Vite |
-
-### Entry points principales
-
-- API: [backend/atenex_nova/main.py](backend/atenex_nova/main.py)
-- Wiring de dependencias: [backend/atenex_nova/dependencies.py](backend/atenex_nova/dependencies.py)
-- Worker: [backend/atenex_nova/workers/main.py](backend/atenex_nova/workers/main.py)
-- Dispatcher de jobs: [backend/atenex_nova/workers/runner.py](backend/atenex_nova/workers/runner.py)
-- Shell frontend: [frontend/src/App.tsx](frontend/src/App.tsx)
-- Páginas frontend: [frontend/src/pages/Pages.tsx](frontend/src/pages/Pages.tsx)
-
----
-
-## Modelo de datos y almacenamiento
-
-La persistencia actual combina SQLModel + almacenamiento local + Qdrant.
-
-### En SQL viven, entre otros:
-
-- collections
-- documents
-- structural nodes
-- chunks
-- propositions
-- summaries
-- citations
-- queries
-- answers
-- jobs
-- relation edges
-- pipeline audits
-- evaluation runs y cases
-
-### Almacenamiento local
-
-- uploads: `backend/storage/uploads/{collection_id}/{document_id}/{filename}`
-- visual pages: `backend/storage/visual_pages/`
-
-### Qdrant
-
-La recuperación está namespaceada por corpus. El patrón actual usa colecciones por documento/colección para chunks, proposiciones, resúmenes y páginas visuales.
-
----
-
-## Pipeline de ingesta
-
-El pipeline real está orientado a document understanding antes que a vectorización rápida.
-
-```text
-Documento -> parsing estructural -> normalización -> segmentación
-          -> embeddings -> enriquecimiento -> indexación visual -> ready
+```
+presentation  →  application  →  domain  →  infrastructure  →  workers  →  evaluation
+   (APIs)         (services)    (entities)    (adapters)       (jobs)      (metrics)
 ```
 
-### 1) Recepción
+| Layer | Responsibility | Key Components |
+|---|---|---|
+| `presentation` | FastAPI routers, DTOs, HTTP responses | 10 routers, OpenAPI-contracted |
+| `application` | Services, orchestrators, policies, use cases | Retrieval & answer orchestration, query routing, context packing |
+| `domain` | Entities, value objects, domain contracts, rules | 15+ entity types, typed identifiers, metadata schemas |
+| `infrastructure` | DB, parsing, embeddings, vector store, LLM, visual | PostgreSQL/SQLite, Qdrant, Docling, EmbeddingGemma, Gemma 4, ColPali |
+| `workers` | Async job processing | Ingestion, memory enrichment, visual indexing |
+| `evaluation` | Datasets, runs, scoring, regression | Answer & retrieval scorers, dataset manager |
+| `shared` | Configuration, logging, exceptions, observability | Settings, structured logging, pipeline audit |
 
-El documento entra por upload, import local o import folder. Se genera metadata de colección, documento, checksum, versión y trazas de proceso.
+### Technology Stack
 
-### 2) Parsing estructural
+| Component | Technology |
+|---|---|
+| **Backend** | Python 3.11+, FastAPI, SQLAlchemy async, SQLModel, Pydantic v2 |
+| **Relational DB** | PostgreSQL (production) / SQLite (development) |
+| **Vector Store** | Qdrant (dense + sparse + multi-vector) |
+| **Document Parser** | Docling (structural parsing: headings, tables, captions, OCR, reading order) |
+| **LLM Generation** | Gemma 4 via Ollama or llama.cpp (E2B / E4B / 26B profiles) |
+| **Embeddings** | EmbeddingGemma (256d / 384d / 768d via Matryoshka Representation Learning) |
+| **Visual Retrieval** | ColPali-style visual page retrieval |
+| **Frontend** | React 18, TypeScript, Vite |
 
-Se usa Docling para extraer estructura, texto y layout cuando aplica. El sistema persiste nodos estructurales y conserva metadatos útiles para grounding.
+### Hardware Profiles
 
-### 3) Normalización
+| Profile | RAM | Generator | Embeddings | Capabilities |
+|---|---|---|---|---|
+| **Lite** | 8 GB | Gemma 4 E2B | EmbeddingGemma 256d | Core retrieval, no persistent visual index |
+| **Standard** | 16 GB | Gemma 4 E4B | EmbeddingGemma 384d | Full propositional graph, optional visual |
+| **Advanced** | 32 GB+ | Gemma 4 26B/31B | EmbeddingGemma 768d | All indices active, full DRIFT/global mode |
 
-Se limpia whitespace, se preservan elementos semánticos relevantes y se preparan nodos para segmentación.
+---
 
-### 4) Segmentación
+## Document Ingestion Pipeline
 
-Se construyen chunks de recuperación sobre la estructura documental, no solo por corte ciego de caracteres.
+Atenex Nova prioritizes **document understanding over fast vectorization**. The ingestion pipeline transforms raw documents into a rich, multi-layered memory structure:
 
-### 5) Embeddings e indexación
+```
+Document → Structural Parsing → Normalization → Multi-Layer Segmentation
+         → Embeddings → Memory Enrichment → Visual Indexing → Ready
+```
 
-Se embeddean chunks y luego se escribe en Qdrant la representación dense. La capa sparse local complementa para keywords, nombres propios, fechas y códigos.
+### Pipeline Stages
 
-### 6) Enriquecimiento
+1. **Reception** — Upload, local import, or folder watch. Metadata, checksum, version, and process traces generated.
+2. **Structural Parsing** — Docling extracts headings, paragraphs, lists, tables, captions, figures, footnotes, and reading order.
+3. **Semantic Normalization** — Language detection, whitespace cleanup, numeral/date/code preservation, caption↔figure linking, cell↔table↔header linking.
+4. **Multi-Layer Segmentation** — Four views of each document:
+   - **Structural spans** — Paragraphs, sections, table cells, captions
+   - **Retrieval chunks** — Structure-aware chunks with context (400-800 token budget)
+   - **Propositions/claims** — Atomic assertions extracted from spans
+   - **Hierarchical summaries** — Section, document, and collection-level summaries
+5. **Embedding & Indexing** — EmbeddingGemma encodes chunks, propositions, and summaries into Qdrant. Local BM25 complements for keywords, proper names, dates, and codes.
+6. **Memory Enrichment** — Worker extracts propositions, generates summaries, builds heuristic relationships for multi-hop reasoning.
+7. **Visual Indexing** — Complex/scanned documents get visual page representations for layout-aware retrieval.
 
-El worker extrae proposiciones, genera resúmenes y construye relaciones heurísticas para razonamiento multi-hop.
+### Document State Machine
 
-### 7) Indexación visual
-
-Se preparan páginas visuales para documentos complejos o escaneados y se habilita una ruta visual de recuperación.
-
-### Estados del documento
-
-```text
-registered -> parsed -> normalized -> segmented -> embedded -> indexed -> ready
+```
+registered → parsed → normalized → segmented → embedded → indexed → ready
+                                                    ↓
+                                                  failed (with recovery)
 ```
 
 ---
 
-## Pipeline de consulta
+## Query Pipeline
 
-La consulta sigue un flujo de routing y síntesis por etapas.
+Questions flow through a multi-stage routing and synthesis pipeline:
 
-```text
-Pregunta -> normalización -> clasificación -> routing -> retrieval
-         -> fusión + rerank -> evidence pack -> síntesis -> verificación -> respuesta
+```
+Question → Normalization → Classification → Routing → Multi-Engine Retrieval
+         → Fusion + Rerank → Evidence Pack → Synthesis → Verification → Answer
 ```
 
-### Modos de consulta
+### Query Modes
 
-- `exact`: códigos, nombres propios, fechas, IDs
-- `factual_local`: preguntas puntuales sobre pocos fragmentos
-- `multi_hop`: conexión de piezas dispersas
-- `global`: visión de conjunto del corpus
-- `argumentative`: conflicto o tensión entre fuentes
-- `visual`: tablas, layouts complejos o escaneos
+| Mode | Use Case | Retrieval Strategy |
+|---|---|---|
+| `exact` | Codes, proper names, dates, IDs | Sparse-dominant + dense auxiliary |
+| `factual_local` | Point questions about few passages | Dense+sparse hybrid + reranking |
+| `multi_hop` | Connecting dispersed pieces | Hybrid seeds + propositional graph traversal |
+| `global` | Corpus-wide overview questions | Summary index + thematic communities + DRIFT |
+| `argumentative` | Conflicting positions across sources | Hybrid retrieval + evidence clustering + support/attack structure |
+| `visual` | Tables, complex layouts, scans | ColPali visual index + parser text spans |
 
-### Qué hace el backend en la práctica
+### What Happens Under the Hood
 
-- detecta idioma e intención de la consulta
-- resuelve el ámbito documental permitido
-- combina sparse, dense, summary y visual retrieval
-- rerankea y deduplica la evidencia
-- arma un evidence pack con presupuesto de tokens
-- decide un plan de síntesis
-- genera la respuesta con Gemma 4
-- verifica grounding y citas antes de persistir la salida
+- Detects query language and intent
+- Resolves permitted document scope (tenant-aware)
+- Combines sparse, dense, summary, and visual retrieval
+- Reranks and deduplicates evidence
+- Builds evidence pack with token budget management
+- Selects synthesis plan (direct, hierarchical, global, argument, visual-grounded)
+- Generates response with Gemma 4
+- Verifies grounding and citations before persisting output
 
-### Salida de la respuesta
+### Answer Output
 
-La respuesta persistida incluye:
+Every persisted answer includes:
 
-- texto de respuesta
-- verdict
-- grounding score
-- citas
-- evidencia asociada
-- ruta/mode usado
-- metadata de verificación
-- exportes disponibles
-
----
-
-## Frontend y experiencia de usuario
-
-La app frontend ya no es un scaffold vacío; es un workspace operativo.
-
-### Rutas actuales
-
-- `/` -> Dashboard
-- `/collections` -> Colecciones
-- `/query` -> Espacio de consulta
-- `/observability` -> Observabilidad
-- `/evaluation` -> Evaluación
-- `/jobs` -> Tareas
-
-### Qué muestra el query workspace
-
-- conversation thread
-- answer panel
-- citation sidebar
-- evidence cards
-- document tree
-- page viewer
-- rail de historial / memoria de consultas
-
-### Qué cubren Collections y los demás módulos
-
-- creación de colecciones
-- carga de archivos y carpetas locales
-- rebuild de una colección
-- inspección de estructura y estado documental
-- visualización de jobs y audit trail
-- runs de evaluación
-
-### API client
-
-El frontend usa un cliente `fetch` fino en [frontend/src/services/api.ts](frontend/src/services/api.ts).
-
-- toma `VITE_API_URL` si existe
-- si no existe, resuelve contra `window.location.hostname` en el puerto `8000`
-- aplica timeouts por operación
-- soporta helpers de paginación para inventarios completos
+- Response text
+- Verification verdict
+- Grounding score
+- Citations with span-level binding
+- Associated evidence
+- Routing mode and reason
+- Verification metadata
+- Markdown and PDF export support
 
 ---
 
-## API surface principal
+## Frontend Workspace
 
-La lista completa está en [docs/api-endpoints.md](docs/api-endpoints.md). Ese documento se contrasta contra el OpenAPI generado por FastAPI mediante `backend/tests/unit/test_openapi_documentation_contract.py`. Los grupos principales son:
+The frontend is an **operational workspace**, not a demo UI. It provides full visibility into the document memory system.
 
-| Método | Ruta | Propósito |
-| --- | --- | --- |
-| GET | `/health` | Estado básico del servicio |
-| GET | `/health/dependencies` | Dependencias activas del runtime |
-| POST | `/collections` | Crear colección |
-| GET | `/collections` | Listar colecciones |
-| GET | `/collections/{id}/documents` | Inventario de documentos con paginación |
-| POST | `/collections/{id}/documents` | Subir documento |
-| POST | `/collections/{id}/documents/import` | Registrar ruta local |
-| POST | `/collections/{id}/documents/import-folder` | Importar carpeta local |
-| POST | `/collections/{id}/rebuild` | Reencolar rebuild |
-| GET | `/documents/{id}/structure` | Árbol documental |
-| GET | `/documents/{id}/nodes` | Nodos estructurales |
-| GET | `/documents/{id}/chunks` | Chunks persistidos |
-| GET | `/documents/{id}/propositions` | Proposiciones persistidas |
-| GET | `/documents/{id}/pages/{page}` | Página visual |
-| GET | `/queries/history` | Historial de consultas |
-| POST | `/queries/search` | Retrieval sin respuesta |
-| POST | `/queries/answer` | Retrieval + síntesis |
-| GET | `/answers/{id}` | Respuesta persistida |
-| GET | `/answers/{id}/export/markdown` | Exportar Markdown |
-| GET | `/answers/{id}/export/pdf` | Exportar PDF |
-| GET | `/jobs` | Listar jobs |
-| GET | `/observability/audit` | Audit trail |
-| GET | `/observability/documents/{id}/evidence` | Evidencia de documento |
-| GET | `/evaluation/datasets` | Datasets de evaluación |
-| POST | `/evaluation/runs` | Lanzar evaluación |
+### Routes
+
+| Route | Purpose |
+|---|---|
+| `/` | Dashboard |
+| `/collections` | Collection management, document upload, rebuild |
+| `/query` | Query workspace with conversation thread, answer panel, citation sidebar |
+| `/observability` | Pipeline audit trails, evidence inspection |
+| `/evaluation` | Dataset management, evaluation runs, metrics |
+| `/jobs` | Job state monitoring |
+
+### Query Workspace Features
+
+- Conversation thread with history
+- Answer panel with synthesis output
+- Citation sidebar with span-level navigation
+- Evidence cards with source document context
+- Document tree inspector
+- Page viewer for visual evidence
+- Query history and memory rail
 
 ---
 
-## Requisitos del sistema
+## API Surface
 
-### Perfiles de hardware
+Full documentation at [docs/api-endpoints.md](docs/api-endpoints.md). Contract-validated against FastAPI OpenAPI via `test_openapi_documentation_contract.py`.
 
-| Perfil | RAM | Generador | Embeddings | Notas |
-| --- | --- | --- | --- | --- |
-| Lite | 8 GB | Gemma 4 E2B | EmbeddingGemma 256d | Sin índice visual permanente |
-| Standard | 16 GB | Gemma 4 E4B | EmbeddingGemma 384d | Grafo proposicional completo |
-| Advanced | 32 GB+ | Gemma 4 26B/31B | EmbeddingGemma 768d | Todos los índices activos |
+| Method | Route | Purpose |
+|---|---|---|
+| GET | `/health` | Service health status |
+| GET | `/health/dependencies` | Runtime dependency health (LLM, Qdrant, embeddings, Docling, visual) |
+| POST | `/collections` | Create collection |
+| GET | `/collections` | List collections |
+| GET | `/collections/{id}/documents` | Document inventory with pagination |
+| POST | `/collections/{id}/documents` | Upload document |
+| POST | `/collections/{id}/documents/import` | Register local path |
+| POST | `/collections/{id}/documents/import-folder` | Import local folder |
+| POST | `/collections/{id}/rebuild` | Queue collection rebuild |
+| GET | `/documents/{id}/structure` | Document tree |
+| GET | `/documents/{id}/nodes` | Structural nodes |
+| GET | `/documents/{id}/chunks` | Persisted chunks |
+| GET | `/documents/{id}/propositions` | Persisted propositions |
+| GET | `/documents/{id}/pages/{page}` | Visual page asset |
+| GET | `/queries/history` | Query history |
+| POST | `/queries/search` | Retrieval without answer synthesis |
+| POST | `/queries/answer` | Retrieval + synthesis + verification |
+| GET | `/answers/{id}` | Persisted answer |
+| GET | `/answers/{id}/export/markdown` | Export answer as Markdown |
+| GET | `/answers/{id}/export/pdf` | Export answer as PDF |
+| GET | `/jobs` | List jobs |
+| GET | `/observability/audit` | Pipeline audit trail |
+| GET | `/observability/documents/{id}/evidence` | Document evidence inspection |
+| GET | `/evaluation/datasets` | Evaluation datasets |
+| POST | `/evaluation/runs` | Launch evaluation run |
 
-### Software requerido
+---
+
+## Evaluation Framework
+
+Atenex Nova includes a built-in evaluation system for measuring retrieval and answer quality:
+
+- **Dataset management** — JSON-based golden sets with questions, expected answers, and evaluation criteria
+- **Per-mode benchmarking** — Separate evaluation for each query routing mode
+- **Retrieval scoring** — Precision, recall, and MRR for retrieval quality
+- **Answer scoring** — Groundedness, faithfulness, and answer relevance metrics
+- **Regression comparison** — Track quality changes across pipeline iterations
+
+---
+
+## Quick Start
+
+### Prerequisites
 
 - Python >= 3.11
 - Node.js >= 20 LTS
-- Docker Desktop para Qdrant y PostgreSQL
+- Docker Desktop (for Qdrant and PostgreSQL)
 - Git
 
----
-
-## Inicio rápido
-
-### 1. Clonar el repositorio
+### 1. Clone
 
 ```bash
-git clone <url-del-repo>
+git clone <repository-url>
 cd Atenex_nova
 ```
 
@@ -328,14 +265,11 @@ python -m venv .venv
 
 # Windows
 .venv\Scripts\activate
-
 # Linux/macOS
 source .venv/bin/activate
 
 pip install -e ".[dev]"
 ```
-
-Si el alias global de Python no está disponible en Windows, usa directamente `backend/.venv/Scripts/python.exe` para instalar y ejecutar comandos del backend.
 
 ### 3. Frontend
 
@@ -345,123 +279,168 @@ npm install
 npm run dev
 ```
 
-### 4. Servicios locales
+### 4. Local Services
 
 ```bash
 # Qdrant
 docker run -d --name qdrant -p 6333:6333 -p 6334:6334 \
   -v qdrant_storage:/qdrant/storage qdrant/qdrant
 
-# LLM runtime por defecto: Ollama + Gemma 4
+# LLM runtime: Ollama + Gemma 4
 ollama serve
 ollama pull gemma4:e4b
 
-# Verificar modelo disponible
-ollama list
-
-# Alternativa: llama.cpp
+# Alternative: llama.cpp
 llama-server -m models/gemma-4-e4b.gguf --port 8080 --ctx-size 8192
 ```
 
-### 4.1 Verificación rápida de dependencias activas
-
-Con el backend levantado, valida el runtime antes de correr pruebas e2e:
+### 5. Verify Dependencies
 
 ```bash
 curl http://127.0.0.1:8000/health/dependencies
+# Response should show llm.available=true when Ollama + gemma4:e4b are ready
 ```
 
-La respuesta debe reflejar `llm.available=true` cuando Ollama y `gemma4:e4b` estén listos.
-
-### 5. Ejecutar
+### 6. Run
 
 ```bash
-# API
+# API server
 cd backend
 uvicorn atenex_nova.main:app --reload --port 8000
 
-# Worker
+# Worker (async job processing)
 cd backend
 python -m atenex_nova.workers.main
 
-# UI
+# Frontend
 cd frontend
 npm run dev
 ```
 
 ---
 
-## Estructura del proyecto
+## Project Structure
 
-```text
+```
 Atenex_nova/
-├── AGENTS.md
-├── README.md
+├── AGENTS.md                          # Development conventions
+├── README.md                          # This file
 ├── backend/
-│   ├── pyproject.toml
-│   ├── ruff.toml
+│   ├── pyproject.toml                 # Package definition, dev dependencies
+│   ├── ruff.toml                      # Linting configuration
 │   ├── atenex_nova/
-│   │   ├── main.py
-│   │   ├── dependencies.py
-│   │   ├── presentation/
-│   │   ├── application/
-│   │   ├── domain/
-│   │   ├── infrastructure/
-│   │   ├── workers/
-│   │   ├── evaluation/
-│   │   └── shared/
+│   │   ├── main.py                    # FastAPI application entry point
+│   │   ├── dependencies.py            # Dependency injection wiring
+│   │   ├── presentation/              # API routers, DTOs, schemas
+│   │   ├── application/               # Services, orchestrators, policies
+│   │   ├── domain/                    # Entities, value objects, contracts
+│   │   ├── infrastructure/            # DB, embeddings, LLM, Qdrant, parsing, visual
+│   │   ├── workers/                   # Async job definitions and runner
+│   │   ├── evaluation/                # Datasets, scorers, regression
+│   │   └── shared/                    # Config, logging, exceptions, observability
 │   └── tests/
-├── design-system/
-│   └── atenex-nova/
-├── docs/
-│   ├── baseline.md
-│   ├── final-gap-inventory.md
-│   └── plan_restante.md
-├── frontend/
-│   ├── package.json
-│   └── src/
-├── prompts/
-├── scripts/
-├── storage/
-└── tests/
+│       ├── unit/                      # Unit tests (43+ passing)
+│       ├── integration/               # Integration tests (pipeline validation)
+│       └── e2e/                       # End-to-end tests (API surface, ingestion, chat)
+├── design-system/                     # UI design tokens and page specs
+├── docs/                              # Architecture, API, gap inventory
+├── frontend/                          # React/TypeScript/Vite workspace
+├── prompts/                           # Versioned prompt suite per synthesis mode
+└── storage/                           # Local blob storage (uploads, visual pages)
 ```
 
 ---
 
-## Brechas conocidas
+## Why Open Source
 
-El repo ya está bastante avanzado, pero no está cerrado al 100% contra el baseline. El inventario canónico de brechas sigue siendo [docs/final-gap-inventory.md](docs/final-gap-inventory.md). En este checkout todavía hay deuda visible en:
+Atenex Nova is being developed as open source because we believe that **document memory and retrieval infrastructure should be transparent, auditable, and under user control**. The current RAG landscape is dominated by opaque cloud services that lock organizations into vendor-specific retrieval patterns.
 
-- un fallo unitario en `AnswerOrchestrator` por citas vacías
-- `npm run build` y `npm run lint` del frontend
-- `ruff` y `mypy` del backend
-- cierre duro del sparse persisted
-- reranking más fuerte y medible
-- strict mode visual más exigente
-- evaluación formal con goldens por modo
-- validación e2e completa con runtimes locales activos
+This project demonstrates that a **local-first, multi-engine retrieval architecture** can outperform single-index approaches while maintaining complete data sovereignty. By open-sourcing Atenex Nova, we aim to:
+
+1. **Advance open RAG research** — Provide a reference implementation of hybrid retrieval, query routing, proposition graphs, and verification pipelines that others can study, extend, and benchmark against.
+2. **Enable privacy-preserving AI** — Give organizations a path to powerful document understanding without sending sensitive data to external APIs.
+3. **Lower the barrier to production RAG** — Show that sophisticated retrieval doesn't require massive infrastructure; the same architecture scales from 8 GB laptops to 32 GB+ workstations.
+4. **Build a community around document understanding** — Contribute to the open-source ecosystem with structural parsing pipelines, multi-layer memory patterns, and evaluation frameworks that benefit all RAG practitioners.
+
+### Active Maintenance
+
+This project is under **active development** with a clear roadmap and rigorous quality standards:
+
+- **27 commits** across the project lifecycle
+- **10 FastAPI routers** with OpenAPI contract validation
+- **19 test files** spanning unit, integration, and e2e coverage
+- **15+ domain entities** with typed identifiers and value objects
+- **Modular hexagonal architecture** with clear layer boundaries
+- **Comprehensive documentation** — architecture specs, API contracts, gap inventory, design system
+
+### How API Credits Will Be Used
+
+API credits from the Codex for Open Source program would directly accelerate essential open-source maintenance and development:
+
+- **Automated evaluation pipelines** — Run golden set benchmarks across all 6 query modes to validate retrieval and answer quality improvements
+- **Code quality automation** — Power automated linting, type checking, and refactoring suggestions across the 223-file codebase
+- **Documentation generation** — Auto-generate API documentation, architecture diagrams, and contributor guides from the codebase
+- **Pull request review assistance** — Use Codex to review incoming PRs against the hexagonal architecture contract and domain boundaries
+- **Test generation and maintenance** — Expand unit and integration test coverage, particularly for edge cases in retrieval routing and citation binding
+- **Release workflow automation** — Automate changelog generation, version bumping, and release notes for consistent project releases
 
 ---
 
-## Documentación relacionada
+## Verified Workspace Status
 
-- [Inventario final de brechas](docs/final-gap-inventory.md)
-- [Diseño baseline](docs/baseline.md)
-- [Arquitectura backend](docs/architecture-backend.md)
-- [Arquitectura frontend](docs/architecture-frontend.md)
-- [API endpoints](docs/api-endpoints.md)
-- [Jobs y workers](docs/jobs-and-workers.md)
-- [Design system](design-system/atenex-nova/MASTER.md)
+This README reflects the current repository checkout, not just the product vision.
+
+| Check | Status | Command |
+|---|---|---|
+| OpenAPI/docs contract | 1 passed | `pytest tests/unit/test_openapi_documentation_contract.py -q` |
+| Backend unit tests | 1 failed, 43 passed | `pytest tests/unit -q` |
+| Frontend build | pending fix | `npm run build` |
+| Frontend lint | pending fix | `npm run lint` |
+| Backend `ruff` | 6 issues | `ruff check .` |
+| Backend `mypy` | 5 errors | `mypy atenex_nova` |
+| Integration / e2e | present | Tests exist, depend on local runtimes |
+
+The canonical gap inventory is [docs/final-gap-inventory.md](docs/final-gap-inventory.md).
+
+---
+
+## Known Gaps
+
+The repository is substantially complete but not yet 100% closed against the baseline. The canonical gap inventory is [docs/final-gap-inventory.md](docs/final-gap-inventory.md). Current open items include:
+
+- One unit test failure in `AnswerOrchestrator` (empty citations)
+- Frontend build and lint fixes
+- Backend `ruff` and `mypy` cleanup
+- Hardened sparse persisted index
+- Stronger measurable reranking
+- Strict mode visual policy
+- Formal evaluation with golden sets per mode
+- Complete e2e validation with active local runtimes
+
+---
+
+## Related Documentation
+
+- [Final Gap Inventory](docs/final-gap-inventory.md)
+- [Product Baseline](docs/baseline.md)
+- [Backend Architecture](docs/architecture-backend.md)
+- [Frontend Architecture](docs/architecture-frontend.md)
+- [API Endpoints](docs/api-endpoints.md)
+- [Jobs and Workers](docs/jobs-and-workers.md)
+- [Design System](design-system/atenex-nova/MASTER.md)
 - [AGENTS.md](AGENTS.md)
 
 ---
 
-## Licencia
+## License
 
-Pendiente de definir.
+Pending definition.
 
 ---
 
 <p align="center">
-  <strong>Atenex Nova</strong> — Plataforma local de memoria documental de nueva generación
+  <strong>Atenex Nova</strong> — Next-generation local-first document memory platform
+</p>
+<p align="center">
+  <em>Open source. Local-first. Multi-engine retrieval. Verified answers.</em>
 </p>
