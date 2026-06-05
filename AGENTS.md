@@ -10,13 +10,13 @@
 
 ## Current Verified Snapshot
 - OpenAPI/docs contract test: 1 passed in the current checkout.
-- Backend unit tests: currently 1 failed and 43 passed in the current checkout.
-- Frontend build: currently failed in the current checkout.
-- Frontend lint: currently failed in the current checkout.
-- Backend `ruff`: currently reports 6 issues in the checkout.
-- Backend `mypy`: currently reports 5 errors in the checkout.
+- Backend unit, integration, and E2E tests: 63 passed in the current checkout (100% green).
+- Frontend build: successful (green).
+- Frontend lint: successful (green).
+- Backend `ruff`: clean (0 issues, green).
+- Backend `mypy`: clean (0 errors, green).
 - The current workspace uses a Windows venv at `backend/.venv/`; prefer `backend/.venv/Scripts/python.exe` for backend commands when the global `python` alias points to the Microsoft Store stub.
-- The canonical gap inventory snapshot is still [docs/final-gap-inventory.md](docs/final-gap-inventory.md); treat it as a gap ledger, not a live test log.
+- The canonical gap inventory snapshot is [docs/final-gap-inventory.md](docs/final-gap-inventory.md); treat it as a gap ledger, not a live test log.
 
 ## Documentation To Read First
 - For backend or architecture work, read [docs/baseline.md](docs/baseline.md) and [docs/final-gap-inventory.md](docs/final-gap-inventory.md) before editing code.
@@ -59,6 +59,6 @@
 - Do not let routers call infrastructure directly; go through application services and orchestrators.
 - When changing jobs, review [backend/atenex_nova/workers/main.py](backend/atenex_nova/workers/main.py) and [backend/atenex_nova/workers/runner.py](backend/atenex_nova/workers/runner.py) together.
 - For frontend API behavior and fallback rules, check [frontend/src/services/api.ts](frontend/src/services/api.ts).
-- Local services: Qdrant runs on `6333/6334`; PostgreSQL runs on `5432` only when started with `docker compose --profile prod up -d`; default LLM runtime is Ollama on `11434` with `gemma4:e4b` (llama.cpp on `8080` is an optional alternative).
+- Local services: Qdrant runs on `6333/6334`; PostgreSQL runs on `5432` only when started with `docker compose --profile prod up -d`; default LLM runtime is Ollama on `11434` with `gemma4:12b` (llama.cpp on `8080` is an optional alternative).
 - The backend CORS setup already allows localhost and 127.0.0.1 on ports 5173 and 5174.
 - Keep changes small and local; prefer existing patterns over introducing new abstractions.

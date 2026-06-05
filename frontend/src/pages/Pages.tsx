@@ -2287,10 +2287,6 @@ export function QueryPage() {
     }
   };
 
-  const currentCollection = useMemo(
-    () => collections.find(collection => collection.id === collectionId) ?? null,
-    [collections, collectionId],
-  );
 
   const collectionDocuments = useMemo(
     () => documentsByCollection[collectionId] ?? [],
@@ -2464,8 +2460,6 @@ export function QueryPage() {
   const canSubmit = collectionId.length > 0 && query.trim().length > 0 && !loading && !loadingCollections;
   const routeModes = ['auto', 'exact', 'factual_local', 'multi_hop', 'global', 'argumentative', 'visual'];
 
-  const collectionDescription = currentCollection?.description?.trim()
-    || 'Chat con memoria por colección, respuestas fundamentadas y acceso rápido al corpus.';
 
   const quickQuerySuggestions = useMemo(() => {
     const defaults = [
@@ -2637,7 +2631,7 @@ export function QueryPage() {
             <button type="submit" className="btn btn-primary" style={{ padding: '0.4rem 0.6rem', fontSize: 'var(--font-xs)' }}>+</button>
           </form>
 
-          <div style={{ overflow: 'auto', display: 'grid', gap: 'var(--space-2)', alignContent: 'start', maxHeight: '500px' }}>
+          <div style={{ overflowY: 'auto', display: 'grid', gap: 'var(--space-2)', alignContent: 'start', height: '100%' }}>
             {loadingChats ? (
               <p className="query-panel-note">Cargando...</p>
             ) : chats.length === 0 ? (
@@ -2687,92 +2681,84 @@ export function QueryPage() {
           </div>
         </aside>
 
-        <section className="query-chat card" aria-label="Chat principal de consulta">
-          <header className="query-chat__header">
-            <div>
-              <div className="card__title">Asistente documental</div>
-              <p className="query-panel-note">{collectionDescription}</p>
-            </div>
-            <div className="query-chat__meta" aria-label="Resumen de sesión">
-              <span className="query-chip">{currentCollection?.name ?? 'Sin colección'}</span>
-              <span className="query-chip">{collectionDocuments.length} documentos</span>
-              <span className="query-chip">{visibleTurns.length} turnos</span>
-            </div>
-          </header>
+        <section className="query-chat" aria-label="Chat principal de consulta">
+          <header className="query-chat__header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 'var(--space-3)', paddingBottom: 'var(--space-3)', borderBottom: '1px solid rgba(120, 76, 43, 0.12)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
+              <label className="query-field" style={{ margin: 0, flexDirection: 'row', alignItems: 'center', gap: 'var(--space-2)' }}>
+                <span className="query-label" style={{ fontWeight: 'bold', fontSize: 'var(--font-sm)', color: 'var(--color-text-secondary)' }}>Colección:</span>
+                <select
+                  value={collectionId}
+                  onChange={event => setCollectionId(event.target.value)}
+                  disabled={loadingCollections}
+                  className="query-select"
+                  style={{ minWidth: '180px', padding: '0.4rem 0.6rem' }}
+                >
+                  {collections.length === 0 ? <option value="">No hay colecciones</option> : collections.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+                </select>
+              </label>
 
-          <section className="query-chat__controls" aria-label="Controles del chat">
-            <label className="query-field">
-              <span className="query-label">Colección</span>
-              <select
-                value={collectionId}
-                onChange={event => setCollectionId(event.target.value)}
-                disabled={loadingCollections}
-                className="query-select"
+              <button
+                type="button"
+                className="btn btn-secondary query-advanced-toggle"
+                onClick={() => setShowAdvancedControls(current => !current)}
+                aria-expanded={showAdvancedControls}
+                style={{ padding: '0.4rem 0.8rem', fontSize: 'var(--font-xs)' }}
               >
-                {collections.length === 0 ? <option value="">No hay colecciones</option> : collections.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
-              </select>
-            </label>
+                {showAdvancedControls ? 'Ocultar opciones avanzadas' : 'Opciones avanzadas'}
+              </button>
 
-            <button
-              type="button"
-              className="btn btn-secondary query-advanced-toggle"
-              onClick={() => setShowAdvancedControls(current => !current)}
-              aria-expanded={showAdvancedControls}
-            >
-              {showAdvancedControls ? 'Ocultar opciones avanzadas' : 'Mostrar opciones avanzadas'}
-            </button>
-
-            <div className="query-chat__context-toggle-wrap">
               <button
                 type="button"
                 className="btn btn-secondary query-context-toggle"
                 onClick={() => setContextMobileOpen(current => !current)}
+                style={{ padding: '0.4rem 0.8rem', fontSize: 'var(--font-xs)' }}
               >
                 {contextMobileOpen ? 'Ocultar panel lateral' : 'Ver panel lateral'}
               </button>
             </div>
 
-            {showAdvancedControls ? (
-              <div className="query-advanced-panel" role="group" aria-label="Opciones avanzadas">
-                <label className="query-field">
-                  <span className="query-label">Ruta de recuperación</span>
-                  <select
-                    value={mode}
-                    onChange={event => setMode(event.target.value)}
-                    className="query-select"
+            <div className="query-chat__meta" aria-label="Resumen de sesión">
+              <span className="query-chip" style={{ background: 'rgba(160, 90, 44, 0.08)', color: 'var(--color-text-accent)' }}>{collectionDocuments.length} documentos</span>
+              <span className="query-chip" style={{ background: 'rgba(160, 90, 44, 0.08)', color: 'var(--color-text-accent)' }}>{visibleTurns.length} turnos</span>
+            </div>
+          </header>
+
+          {showAdvancedControls ? (
+            <div className="query-advanced-panel" role="group" aria-label="Opciones avanzadas" style={{ border: '1px dashed rgba(120, 76, 43, 0.24)', borderRadius: 'var(--radius-lg)', background: 'rgba(255, 255, 255, 0.42)', padding: 'var(--space-3)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 'var(--space-3)' }}>
+              <label className="query-field">
+                <span className="query-label">Ruta de recuperación</span>
+                <select
+                  value={mode}
+                  onChange={event => setMode(event.target.value)}
+                  className="query-select"
+                >
+                  {routeModes.map(item => <option key={item} value={item}>{item}</option>)}
+                </select>
+              </label>
+
+              <label className="query-field">
+                <span className="query-label">Tipo de salida</span>
+                <div className="query-action-switch" role="tablist" aria-label="Tipo de salida">
+                  <button
+                    type="button"
+                    className={`query-action-btn${action === 'answer' ? ' query-action-btn--active' : ''}`}
+                    aria-selected={action === 'answer'}
+                    onClick={() => setAction('answer')}
                   >
-                    {routeModes.map(item => <option key={item} value={item}>{item}</option>)}
-                  </select>
-                </label>
-
-                <label className="query-field">
-                  <span className="query-label">Tipo de salida</span>
-                  <div className="query-action-switch" role="tablist" aria-label="Tipo de salida">
-                    <button
-                      type="button"
-                      className={`query-action-btn${action === 'answer' ? ' query-action-btn--active' : ''}`}
-                      aria-selected={action === 'answer'}
-                      onClick={() => setAction('answer')}
-                    >
-                      Respuesta final
-                    </button>
-                    <button
-                      type="button"
-                      className={`query-action-btn${action === 'search' ? ' query-action-btn--active' : ''}`}
-                      aria-selected={action === 'search'}
-                      onClick={() => setAction('search')}
-                    >
-                      Solo evidencia
-                    </button>
-                  </div>
-                </label>
-
-                <p className="query-panel-note">
-                  La ruta y el tipo de salida sí afectan el resultado. Si tienes dudas, usa ruta <strong>auto</strong> y <strong>respuesta final</strong>.
-                </p>
-              </div>
-            ) : null}
-          </section>
+                    Respuesta final
+                  </button>
+                  <button
+                    type="button"
+                    className={`query-action-btn${action === 'search' ? ' query-action-btn--active' : ''}`}
+                    aria-selected={action === 'search'}
+                    onClick={() => setAction('search')}
+                  >
+                    Solo evidencia
+                  </button>
+                </div>
+              </label>
+            </div>
+          ) : null}
 
           <section className="query-chat__quick-prompts" aria-label="Sugerencias rápidas de consulta">
             <div className="query-panel-heading">Sugerencias rápidas</div>
@@ -2877,16 +2863,15 @@ export function QueryPage() {
                   ) : (
                     <div className="query-turn__evidence-list">
                       {activeEvidence.slice(0, 5).map(hit => (
-                        <button
+                        <div
                           key={hit.id}
-                          type="button"
-                          style={{ all: 'unset', cursor: hit.document_id ? 'pointer' : 'default' }}
+                          style={{ cursor: hit.document_id ? 'pointer' : 'default' }}
                           onClick={() => {
                             if (hit.document_id) setInspectorDocumentId(hit.document_id);
                           }}
                         >
                           <EvidenceCard evidence={hit} />
-                        </button>
+                        </div>
                       ))}
                     </div>
                   )}
@@ -3266,7 +3251,7 @@ export function QueryPage() {
                       Grounding & Auditoría
                     </div>
                     <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--font-sm)', display: 'grid', gap: 'var(--space-2)' }}>
-                      <div><strong>Verdict:</strong> <span className={`badge badge--${activeTurn.verdict === 'grounded' ? 'success' : activeTurn.verdict === 'partially_grounded' ? 'warning' : 'error'}`} style={{ marginLeft: '0.3rem' }}>{activeTurn.verdict}</span></div>
+                      <div><strong>Verdict:</strong> <span className={`badge badge--${activeTurn.verdict === 'verified' ? 'success' : activeTurn.verdict === 'partially_verified' ? 'warning' : 'error'}`} style={{ marginLeft: '0.3rem' }}>{activeTurn.verdict}</span></div>
                       <div><strong>Score Grounding:</strong> <code>{activeTurn.groundingScore?.toFixed(3) ?? '—'}</code></div>
                       {activeAnswer?.verification_issues && activeAnswer.verification_issues.length > 0 ? (
                         <div>

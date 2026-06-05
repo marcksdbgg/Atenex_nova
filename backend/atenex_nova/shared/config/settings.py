@@ -35,7 +35,7 @@ class GenerationProfile(StrEnum):
     """LLM generation profile."""
 
     LITE = "lite"  # Gemma 4 E2B
-    STANDARD = "standard"  # Gemma 4 E4B
+    STANDARD = "standard"  # Gemma 4 12B
     ADVANCED = "advanced"  # Gemma 4 26B/31B
 
 
@@ -78,7 +78,7 @@ class Settings(BaseSettings):
     # --- LLM Runtime ---
     llm_backend: Literal["llamacpp", "ollama"] = "ollama"
     llm_url: str = "http://localhost:11434"
-    llm_model: str = "gemma4:e4b"
+    llm_model: str = "gemma4:12b"
 
     # --- Embeddings ---
     embedding_model: str = "google/embeddinggemma-300m"

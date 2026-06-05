@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import logging
 import asyncio
+import logging
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -41,7 +41,7 @@ class OllamaAdapter:
     def __init__(
         self,
         url: str = "http://localhost:11434",
-        model: str = "gemma4:e4b",
+        model: str = "gemma4:12b",
         required: bool | None = None,
     ) -> None:
         settings = get_settings()

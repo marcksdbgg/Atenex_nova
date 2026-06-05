@@ -21,6 +21,7 @@ from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocu
 from atenex_nova.infrastructure.db.repositories.sql_proposition_repo import SqlPropositionRepository
 from atenex_nova.infrastructure.db.repositories.sql_relation_repo import SqlRelationRepository
 from atenex_nova.infrastructure.db.repositories.sql_summary_repo import SqlSummaryRepository
+from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
 from atenex_nova.workers.jobs.memory_enrichment_job import (
     BuildGraphJobHandler,
     EmbedPropositionsJobHandler,
@@ -28,6 +29,18 @@ from atenex_nova.workers.jobs.memory_enrichment_job import (
     ExtractPropositionsJobHandler,
     GenerateSummariesJobHandler,
 )
+
+
+@pytest.fixture(autouse=True)
+def _mock_llm_and_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fast_init(self, model_name: str = "google/embeddinggemma-300m", dim: int = 384, required: bool | None = None) -> None:
+        self._model_name = model_name or "google/embeddinggemma-300m"
+        self._dim = dim
+        self._required = False if required is None else required
+        self.model = None
+        self._fallback_only = True
+
+    monkeypatch.setattr(EmbeddingGemmaAdapter, "__init__", _fast_init)
 
 
 @pytest.fixture()

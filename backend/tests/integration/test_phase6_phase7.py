@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import httpx
 import pytest
 from qdrant_client import AsyncQdrantClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -53,7 +52,6 @@ async def _require_embeddings_or_skip() -> None:
 
 @pytest.fixture(autouse=True)
 def _mock_llm_and_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
-    from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
     from atenex_nova.application.orchestrators.answer_orchestrator import AnswerOrchestrator
     from atenex_nova.infrastructure.llm.llm_gateway import LLMGenerationResult
 

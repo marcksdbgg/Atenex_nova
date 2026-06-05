@@ -57,6 +57,15 @@ class QdrantAdapter(HybridIndex):
         self._next_retry_at = 0.0
 
     def _register_failure(self, operation: str, exc: Exception) -> None:
+        exc_str = str(exc)
+        if "404" in exc_str or "Not found" in exc_str or "doesn't exist" in exc_str:
+            logger.warning("Qdrant collection not found during %s: %s", operation, exc)
+            return
+
+        if "400" in exc_str or "Not existing vector name" in exc_str or "Wrong input" in exc_str or "invalid" in exc_str.lower():
+            logger.warning("Qdrant schema or validation failure during %s: %s", operation, exc)
+            return
+
         self._available = False
         self._failure_count += 1
         backoff = min(self._retry_cooldown_seconds * (2 ** (self._failure_count - 1)), 30.0)

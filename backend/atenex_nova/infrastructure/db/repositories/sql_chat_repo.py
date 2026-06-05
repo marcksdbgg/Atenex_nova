@@ -1,10 +1,10 @@
 """SQL repository: Chat and ChatMessage."""
 
-from sqlalchemy import select, delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from atenex_nova.domain.entities.chat import Chat, ChatMessage
-from atenex_nova.infrastructure.db.models.tables import ChatModel, ChatMessageModel
+from atenex_nova.infrastructure.db.models.tables import ChatMessageModel, ChatModel
 
 
 class SqlChatRepository:

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from io import BytesIO
-from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -92,7 +91,7 @@ class AnswerService:
 
             if chat_id and chat_repo is not None:
                 from atenex_nova.domain.entities.chat import ChatMessage
-                
+
                 user_msg = ChatMessage(
                     id=search_result.query.id,
                     chat_id=chat_id,

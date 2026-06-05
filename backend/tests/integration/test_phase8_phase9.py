@@ -50,7 +50,6 @@ async def session_factory(tmp_path: Path):
 
 @pytest.fixture(autouse=True)
 def _mock_llm_and_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
-    from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
     from atenex_nova.application.orchestrators.answer_orchestrator import AnswerOrchestrator
     from atenex_nova.infrastructure.llm.llm_gateway import LLMGenerationResult
 

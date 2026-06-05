@@ -1,5 +1,5 @@
 import type { QueryHit } from '../types/api';
-import { summarizeAssistantText } from './chatMessageText';
+import { normalizeAssistantText } from './chatMessageText';
 
 interface ChatMessageProps {
   id: string;
@@ -68,13 +68,11 @@ export function ChatMessage({
   const rawAnswer = answer?.trim() ?? '';
   const assistantText = kind === 'answer'
     ? (loading
-      ? 'Gemma 4 esta generando una respuesta fundamentada.'
-      : isLowConfidenceAnswer
-        ? 'Esta respuesta tiene baja confianza por falta de evidencia solida. Ajusta la consulta o revisa las citas del panel lateral.'
-        : (rawAnswer ? summarizeAssistantText(rawAnswer, language) : 'La respuesta esta disponible en el panel lateral.'))
+      ? 'Gemma 4 está generando una respuesta fundamentada.'
+      : (rawAnswer ? normalizeAssistantText(rawAnswer, language) : 'La respuesta está disponible en el panel lateral.'))
     : (loading
       ? 'Recuperando evidencia del corpus.'
-      : `Encontre ${totalHits ?? hits?.length ?? 0} evidencias para esta busqueda en modo ${routeMode}.`);
+      : `Encontré ${totalHits ?? hits?.length ?? 0} evidencias para esta búsqueda en modo ${routeMode}.`);
 
   const handleSelect = () => {
     onSelect(id);
@@ -123,7 +121,7 @@ export function ChatMessage({
           <div className="chat-bubble chat-bubble--assistant">
             <div className="chat-bubble__meta">
               <span>Asistente IA</span>
-              <span>{loading ? 'Escribiendo...' : kind === 'answer' ? 'Respuesta' : 'Busqueda'}</span>
+              <span>{loading ? 'Escribiendo...' : kind === 'answer' ? 'Respuesta' : 'Búsqueda'}</span>
             </div>
             <div className="chat-bubble__text">
               {loading ? (
@@ -132,7 +130,26 @@ export function ChatMessage({
                   <TypingIndicator />
                 </div>
               ) : (
-                assistantText
+                <>
+                  {isLowConfidenceAnswer && (
+                    <div className="warning-banner" style={{
+                      background: 'rgba(239, 68, 68, 0.08)',
+                      border: '1px solid rgba(239, 68, 68, 0.25)',
+                      color: '#b91c1c',
+                      padding: '8px 12px',
+                      borderRadius: '4px',
+                      fontSize: '0.75rem',
+                      marginBottom: '8px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px'
+                    }}>
+                      <span>⚠️</span>
+                      <span><strong>Baja confianza:</strong> Esta respuesta carece de evidencia sólida. Valídala con las citas del panel lateral.</span>
+                    </div>
+                  )}
+                  <div style={{ whiteSpace: 'pre-wrap' }}>{assistantText}</div>
+                </>
               )}
             </div>
           </div>

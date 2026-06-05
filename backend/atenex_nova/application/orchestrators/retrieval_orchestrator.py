@@ -141,9 +141,14 @@ class RetrievalOrchestrator:
         ) as audit:
             documents = await doc_repo.list_by_collection(collection_id)
             document_titles = {document.id: document.title for document in documents}
-            chunks = await chunk_repo.list_by_collection(collection_id)
-            propositions = await proposition_repo.list_by_collection(collection_id)
-            summaries = await self._load_summaries(summary_repo, documents, chunk_repo, chunks, collection_id)
+            if not self._qdrant.is_available:
+                chunks = await chunk_repo.list_by_collection(collection_id)
+                propositions = await proposition_repo.list_by_collection(collection_id)
+                summaries = await self._load_summaries(summary_repo, documents, chunk_repo, chunks, collection_id)
+            else:
+                chunks = []
+                propositions = []
+                summaries = []
             query_vector = (await self._embedder.embed([query.normalized_text or query.text]))[0]
 
             hits: list[SearchHit] = []
@@ -209,6 +214,9 @@ class RetrievalOrchestrator:
                     step.metrics(hit_count=len(visual_hits), source="visual_pages")
                     hits.extend(visual_hits)
 
+            if route_mode_name == "multi_hop" and not propositions:
+                propositions = await proposition_repo.list_by_collection(collection_id)
+
             if route_mode_name == "multi_hop" and propositions:
                 async with self._audit.step(
                     run_id=query.id,
@@ -225,11 +233,14 @@ class RetrievalOrchestrator:
                         allowed_relations = ["defines", "elaborates", "appears_in"]
 
                     seed_ids = [hit.source_id for hit in proposition_hits[:5]]
-                    expanded = await relation_repo.expand(
-                        seed_ids or [prop.id for prop in propositions[:3]],
-                        depth=2,
-                        allowed_relations=allowed_relations
-                    )
+                    if seed_ids:
+                        expanded = await relation_repo.expand(
+                            seed_ids,
+                            depth=2,
+                            allowed_relations=allowed_relations
+                        )
+                    else:
+                        expanded = []
                     step.metrics(edge_count=len(expanded))
 
                     proposition_by_id = {prop.id: prop for prop in propositions}
@@ -242,7 +253,7 @@ class RetrievalOrchestrator:
                         "mentions": "menciona a",
                     }
 
-                    logger.info(f"Expanding graph: found {len(expanded)} relation edges from seeds {seed_ids or [prop.id for prop in propositions[:3]]}")
+                    logger.info(f"Expanding graph: found {len(expanded)} relation edges from seeds {seed_ids}")
 
                     for edge in expanded:
                         source_text = ""
@@ -337,17 +348,51 @@ class RetrievalOrchestrator:
         chunks: list[Chunk],
         collection_id: str,
     ) -> list[SummaryNode]:
+        from sqlmodel import select
+
+        from atenex_nova.infrastructure.db.models.tables import ChunkModel, SummaryNodeModel
+
         summaries: list[SummaryNode] = []
-        for document in documents:
-            document_id = str(document.id)
-            summaries.extend(await summary_repo.list_by_document(document_id))
-            document_chunks = [chunk for chunk in chunks if chunk.document_id == document_id]
-            if not document_chunks:
-                document_chunks = await chunk_repo.get_by_document(document_id)
-            for chunk in document_chunks:
-                summaries.extend(await summary_repo.list_by_scope("section", chunk.id))
+        document_ids = [str(doc.id) for doc in documents]
+
+        # 1. Load document and section level summaries for these documents in bulk
+        if document_ids:
+            result = await self._session.execute(
+                select(SummaryNodeModel).where(
+                    SummaryNodeModel.scope_type.in_(["document", "section"]),
+                    SummaryNodeModel.scope_id.in_(document_ids),
+                )
+            )
+            summaries.extend([summary_repo._to_entity(model) for model in result.scalars().all()])
+
+        # 2. Identify which documents need chunks loaded
+        docs_with_chunks = {chunk.document_id for chunk in chunks}
+        docs_needing_chunks = [doc_id for doc_id in document_ids if doc_id not in docs_with_chunks]
+
+        loaded_chunks = list(chunks)
+        if docs_needing_chunks:
+            result = await self._session.execute(
+                select(ChunkModel).where(ChunkModel.document_id.in_(docs_needing_chunks))
+            )
+            new_chunks = [chunk_repo._to_entity(m) for m in result.scalars().all()]
+            loaded_chunks.extend(new_chunks)
+
+        # 3. Load section level summaries for all chunks in bulk
+        chunk_ids = [chunk.id for chunk in loaded_chunks]
+        if chunk_ids:
+            result = await self._session.execute(
+                select(SummaryNodeModel).where(
+                    SummaryNodeModel.scope_type == "section",
+                    SummaryNodeModel.scope_id.in_(chunk_ids),
+                )
+            )
+            summaries.extend([summary_repo._to_entity(model) for model in result.scalars().all()])
+
+        # 4. Load collection level summaries
         summaries.extend(await summary_repo.list_by_collection(collection_id))
+
         return summaries
+
 
     def _enforce_strict_evidence(self, route_mode: str, evidence_items: list[EvidenceItem]) -> None:
         if not self._settings.strict_mode_enabled:
@@ -379,28 +424,66 @@ class RetrievalOrchestrator:
         document_titles: dict[str, str],
         route_mode: str,
     ) -> list[SearchHit]:
-        dense_hits = self._convert_qdrant_hits(
-            await self._qdrant.search(f"collection_{query.collection_id}", query_vector, limit=40),
-            default_source_type="chunk",
-            document_titles=document_titles,
-            query_text=query.normalized_text or query.text,
-        )
-        sparse_encoder = StableSparseEncoder()
-        sparse_indices, sparse_values = sparse_encoder.encode_query(query.normalized_text or query.text)
-        sparse_hits = self._convert_qdrant_hits(
-            await self._qdrant.search(
-                f"collection_{query.collection_id}",
-                query_vector=None,
-                limit=40,
-                query_sparse_indices=sparse_indices,
-                query_sparse_values=sparse_values,
-            ),
-            default_source_type="chunk",
-            document_titles=document_titles,
-            query_text=query.normalized_text or query.text,
-        )
+        if not self._qdrant.is_available:
+            if not chunks:
+                repo = SqlChunkRepository(self._session)
+                chunks = await repo.list_by_collection(query.collection_id)
+            if not chunks:
+                return []
+            logger.info("Qdrant unavailable, falling back to local BM25 search for chunks")
+            return self._score_sparse_candidates(
+                query_text=query.normalized_text or query.text,
+                items=chunks,
+                builder=lambda item, score: self._build_chunk_hit(item, document_titles, score, "local_sparse"),
+                text_getter=lambda item: item.text,
+                limit=20,
+            )
+
+        dense_hits = []
+        try:
+            dense_hits = self._convert_qdrant_hits(
+                await self._qdrant.search(f"collection_{query.collection_id}", query_vector, limit=40),
+                default_source_type="chunk",
+                document_titles=document_titles,
+                query_text=query.normalized_text or query.text,
+            )
+        except Exception as e:
+            logger.warning("Qdrant dense chunk search failed: %s", e)
+
+        sparse_hits = []
+        try:
+            sparse_encoder = StableSparseEncoder()
+            sparse_indices, sparse_values = sparse_encoder.encode_query(query.normalized_text or query.text)
+            sparse_hits = self._convert_qdrant_hits(
+                await self._qdrant.search(
+                    f"collection_{query.collection_id}",
+                    query_vector=None,
+                    limit=40,
+                    query_sparse_indices=sparse_indices,
+                    query_sparse_values=sparse_values,
+                ),
+                default_source_type="chunk",
+                document_titles=document_titles,
+                query_text=query.normalized_text or query.text,
+            )
+        except Exception as e:
+            logger.warning("Qdrant sparse chunk search failed: %s", e)
+
         if not dense_hits and not sparse_hits:
+            logger.info("Qdrant search returned no hits for chunks, falling back to local BM25")
+            if not chunks:
+                repo = SqlChunkRepository(self._session)
+                chunks = await repo.list_by_collection(query.collection_id)
+            if chunks:
+                return self._score_sparse_candidates(
+                    query_text=query.normalized_text or query.text,
+                    items=chunks,
+                    builder=lambda item, score: self._build_chunk_hit(item, document_titles, score, "local_sparse"),
+                    text_getter=lambda item: item.text,
+                    limit=20,
+                )
             return []
+
         if not dense_hits:
             return self._rerank_hits(query, sparse_hits, route_mode, limit=20)
         if not sparse_hits:
@@ -415,34 +498,70 @@ class RetrievalOrchestrator:
         document_titles: dict[str, str],
         route_mode: str,
     ) -> list[SearchHit]:
-        if not propositions:
-            return []
-        dense_hits = self._convert_qdrant_hits(
-            await self._qdrant.search(
-                f"collection_{query.collection_id}_propositions",
-                query_vector,
-                limit=40,
-            ),
-            default_source_type="proposition",
-            document_titles=document_titles,
-            query_text=query.normalized_text or query.text,
-        )
-        sparse_encoder = StableSparseEncoder()
-        sparse_indices, sparse_values = sparse_encoder.encode_query(query.normalized_text or query.text)
-        sparse_hits = self._convert_qdrant_hits(
-            await self._qdrant.search(
-                f"collection_{query.collection_id}_propositions",
-                query_vector=None,
-                limit=40,
-                query_sparse_indices=sparse_indices,
-                query_sparse_values=sparse_values,
-            ),
-            default_source_type="proposition",
-            document_titles=document_titles,
-            query_text=query.normalized_text or query.text,
-        )
+        if not self._qdrant.is_available:
+            if not propositions:
+                repo = SqlPropositionRepository(self._session)
+                propositions = await repo.list_by_collection(query.collection_id)
+            if not propositions:
+                return []
+            logger.info("Qdrant unavailable, falling back to local BM25 search for propositions")
+            return self._score_sparse_candidates(
+                query_text=query.normalized_text or query.text,
+                items=propositions,
+                builder=lambda item, score: self._build_proposition_hit(item, document_titles, score, "local_sparse"),
+                text_getter=lambda item: item.text,
+                limit=20,
+            )
+
+        dense_hits = []
+        try:
+            dense_hits = self._convert_qdrant_hits(
+                await self._qdrant.search(
+                    f"collection_{query.collection_id}_propositions",
+                    query_vector,
+                    limit=40,
+                ),
+                default_source_type="proposition",
+                document_titles=document_titles,
+                query_text=query.normalized_text or query.text,
+            )
+        except Exception as e:
+            logger.warning("Qdrant dense proposition search failed: %s", e)
+
+        sparse_hits = []
+        try:
+            sparse_encoder = StableSparseEncoder()
+            sparse_indices, sparse_values = sparse_encoder.encode_query(query.normalized_text or query.text)
+            sparse_hits = self._convert_qdrant_hits(
+                await self._qdrant.search(
+                    f"collection_{query.collection_id}_propositions",
+                    query_vector=None,
+                    limit=40,
+                    query_sparse_indices=sparse_indices,
+                    query_sparse_values=sparse_values,
+                ),
+                default_source_type="proposition",
+                document_titles=document_titles,
+                query_text=query.normalized_text or query.text,
+            )
+        except Exception as e:
+            logger.warning("Qdrant sparse proposition search failed: %s", e)
+
         if not dense_hits and not sparse_hits:
+            logger.info("Qdrant search returned no hits for propositions, falling back to local BM25")
+            if not propositions:
+                repo = SqlPropositionRepository(self._session)
+                propositions = await repo.list_by_collection(query.collection_id)
+            if propositions:
+                return self._score_sparse_candidates(
+                    query_text=query.normalized_text or query.text,
+                    items=propositions,
+                    builder=lambda item, score: self._build_proposition_hit(item, document_titles, score, "local_sparse"),
+                    text_getter=lambda item: item.text,
+                    limit=20,
+                )
             return []
+
         if not dense_hits:
             return self._rerank_hits(query, sparse_hits, route_mode, limit=20)
         if not sparse_hits:
@@ -457,34 +576,76 @@ class RetrievalOrchestrator:
         document_titles: dict[str, str],
         route_mode: str,
     ) -> list[SearchHit]:
-        if not summaries:
-            return []
-        dense_hits = self._convert_qdrant_hits(
-            await self._qdrant.search(
-                f"collection_{query.collection_id}_summaries",
-                query_vector,
-                limit=30,
-            ),
-            default_source_type="summary",
-            document_titles=document_titles,
-            query_text=query.normalized_text or query.text,
-        )
-        sparse_encoder = StableSparseEncoder()
-        sparse_indices, sparse_values = sparse_encoder.encode_query(query.normalized_text or query.text)
-        sparse_hits = self._convert_qdrant_hits(
-            await self._qdrant.search(
-                f"collection_{query.collection_id}_summaries",
-                query_vector=None,
-                limit=30,
-                query_sparse_indices=sparse_indices,
-                query_sparse_values=sparse_values,
-            ),
-            default_source_type="summary",
-            document_titles=document_titles,
-            query_text=query.normalized_text or query.text,
-        )
+        if not self._qdrant.is_available:
+            if not summaries:
+                doc_repo = SqlDocumentRepository(self._session)
+                documents = await doc_repo.list_by_collection(query.collection_id)
+                chunk_repo = SqlChunkRepository(self._session)
+                repo = SqlSummaryRepository(self._session)
+                summaries = await self._load_summaries(repo, documents, chunk_repo, [], query.collection_id)
+            if not summaries:
+                return []
+            logger.info("Qdrant unavailable, falling back to local BM25 search for summaries")
+            return self._score_sparse_candidates(
+                query_text=query.normalized_text or query.text,
+                items=summaries,
+                builder=lambda item, score: self._build_summary_hit(item, document_titles, score, "local_sparse"),
+                text_getter=lambda item: item.text,
+                limit=16,
+            )
+
+        dense_hits = []
+        try:
+            dense_hits = self._convert_qdrant_hits(
+                await self._qdrant.search(
+                    f"collection_{query.collection_id}_summaries",
+                    query_vector,
+                    limit=30,
+                ),
+                default_source_type="summary",
+                document_titles=document_titles,
+                query_text=query.normalized_text or query.text,
+            )
+        except Exception as e:
+            logger.warning("Qdrant dense summary search failed: %s", e)
+
+        sparse_hits = []
+        try:
+            sparse_encoder = StableSparseEncoder()
+            sparse_indices, sparse_values = sparse_encoder.encode_query(query.normalized_text or query.text)
+            sparse_hits = self._convert_qdrant_hits(
+                await self._qdrant.search(
+                    f"collection_{query.collection_id}_summaries",
+                    query_vector=None,
+                    limit=30,
+                    query_sparse_indices=sparse_indices,
+                    query_sparse_values=sparse_values,
+                ),
+                default_source_type="summary",
+                document_titles=document_titles,
+                query_text=query.normalized_text or query.text,
+            )
+        except Exception as e:
+            logger.warning("Qdrant sparse summary search failed: %s", e)
+
         if not dense_hits and not sparse_hits:
+            logger.info("Qdrant search returned no hits for summaries, falling back to local BM25")
+            if not summaries:
+                doc_repo = SqlDocumentRepository(self._session)
+                documents = await doc_repo.list_by_collection(query.collection_id)
+                chunk_repo = SqlChunkRepository(self._session)
+                repo = SqlSummaryRepository(self._session)
+                summaries = await self._load_summaries(repo, documents, chunk_repo, [], query.collection_id)
+            if summaries:
+                return self._score_sparse_candidates(
+                    query_text=query.normalized_text or query.text,
+                    items=summaries,
+                    builder=lambda item, score: self._build_summary_hit(item, document_titles, score, "local_sparse"),
+                    text_getter=lambda item: item.text,
+                    limit=16,
+                )
             return []
+
         if not dense_hits:
             return self._rerank_hits(query, sparse_hits, route_mode, limit=16)
         if not sparse_hits:

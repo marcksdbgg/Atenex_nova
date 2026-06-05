@@ -1,7 +1,7 @@
 """Adapter for Cross-Encoder reranking models."""
 
-import os
 import logging
+import os
 from collections.abc import Sequence
 from typing import Any
 
@@ -30,7 +30,7 @@ class RerankerAdapter:
             return
 
         settings = get_settings()
-        
+
         # Determine model path: local path in settings, env var, or fallback
         env_path = os.environ.get("ATENEX_RERANKER_PATH")
         model_to_load = settings.reranker_path or env_path or model_name or "BAAI/bge-reranker-v2-m3"
@@ -51,10 +51,10 @@ class RerankerAdapter:
                 device = "cpu"
 
             logger.info("Reranker loading on device: %s", device)
-            
+
             # Using max_length=512 as an optimal tradeoff for snippet reranking
             model = CrossEncoder(model_to_load, max_length=512, device=device)
-            
+
             # Calibration: Float16 conversion if CUDA and enabled
             if device == "cuda" and settings.reranker_fp16:
                 try:

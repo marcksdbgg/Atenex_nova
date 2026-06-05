@@ -2,7 +2,7 @@ Mi propuesta sería una **Atenex Nova**: una segunda generación de Atenex pensa
 
 ## Qué partes de Atenex cambiaría y con qué
 
-Primero, **cambiaría Granite-3.2-2B como generador principal**. En 2026, Gemma 4 ya ofrece una base más moderna: es abierta, multimodal, soporta más de 140 idiomas, tiene variantes pequeñas y medianas, ventanas de contexto de hasta 256K y modos configurables de razonamiento. Para una laptop o mini-PC local, yo usaría **Gemma 4 E4B** como perfil estándar y **Gemma 4 E2B** como perfil liviano. Si el dispositivo es todavía más ajustado, usaría **Gemma 3n** como perfil ultraligero para edge/NPU. ([Google AI for Developers][1])
+Primero, **cambiaría Granite-3.2-2B como generador principal**. En 2026, Gemma 4 ya ofrece una base más moderna: es abierta, multimodal, soporta más de 140 idiomas, tiene variantes pequeñas y medianas, ventanas de contexto de hasta 256K y modos configurables de razonamiento. Para una laptop o mini-PC local, yo usaría **Gemma 4 12B** como perfil estándar y **Gemma 4 E2B** como perfil liviano. Si el dispositivo es todavía más ajustado, usaría **Gemma 3n** como perfil ultraligero para edge/NPU. ([Google AI for Developers][1])
 
 Segundo, **cambiaría el embedding stack**. Aquí sí usaría Google de forma clara: **EmbeddingGemma** como embedding local por defecto. Tiene 308M parámetros, soporta más de 100 idiomas, permite salida flexible de 768 a 128 dimensiones mediante Matryoshka Representation Learning y Google indica que puede correr con menos de 200 MB de RAM cuando se cuantiza. Eso encaja perfecto con el objetivo original de Atenex de no disparar la memoria del sistema. Mi perfil recomendado sería:
 
@@ -71,7 +71,7 @@ Yo definiría tres perfiles:
 
 **Perfil B — 16 GB RAM**
 
-* Generador: Gemma 4 E4B
+* Generador: Gemma 4 12B
 * Embeddings: EmbeddingGemma 384d
 * Qdrant self-hosted
 * Índice visual opcional
@@ -397,7 +397,7 @@ Yo sí conservaría:
 
 Te lo dejo directo.
 
-**Granite-3.2-2B → Gemma 4 E4B / E2B**
+**Granite-3.2-2B → Gemma 4 12B / E2B**
 Porque Gemma 4 es más reciente, más multilingüe, multimodal y con contexto más amplio. ([Google AI for Developers][1])
 
 **Embeddings locales actuales → EmbeddingGemma**

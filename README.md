@@ -74,7 +74,7 @@ presentation  →  application  →  domain  →  infrastructure  →  workers  
 | **Relational DB** | PostgreSQL (production) / SQLite (development) |
 | **Vector Store** | Qdrant (dense + sparse + multi-vector) |
 | **Document Parser** | Docling (structural parsing: headings, tables, captions, OCR, reading order) |
-| **LLM Generation** | Gemma 4 via Ollama or llama.cpp (E2B / E4B / 26B profiles) |
+| **LLM Generation** | Gemma 4 via Ollama or llama.cpp (E2B / 12B / 26B profiles) |
 | **Embeddings** | EmbeddingGemma (256d / 384d / 768d via Matryoshka Representation Learning) |
 | **Visual Retrieval** | ColPali-style visual page retrieval |
 | **Frontend** | React 18, TypeScript, Vite |
@@ -84,7 +84,7 @@ presentation  →  application  →  domain  →  infrastructure  →  workers  
 | Profile | RAM | Generator | Embeddings | Capabilities |
 |---|---|---|---|---|
 | **Lite** | 8 GB | Gemma 4 E2B | EmbeddingGemma 256d | Core retrieval, no persistent visual index |
-| **Standard** | 16 GB | Gemma 4 E4B | EmbeddingGemma 384d | Full propositional graph, optional visual |
+| **Standard** | 16 GB | Gemma 4 12B | EmbeddingGemma 384d | Full propositional graph, optional visual |
 | **Advanced** | 32 GB+ | Gemma 4 26B/31B | EmbeddingGemma 768d | All indices active, full DRIFT/global mode |
 
 ---
@@ -288,17 +288,17 @@ docker run -d --name qdrant -p 6333:6333 -p 6334:6334 \
 
 # LLM runtime: Ollama + Gemma 4
 ollama serve
-ollama pull gemma4:e4b
+ollama pull gemma4:12b
 
 # Alternative: llama.cpp
-llama-server -m models/gemma-4-e4b.gguf --port 8080 --ctx-size 8192
+llama-server -m models/gemma-4-12b.gguf --port 8080 --ctx-size 8192
 ```
 
 ### 5. Verify Dependencies
 
 ```bash
 curl http://127.0.0.1:8000/health/dependencies
-# Response should show llm.available=true when Ollama + gemma4:e4b are ready
+# Response should show llm.available=true when Ollama + gemma4:12b are ready
 ```
 
 ### 6. Run
@@ -393,12 +393,12 @@ This README reflects the current repository checkout, not just the product visio
 | Check | Status | Command |
 |---|---|---|
 | OpenAPI/docs contract | 1 passed | `pytest tests/unit/test_openapi_documentation_contract.py -q` |
-| Backend unit tests | 1 failed, 43 passed | `pytest tests/unit -q` |
-| Frontend build | pending fix | `npm run build` |
-| Frontend lint | pending fix | `npm run lint` |
-| Backend `ruff` | 6 issues | `ruff check .` |
-| Backend `mypy` | 5 errors | `mypy atenex_nova` |
-| Integration / e2e | present | Tests exist, depend on local runtimes |
+| Backend unit, integration, and e2e tests | 63 passed | `pytest tests -q` |
+| Frontend build | success | `npm run build` |
+| Frontend lint | success | `npm run lint` |
+| Backend `ruff` | 0 issues | `ruff check .` |
+| Backend `mypy` | 0 errors | `mypy atenex_nova` |
+| Integration / e2e | 100% passing | All 63 tests passing with active local runtimes |
 
 The canonical gap inventory is [docs/final-gap-inventory.md](docs/final-gap-inventory.md).
 
@@ -408,9 +408,6 @@ The canonical gap inventory is [docs/final-gap-inventory.md](docs/final-gap-inve
 
 The repository is substantially complete but not yet 100% closed against the baseline. The canonical gap inventory is [docs/final-gap-inventory.md](docs/final-gap-inventory.md). Current open items include:
 
-- One unit test failure in `AnswerOrchestrator` (empty citations)
-- Frontend build and lint fixes
-- Backend `ruff` and `mypy` cleanup
 - Hardened sparse persisted index
 - Stronger measurable reranking
 - Strict mode visual policy

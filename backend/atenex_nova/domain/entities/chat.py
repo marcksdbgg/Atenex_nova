@@ -1,7 +1,7 @@
 """Chat and ChatMessage domain entities."""
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 @dataclass
@@ -11,7 +11,7 @@ class Chat:
     id: str
     collection_id: str
     title: str
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 @dataclass
@@ -22,4 +22,4 @@ class ChatMessage:
     chat_id: str
     role: str  # "user" or "assistant"
     content: str
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))

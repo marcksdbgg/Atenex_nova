@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { QueryHit } from '../types/api';
 
 interface EvidenceCardProps {
@@ -6,6 +7,14 @@ interface EvidenceCardProps {
 
 export function EvidenceCard({ evidence }: EvidenceCardProps) {
   const isGraph = evidence.source_type === 'graph_edge';
+  const [isExpanded, setIsExpanded] = useState(false);
+  const snippet = evidence.snippet || '';
+  const shouldTruncate = snippet.length > 240;
+
+  const displayText = shouldTruncate && !isExpanded
+    ? `${snippet.slice(0, 240).trim()}...`
+    : snippet;
+
   return (
     <article className={`query-evidence ${isGraph ? 'query-evidence--graph' : ''}`}>
       <div className="query-evidence__top">
@@ -21,7 +30,33 @@ export function EvidenceCard({ evidence }: EvidenceCardProps) {
         <span className="query-evidence__score">Puntuación {evidence.score.toFixed(3)}</span>
       </div>
 
-      <p className="query-evidence__snippet">{evidence.snippet}</p>
+      <div className="query-evidence__body">
+        <p className="query-evidence__snippet" style={{ whiteSpace: 'pre-wrap' }}>
+          {displayText}
+        </p>
+        {shouldTruncate && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsExpanded(!isExpanded);
+            }}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--color-primary, #6366f1)',
+              cursor: 'pointer',
+              fontSize: 'var(--font-xs)',
+              fontWeight: 'bold',
+              padding: '0',
+              marginTop: 'var(--space-1)',
+              display: 'block'
+            }}
+          >
+            {isExpanded ? 'Ver menos' : 'Leer más...'}
+          </button>
+        )}
+      </div>
 
       <div className="query-evidence__footer">
         {evidence.document_id ? <span className="query-chip">Documento {evidence.document_id}</span> : null}
@@ -37,3 +72,4 @@ export function EvidenceCard({ evidence }: EvidenceCardProps) {
     </article>
   );
 }
+

@@ -1,12 +1,13 @@
 """E2E tests for the new Chat API endpoints."""
 
-from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from atenex_nova.main import app
 from tests.e2e.test_document_ingestion_e2e import (
     _create_collection,
+)
+from tests.e2e.test_document_ingestion_e2e import (
     e2e_env as e2e_env,
 )
 

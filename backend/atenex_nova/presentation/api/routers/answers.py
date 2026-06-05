@@ -37,6 +37,11 @@ async def get_answer(answer_id: str, service: AnswerService = Depends(get_answer
         prompt_version=detail.answer.prompt_version,
         verification_issues=detail.answer.verification_issues,
         evidence_trace=detail.answer.evidence_trace,
+        full_prompt=detail.answer.full_prompt,
+        input_token_count=detail.answer.input_token_count,
+        output_token_count=detail.answer.output_token_count,
+        chat_history_used=detail.answer.chat_history_used,
+        chat_history_json=detail.answer.chat_history_json,
         citations=[
             CitationResponse(
                 id=citation.id,

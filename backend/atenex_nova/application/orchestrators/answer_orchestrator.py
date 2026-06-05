@@ -14,8 +14,8 @@ from atenex_nova.domain.entities.evidence_item import EvidenceItem
 from atenex_nova.domain.value_objects.identifiers import AnswerVerdict, new_id
 from atenex_nova.infrastructure.llm.llm_gateway import (
     LlamaCppAdapter,
-    LLMGenerationResult,
     LLMGateway,
+    LLMGenerationResult,
     OllamaAdapter,
 )
 from atenex_nova.shared.config.settings import get_settings
@@ -83,7 +83,7 @@ class AnswerOrchestrator:
             f"Routed Mode: {search_result.evidence_pack.route_mode} | "
             f"Plan Type: {plan_type} | Evidence Pack size: {len(search_result.evidence_pack.items)} hits"
         )
-        
+
         # Ensure chat history fits in token budget (e.g. max prompt size of 8000 tokens)
         max_prompt_tokens = 8000
         while chat_history and (len(self._build_prompt(search_result, plan_type, generation_profile, chat_history)) // 4) > max_prompt_tokens:
@@ -145,7 +145,7 @@ class AnswerOrchestrator:
         )
 
         self._enforce_strict_answer(answer_text, citations, verification, search_result.query.route_mode)
-        
+
         serialized_history = []
         if chat_history:
             for msg in chat_history:
@@ -260,9 +260,9 @@ class AnswerOrchestrator:
             prompt,
             max_tokens=max_tokens,
             temperature=temperature,
-            stop=["\n\n###", "\n<END>"] if plan_type != "visual_grounded_synthesis" else ["\n\n###"],
+            stop=["\n[User]", "\n[Assistant]", "\n<END>"],
         )
-        
+
         if isinstance(gen_res, str):
             text = gen_res
             prompt_tokens = max(1, len(prompt) // 4)
@@ -592,7 +592,8 @@ class AnswerOrchestrator:
             result = await self._generator.generate(prompt, max_tokens=256, temperature=0.0)
         except Exception:
             return None
-        
+
+        text: str
         if isinstance(result, str):
             text = result
         elif hasattr(result, "text"):
