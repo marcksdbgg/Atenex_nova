@@ -26,6 +26,7 @@ from atenex_nova.infrastructure.db.models.tables import (
     SummaryNodeModel,
 )
 from atenex_nova.infrastructure.db.repositories.sql_collection_repo import SqlCollectionRepository
+from atenex_nova.infrastructure.indexes.turboquant_candidate_index import TurboQuantCandidateIndex
 from atenex_nova.infrastructure.qdrant.qdrant_adapter import QdrantAdapter
 from atenex_nova.shared.config.settings import get_settings
 
@@ -133,6 +134,13 @@ class CollectionCleanupService:
         await self._qdrant.delete_collection(f"collection_{collection_id}_propositions")
         await self._qdrant.delete_collection(f"collection_{collection_id}_summaries")
         await self._qdrant.delete_by_filter("pages_visual", {"collection_id": collection_id})
+
+        try:
+            candidate_idx = TurboQuantCandidateIndex(self._session)
+            await candidate_idx.delete_collection_indexes(collection_id)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("Error cleaning up turbovec indexes for %s: %s", collection_id, e)
 
     def _delete_visual_cache(self, collection_id: str) -> None:
         visual_root = get_settings().visual_pages_path

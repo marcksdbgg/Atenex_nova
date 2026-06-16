@@ -243,6 +243,46 @@ Atenex Nova includes a built-in evaluation system for measuring retrieval and an
 
 ## Quick Start
 
+### Quick Command Reference (Windows / PowerShell)
+
+To spin up all services (databases, LLM, backend API, workers, and frontend) in separate terminal tabs from the root directory `Atenex_nova`:
+
+1. **Databases (Qdrant + PostgreSQL)**:
+   ```powershell
+   docker compose --profile prod up -d
+   ```
+   *(Qdrant will run on `http://localhost:6333` and PostgreSQL on port `5432`)*
+
+2. **LLM Runtime (Ollama with Gemma 4)**:
+   ```powershell
+   ollama serve
+   ollama pull gemma4:12b
+   ```
+
+3. **Backend API Server**:
+   ```powershell
+   cd backend
+   # On Windows (GPU venv):
+   .venv312\Scripts\python.exe -m uvicorn atenex_nova.main:app --reload --port 8000
+   # Fallback/Other:
+   .venv\Scripts\python.exe -m uvicorn atenex_nova.main:app --reload --port 8000
+   ```
+
+4. **Background Ingestion & Memory Worker**:
+   ```powershell
+   cd backend
+   # On Windows (GPU venv):
+   .venv312\Scripts\python.exe -m atenex_nova.workers.main
+   # Fallback/Other:
+   .venv\Scripts\python.exe -m atenex_nova.workers.main
+   ```
+
+5. **Frontend Application**:
+   ```powershell
+   cd frontend
+   npm run dev
+   ```
+
 ### Prerequisites
 
 - Python >= 3.11
@@ -261,13 +301,19 @@ cd Atenex_nova
 
 ```bash
 cd backend
-python -m venv .venv
 
-# Windows
+# On Windows: Create the canonical GPU-enabled environment (.venv312)
+python -m venv .venv312
+.venv312\Scripts\activate
+
+# On Linux/macOS or CPU-only Fallback:
+python -m venv .venv
+# Windows CPU activate:
 .venv\Scripts\activate
-# Linux/macOS
+# Linux/macOS CPU activate:
 source .venv/bin/activate
 
+# Install development dependencies
 pip install -e ".[dev]"
 ```
 
@@ -400,13 +446,13 @@ This README reflects the current repository checkout, not just the product visio
 | Backend `mypy` | 0 errors | `mypy atenex_nova` |
 | Integration / e2e | 100% passing | All 63 tests passing with active local runtimes |
 
-The canonical gap inventory is [docs/final-gap-inventory.md](docs/final-gap-inventory.md).
+The canonical technical audit is [docs/auditoria-completa.md](docs/auditoria-completa.md).
 
 ---
 
 ## Known Gaps
 
-The repository is substantially complete but not yet 100% closed against the baseline. The canonical gap inventory is [docs/final-gap-inventory.md](docs/final-gap-inventory.md). Current open items include:
+The repository is substantially complete but not yet 100% closed against the baseline. The canonical technical audit is [docs/auditoria-completa.md](docs/auditoria-completa.md). Current open items include:
 
 - Hardened sparse persisted index
 - Stronger measurable reranking
@@ -418,12 +464,13 @@ The repository is substantially complete but not yet 100% closed against the bas
 
 ## Related Documentation
 
-- [Final Gap Inventory](docs/final-gap-inventory.md)
+- [Auditoría Técnica Completa](docs/auditoria-completa.md)
 - [Product Baseline](docs/baseline.md)
 - [Backend Architecture](docs/architecture-backend.md)
 - [Frontend Architecture](docs/architecture-frontend.md)
 - [API Endpoints](docs/api-endpoints.md)
 - [Jobs and Workers](docs/jobs-and-workers.md)
+- [TurboQuant Integration](docs/turboquant-integration.md)
 - [Design System](design-system/atenex-nova/MASTER.md)
 - [AGENTS.md](AGENTS.md)
 

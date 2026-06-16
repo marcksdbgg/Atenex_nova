@@ -2,7 +2,7 @@
 
 ## Source of Truth
 - Use [docs/baseline.md](docs/baseline.md) for the product contract and rationale.
-- Use [docs/final-gap-inventory.md](docs/final-gap-inventory.md) as the canonical inventory of the real remaining gap against the baseline.
+- Use [docs/auditoria-completa.md](docs/auditoria-completa.md) as the canonical technical audit (claims-vs-implementation, contrastive) and remaining-gap reference against the baseline.
 
 - Use [README.md](README.md) for the live repository snapshot, quick start, and current verification status.
 - Do not duplicate those docs here; link to them instead.
@@ -15,16 +15,20 @@
 - Frontend lint: successful (green).
 - Backend `ruff`: clean (0 issues, green).
 - Backend `mypy`: clean (0 errors, green).
-- The current workspace uses a Windows venv at `backend/.venv/`; prefer `backend/.venv/Scripts/python.exe` for backend commands when the global `python` alias points to the Microsoft Store stub.
-- The canonical gap inventory snapshot is [docs/final-gap-inventory.md](docs/final-gap-inventory.md); treat it as a gap ledger, not a live test log.
+- The current workspace uses **two venvs** on Windows:
+  - `backend/.venv312/` — **canonical GPU venv** (Python 3.12, torch+cu128, RTX 4060 CUDA 12.8). Use `backend/.venv312/Scripts/python.exe` for all runtime and ML commands.
+  - `backend/.venv/` — legacy CPU-only venv (Python 3.14, torch+cpu). Use only as fallback if `.venv312` is unavailable.
+- GPU: RTX 4060 8 GB VRAM, driver 595.97, CUDA runtime 13.2 (cu128 wheels are compatible). Ollama LLM also runs on this GPU.
+- The canonical technical audit is [docs/auditoria-completa.md](docs/auditoria-completa.md); treat it as a contrastive audit ledger, not a live test log.
 
 ## Documentation To Read First
-- For backend or architecture work, read [docs/baseline.md](docs/baseline.md) and [docs/final-gap-inventory.md](docs/final-gap-inventory.md) before editing code.
+- For backend or architecture work, read [docs/baseline.md](docs/baseline.md) and [docs/auditoria-completa.md](docs/auditoria-completa.md) before editing code.
 
 - For backend implementation details, also read [docs/architecture-backend.md](docs/architecture-backend.md) and [docs/jobs-and-workers.md](docs/jobs-and-workers.md).
 - For product framing or tradeoff context, read [docs/baseline.md](docs/baseline.md).
 - For frontend structure and API contracts, also read [docs/architecture-frontend.md](docs/architecture-frontend.md) and [docs/api-endpoints.md](docs/api-endpoints.md).
 - For setup, run commands, and local services, read [README.md](README.md).
+- For vector quantization and TurboQuant/VecQuant integration design, read [docs/turboquant-integration.md](docs/turboquant-integration.md).
 - For UI work, check [design-system/atenex-nova/MASTER.md](design-system/atenex-nova/MASTER.md) first and then any page override under [design-system/atenex-nova/pages/](design-system/atenex-nova/pages/).
 
 ## Architecture and Entry Points
@@ -39,17 +43,17 @@
 
 ## Implementation Notes
 - Current backend flow is a modular monolith with FastAPI routers over application services and worker-driven ingestion jobs.
-- Current retrieval is hybrid: dense EmbeddingGemma, local sparse/BM25, reranking, and optional visual retrieval through ColPali-style adapters.
+- Current retrieval is hybrid: dense EmbeddingGemma (quantized via TurboQuantprod and indexed using local turbovec indexes), local sparse/BM25, reranking, and optional visual retrieval through ColPali-style adapters.
 - Current query UX is chat-first and includes history, evidence, citations, document drill-down, and page viewers.
-- Storage paths remain: uploads under `backend/storage/uploads/{collection_id}/{document_id}/{filename}` and visual page cache under `backend/storage/visual_pages/`.
+- Storage paths remain: uploads under `backend/storage/uploads/{collection_id}/{document_id}/{filename}`, visual page cache under `backend/storage/visual_pages/`, and local turbovec candidate indexes under `backend/storage/turbovec/`.
 - Qdrant collections are namespaced per corpus for chunks, propositions, summaries, and visual pages.
-- If a change affects product behavior, architecture, or the declared remaining gap, update [README.md](README.md) and [docs/final-gap-inventory.md](docs/final-gap-inventory.md) together.
+- If a change affects product behavior, architecture, or the declared remaining gap, update [README.md](README.md) and [docs/auditoria-completa.md](docs/auditoria-completa.md) together.
 
 ## Build and Test
 - Backend install: `pip install -e ".[dev]"` from `backend/`.
 - If the task touches parsing, embeddings, or visual retrieval, install ML deps too: `pip install -e ".[all]"`.
-- Backend tests: `backend/.venv/Scripts/python.exe -m pytest tests -q` on Windows, or `pytest tests -q` when the environment already exposes the tools.
-- Backend quality checks: `backend/.venv/Scripts/python.exe -m ruff check .` and `backend/.venv/Scripts/python.exe -m mypy atenex_nova` on Windows.
+- Backend tests: `backend/.venv312/Scripts/python.exe -m pytest tests -q` on Windows (use `.venv312` for GPU support).
+- Backend quality checks: `backend/.venv312/Scripts/python.exe -m ruff check .` and `backend/.venv312/Scripts/python.exe -m mypy atenex_nova` on Windows.
 - Run API: `uvicorn atenex_nova.main:app --reload --port 8000`.
 - Run worker: `python -m atenex_nova.workers.main`.
 - Frontend dev: `npm run dev`.

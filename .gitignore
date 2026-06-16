@@ -29,12 +29,17 @@ pip-delete-this-directory.txt
 
 # Virtual environments
 .venv/
+.venv*/
 venv/
 ENV/
 env/
 .env
 .env.local
 .env.*.local
+
+# TurboVec storage
+backend/storage/turbovec/
+storage/turbovec/
 
 # ---------------------------------------------------------------------------
 # Node / React Frontend
@@ -103,6 +108,9 @@ backend/storage/observability/
 # Database files
 # ---------------------------------------------------------------------------
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
 *.sqlite3
 
 # ---------------------------------------------------------------------------

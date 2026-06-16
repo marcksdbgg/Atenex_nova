@@ -196,6 +196,20 @@ class EmbedDocumentJobHandler(BaseJobHandler):
 
                     vectors = await embedder.embed(texts_to_embed)
 
+                    # Quantize and index candidates using IngestionOrchestrator
+                    from atenex_nova.application.orchestrators.ingestion_orchestrator import (
+                        IngestionOrchestrator,
+                    )
+                    ingestion_orch = IngestionOrchestrator(session)
+                    await ingestion_orch.index_nodes(
+                        collection_id=str(doc.collection_id),
+                        memory_layer="chunk",
+                        node_ids=[c.id for c in chunks_to_embed],
+                        vectors=vectors,
+                        embedding_model=settings.embedding_model,
+                        dimension=settings.embedding_dimensions,
+                    )
+
                     import uuid
 
                     qdrant = QdrantAdapter(
@@ -315,7 +329,8 @@ class RebuildCollectionJobHandler(BaseJobHandler):
             if collection is None:
                 raise ValueError(f"Collection {collection_id} not found")
 
-            documents = await doc_repo.list_by_collection(collection_id)
+            # Fetch all documents in the collection, lifting the default limit of 50
+            documents = await doc_repo.list_by_collection(collection_id, limit=100000)
             target_ids = [collection_id, *[document.id for document in documents]]
             async with audit.step(
                 run_id=job.id,

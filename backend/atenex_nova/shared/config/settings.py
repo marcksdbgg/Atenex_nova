@@ -94,6 +94,10 @@ class Settings(BaseSettings):
     # --- Storage ---
     blob_store_path: Path = STORAGE_ROOT / "uploads"
     visual_pages_path: Path = STORAGE_ROOT / "visual_pages"
+    turbovec_path: Path = STORAGE_ROOT / "turbovec"
+
+    # --- TurboVec ---
+    turbovec_bit_width: int = 4
 
     # --- Worker ---
     worker_poll_interval: float = 2.0

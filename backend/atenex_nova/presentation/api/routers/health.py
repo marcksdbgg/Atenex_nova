@@ -111,6 +111,19 @@ async def _probe_visual_runtime(settings: Settings) -> DependencyHealthResponse:
         return DependencyHealthResponse(name="visual", endpoint=endpoint, available=False, detail=str(exc))
 
 
+async def _probe_turbovec(settings: Settings) -> DependencyHealthResponse:
+    endpoint = str(settings.turbovec_path)
+    try:
+        import numpy as np
+        from turbovec import IdMapIndex
+        idx = IdMapIndex(dim=8, bit_width=settings.turbovec_bit_width)
+        vecs = np.random.rand(2, 8).astype(np.float32)
+        idx.add_with_ids(vecs, np.array([1, 2], dtype=np.uint64))
+        return DependencyHealthResponse(name="turbovec", endpoint=endpoint, available=True)
+    except Exception as exc:
+        return DependencyHealthResponse(name="turbovec", endpoint=endpoint, available=False, detail=str(exc))
+
+
 @router.get("/health/dependencies", response_model=RuntimeHealthResponse)
 async def runtime_dependencies_health() -> RuntimeHealthResponse:
     settings = get_settings()
@@ -119,6 +132,7 @@ async def runtime_dependencies_health() -> RuntimeHealthResponse:
     embeddings_probe = await _probe_embeddings(settings)
     docling_probe = await _probe_docling()
     visual_probe = await _probe_visual_runtime(settings)
-    dependencies = [llm_probe, qdrant_probe, embeddings_probe, docling_probe, visual_probe]
+    turbovec_probe = await _probe_turbovec(settings)
+    dependencies = [llm_probe, qdrant_probe, embeddings_probe, docling_probe, visual_probe, turbovec_probe]
     status = "ok" if all(item.available for item in dependencies) else "degraded"
     return RuntimeHealthResponse(status=status, version="0.1.0", dependencies=dependencies)

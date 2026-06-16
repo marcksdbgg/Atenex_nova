@@ -52,15 +52,24 @@ async def test_runtime_dependencies_health_is_degraded_when_llm_unavailable(
             detail=None,
         )
 
+    async def fake_turbovec(_settings):
+        return DependencyHealthResponse(
+            name="turbovec",
+            endpoint="storage/turbovec",
+            available=True,
+            detail=None,
+        )
+
     monkeypatch.setattr(health, "_probe_ollama", fake_ollama)
     monkeypatch.setattr(health, "_probe_qdrant", fake_qdrant)
     monkeypatch.setattr(health, "_probe_embeddings", fake_embeddings)
     monkeypatch.setattr(health, "_probe_docling", fake_docling)
     monkeypatch.setattr(health, "_probe_visual_runtime", fake_visual)
+    monkeypatch.setattr(health, "_probe_turbovec", fake_turbovec)
 
     response = await health.runtime_dependencies_health()
 
     assert response.status == "degraded"
-    assert len(response.dependencies) == 5
+    assert len(response.dependencies) == 6
     llm = next(item for item in response.dependencies if item.name == "llm")
     assert llm.available is False

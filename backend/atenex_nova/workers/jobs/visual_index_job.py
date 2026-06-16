@@ -79,7 +79,7 @@ class IndexVisualPagesJobHandler(BaseJobHandler):
                     )
 
                 adapter = ColPaliAdapter()
-                indexed = await adapter.upsert_pages(document.collection_id, payloads)
+                indexed = await adapter.upsert_pages(document.collection_id, payloads, session=session)
                 step.metrics(
                     visual_pages_indexed=len(indexed),
                     complex_pages=complex_pages,

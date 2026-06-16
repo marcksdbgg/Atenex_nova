@@ -30,11 +30,27 @@ class EmbeddingGemmaAdapter(Embedder):
         self.model: Any | None = None
 
         try:
+            import torch
             from sentence_transformers import SentenceTransformer
 
-            self.model = SentenceTransformer(self._model_name, truncate_dim=dim)
+            # Explicitly select device so CUDA is used when available
+            if torch.cuda.is_available():
+                device = "cuda"
+                logger.info("EmbeddingGemmaAdapter: CUDA available — using GPU %s", torch.cuda.get_device_name(0))
+            else:
+                device = "cpu"
+                logger.warning("EmbeddingGemmaAdapter: CUDA not available — using CPU (install torch+cu128 for GPU support)")
+
+            self.model = SentenceTransformer(self._model_name, truncate_dim=dim, device=device)
+            # Enable half-precision on GPU for ~2x throughput
+            if device == "cuda":
+                try:
+                    self.model.half()
+                    logger.info("EmbeddingGemmaAdapter: switched to float16 (half precision) on GPU")
+                except Exception as fp16_exc:
+                    logger.warning("EmbeddingGemmaAdapter: could not switch to fp16: %s", fp16_exc)
             self._fallback_only = False
-            logger.info("EmbeddingGemmaAdapter initialized model=%s dim=%d", self._model_name, dim)
+            logger.info("EmbeddingGemmaAdapter initialized model=%s dim=%d device=%s", self._model_name, dim, device)
         except Exception as e:
             if self._required:
                 raise ServiceUnavailableError(

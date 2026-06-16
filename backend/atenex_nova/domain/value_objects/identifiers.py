@@ -42,12 +42,12 @@ class DocumentStatus(StrEnum):
 
 # Valid state transitions
 VALID_TRANSITIONS: dict[DocumentStatus, set[DocumentStatus]] = {
-    DocumentStatus.REGISTERED: {DocumentStatus.PARSED, DocumentStatus.FAILED},
-    DocumentStatus.PARSED: {DocumentStatus.NORMALIZED, DocumentStatus.FAILED},
-    DocumentStatus.NORMALIZED: {DocumentStatus.SEGMENTED, DocumentStatus.FAILED},
-    DocumentStatus.SEGMENTED: {DocumentStatus.EMBEDDED, DocumentStatus.FAILED},
-    DocumentStatus.EMBEDDED: {DocumentStatus.INDEXED, DocumentStatus.FAILED},
-    DocumentStatus.INDEXED: {DocumentStatus.READY, DocumentStatus.FAILED},
+    DocumentStatus.REGISTERED: {DocumentStatus.PARSED, DocumentStatus.FAILED, DocumentStatus.REGISTERED},
+    DocumentStatus.PARSED: {DocumentStatus.NORMALIZED, DocumentStatus.FAILED, DocumentStatus.REGISTERED},
+    DocumentStatus.NORMALIZED: {DocumentStatus.SEGMENTED, DocumentStatus.FAILED, DocumentStatus.REGISTERED},
+    DocumentStatus.SEGMENTED: {DocumentStatus.EMBEDDED, DocumentStatus.FAILED, DocumentStatus.REGISTERED},
+    DocumentStatus.EMBEDDED: {DocumentStatus.INDEXED, DocumentStatus.FAILED, DocumentStatus.REGISTERED},
+    DocumentStatus.INDEXED: {DocumentStatus.READY, DocumentStatus.FAILED, DocumentStatus.REGISTERED},
     DocumentStatus.READY: {DocumentStatus.REGISTERED},  # re-ingest
     DocumentStatus.FAILED: {DocumentStatus.REGISTERED},  # retry
 }

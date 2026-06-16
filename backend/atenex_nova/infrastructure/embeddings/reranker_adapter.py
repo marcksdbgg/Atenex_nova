@@ -26,10 +26,22 @@ class RerankerAdapter:
 
     def __init__(self, model_name: str | None = None, required: bool = False) -> None:
         self._required = required
-        if self._model is not None:
+        settings = get_settings()
+
+        if not settings.reranker_enabled:
+            logger.info("Reranker is disabled by configuration settings/profile")
+            self.__class__._model = None
+            self.__class__._model_name = "heuristic"
+            self.__class__._available = False
+            if required:
+                raise ServiceUnavailableError(
+                    service="reranker",
+                    message="reranker is disabled by configuration settings/profile, but strict mode/required is enabled",
+                )
             return
 
-        settings = get_settings()
+        if self._model is not None:
+            return
 
         # Determine model path: local path in settings, env var, or fallback
         env_path = os.environ.get("ATENEX_RERANKER_PATH")

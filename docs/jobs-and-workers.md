@@ -102,13 +102,14 @@ Handler: `SegmentDocumentJobHandler`
 - marks the document segmented
 - enqueues `EMBED_DOCUMENT`
 
-Handler: `EmbedDocumentJobHandler`
+Handler: `EmbedDocumentJobHandler` (handles both `EMBED_DOCUMENT` and `EMBED_CHUNKS` job types)
 
 - embeds chunks with EmbeddingGemma using configured profile dimensions
+- normalizes, quantizes, and indexes the chunk vectors via `IngestionOrchestrator` (stored in SQL `quantized_vectors` and local `turbovec` indices)
 - initializes the Qdrant collection for the current corpus
-- stores vector payloads
+- stores vector payloads in Qdrant
 - marks the document embedded and indexed
-- marks the document ready immediately only when strict mode is disabled
+- in strict mode, the document remains in the `indexed` status (instead of transitioning directly to `ready`) to allow async enrichment jobs to complete
 - enqueues `EXTRACT_PROPOSITIONS`
 
 ## Memory Enrichment Pipeline
@@ -163,8 +164,8 @@ Handler: `IndexVisualPagesJobHandler`
 - groups structural nodes by page
 - flags complex pages based on node types, text length, and node count
 - prepares page payloads for the ColPali adapter
-- upserts page representations for later visual retrieval
-- transitions the document to `ready` at the end of the enrichment chain
+- upserts page representations for later visual retrieval (and normalizes, quantizes, and indexes the visual page vectors via `IngestionOrchestrator`)
+- transitions the document status to `ready` at the end of the enrichment chain (if the visual indexing job completes successfully, this acts as the terminal gate in strict mode)
 
 ## Rebuild Flow
 
@@ -196,4 +197,5 @@ If a handler is missing, the job is failed immediately with a descriptive error.
 ## Related Docs
 
 - [docs/architecture-backend.md](architecture-backend.md)
+- [docs/turboquant-integration.md](turboquant-integration.md)
 - [docs/api-endpoints.md](api-endpoints.md)

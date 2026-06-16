@@ -166,6 +166,21 @@ class EmbedPropositionsJobHandler(BaseJobHandler):
                     required=settings.embeddings_required,
                 )
                 vectors = await embedder.embed([prop.text for prop in propositions])
+
+                # Quantize and index candidates using IngestionOrchestrator
+                from atenex_nova.application.orchestrators.ingestion_orchestrator import (
+                    IngestionOrchestrator,
+                )
+                ingestion_orch = IngestionOrchestrator(session)
+                await ingestion_orch.index_nodes(
+                    collection_id=str(document.collection_id),
+                    memory_layer="proposition",
+                    node_ids=[prop.id for prop in propositions],
+                    vectors=vectors,
+                    embedding_model=settings.embedding_model,
+                    dimension=settings.embedding_dimensions,
+                )
+
                 sparse_encoder = StableSparseEncoder()
                 sparse_encodings = [sparse_encoder.encode_document(prop.text) for prop in propositions]
                 qdrant = None
@@ -324,6 +339,21 @@ class EmbedSummariesJobHandler(BaseJobHandler):
                     required=settings.embeddings_required,
                 )
                 vectors = await embedder.embed([summary.text for summary in summaries])
+
+                # Quantize and index candidates using IngestionOrchestrator
+                from atenex_nova.application.orchestrators.ingestion_orchestrator import (
+                    IngestionOrchestrator,
+                )
+                ingestion_orch = IngestionOrchestrator(session)
+                await ingestion_orch.index_nodes(
+                    collection_id=str(document.collection_id),
+                    memory_layer="summary",
+                    node_ids=[summary.id for summary in summaries],
+                    vectors=vectors,
+                    embedding_model=settings.embedding_model,
+                    dimension=settings.embedding_dimensions,
+                )
+
                 sparse_encoder = StableSparseEncoder()
                 sparse_encodings = [sparse_encoder.encode_document(summary.text) for summary in summaries]
                 qdrant_unavailable = False
@@ -436,6 +466,73 @@ class BuildGraphJobHandler(BaseJobHandler):
                             weight=0.8,
                         )
                     )
+
+                # --- CONCEPT-BASED CROSS-REFERENCES ---
+                en_stopwords = {
+                    "the", "and", "a", "of", "to", "in", "is", "that", "it", "on", "for", "with", "as", "by", "an", "at",
+                    "are", "this", "be", "from", "or", "have", "your", "will", "they", "were", "been", "was", "these",
+                    "those", "their", "there", "about", "which", "would", "could", "should", "other", "some", "more",
+                    "most", "each", "both", "such", "under", "after", "before", "between", "through", "during"
+                }
+                es_stopwords = {
+                    "el", "la", "los", "las", "un", "una", "unos", "unas", "de", "en", "para", "por", "con", "como",
+                    "sobre", "entre", "desde", "hasta", "hacia", "donde", "cuando", "quien", "que", "este", "esta",
+                    "esto", "estos", "estas", "todo", "toda", "todos", "todas", "pero", "sino", "solo", "solamente",
+                    "también", "tampoco", "contra", "bajo", "cabe", "ante", "tras", "cual", "cuales", "quienes",
+                    "cuyo", "cuya", "cuyos", "cuyas"
+                }
+                stopwords = en_stopwords.union(es_stopwords)
+
+                def extract_keywords(text: str) -> set[str]:
+                    import re
+                    cleaned = re.sub(r"[^\w\s]", " ", text)
+                    words = cleaned.split()
+                    keywords = set()
+                    for w in words:
+                        w_lower = w.lower()
+                        if len(w_lower) >= 5 and w_lower not in stopwords:
+                            keywords.add(w_lower)
+                    return keywords
+
+                prop_keywords = []
+                keyword_counts: dict[str, int] = {}
+                for prop in propositions:
+                    kws = extract_keywords(prop.text)
+                    prop_keywords.append(kws)
+                    for kw in kws:
+                        keyword_counts[kw] = keyword_counts.get(kw, 0) + 1
+
+                threshold = max(2, len(propositions) * 0.25)
+                filtered_keywords = []
+                for kws in prop_keywords:
+                    valid_kws = {kw for kw in kws if keyword_counts.get(kw, 0) <= threshold}
+                    filtered_keywords.append(valid_kws)
+
+                cross_ref_count = {prop.id: 0 for prop in propositions}
+                for i, prop1 in enumerate(propositions):
+                    kws1 = filtered_keywords[i]
+                    if not kws1:
+                        continue
+                    for j in range(i + 2, len(propositions)):
+                        prop2 = propositions[j]
+                        if cross_ref_count[prop1.id] >= 5 or cross_ref_count[prop2.id] >= 5:
+                            continue
+                        kws2 = filtered_keywords[j]
+                        shared = kws1.intersection(kws2)
+                        if shared:
+                            edges.append(
+                                RelationEdge(
+                                    id=new_id(),
+                                    source_type="proposition",
+                                    source_id=prop1.id,
+                                    target_type="proposition",
+                                    target_id=prop2.id,
+                                    relation=RelationType.MENTIONS.value,
+                                    weight=0.6,
+                                )
+                            )
+                            cross_ref_count[prop1.id] += 1
+                            cross_ref_count[prop2.id] += 1
 
                 await graph_store.upsert_edges(edges)
                 step.metrics(graph_edges_created=len(edges), relation_types=sorted({edge.relation for edge in edges}))

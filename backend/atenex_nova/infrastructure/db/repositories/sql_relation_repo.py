@@ -1,6 +1,6 @@
 """SQL repository: RelationEdge."""
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from atenex_nova.domain.entities.relation_edge import RelationEdge
@@ -47,7 +47,12 @@ class SqlRelationRepository:
         for _ in range(max(1, depth)):
             if not frontier:
                 break
-            query = select(RelationEdgeModel).where(RelationEdgeModel.source_id.in_(frontier))
+            query = select(RelationEdgeModel).where(
+                or_(
+                    RelationEdgeModel.source_id.in_(frontier),
+                    RelationEdgeModel.target_id.in_(frontier)
+                )
+            ).limit(50)
             if allowed_relations:
                 query = query.where(RelationEdgeModel.relation.in_(allowed_relations))
 
@@ -59,6 +64,9 @@ class SqlRelationRepository:
                 if edge.target_id not in seen:
                     seen.add(edge.target_id)
                     frontier.append(edge.target_id)
+                if edge.source_id not in seen:
+                    seen.add(edge.source_id)
+                    frontier.append(edge.source_id)
 
         return expanded
 

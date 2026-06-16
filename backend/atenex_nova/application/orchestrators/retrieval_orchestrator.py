@@ -7,6 +7,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from atenex_nova.application.policies.context_packing_policy import (
@@ -33,6 +34,7 @@ from atenex_nova.infrastructure.embeddings.bm25_encoder import (
     tokenize,
 )
 from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
+from atenex_nova.infrastructure.indexes.turboquant_candidate_index import TurboQuantCandidateIndex
 from atenex_nova.infrastructure.qdrant.qdrant_adapter import QdrantAdapter
 from atenex_nova.infrastructure.visual.colpali_adapter import ColPaliAdapter
 from atenex_nova.shared.config.settings import get_settings
@@ -97,6 +99,11 @@ class RetrievalOrchestrator:
         self._router = QueryRoutingPolicy()
         self._packer = ContextPackingPolicy()
         self._audit = audit or PipelineAuditService(session=session)
+        self._candidate_index = TurboQuantCandidateIndex(session)
+
+    def _use_turbovec(self) -> bool:
+        from atenex_nova.shared.config.settings import EmbeddingProfile
+        return self._settings.embedding_profile in {EmbeddingProfile.LITE, EmbeddingProfile.STANDARD}
 
     async def search(self, collection_id: str, query_text: str, mode: str = "auto") -> SearchResult:
         query_repo = SqlQueryRepository(self._session)
@@ -348,7 +355,6 @@ class RetrievalOrchestrator:
         chunks: list[Chunk],
         collection_id: str,
     ) -> list[SummaryNode]:
-        from sqlmodel import select
 
         from atenex_nova.infrastructure.db.models.tables import ChunkModel, SummaryNodeModel
 
@@ -424,53 +430,98 @@ class RetrievalOrchestrator:
         document_titles: dict[str, str],
         route_mode: str,
     ) -> list[SearchHit]:
-        if not self._qdrant.is_available:
+        use_turbo = self._use_turbovec()
+        dense_hits = []
+        if use_turbo:
+            try:
+                candidates = await self._candidate_index.search(
+                    collection_id=query.collection_id,
+                    memory_layers=["chunk"],
+                    query_vector=query_vector,
+                    top_n=200,
+                )
+                if candidates:
+                    node_ids = [c["node_id"] for c in candidates]
+                    import json
+
+                    from sqlmodel import select
+
+                    from atenex_nova.infrastructure.db.models.tables import ChunkModel
+                    stmt = select(ChunkModel).where(ChunkModel.id.in_(node_ids))
+                    res = await self._session.execute(stmt)
+                    chunk_models = res.scalars().all()
+                    chunk_map = {m.id: m for m in chunk_models}
+
+                    for c in candidates:
+                        nid = c["node_id"]
+                        if nid in chunk_map:
+                            model = chunk_map[nid]
+                            chunk_entity = Chunk(
+                                id=model.id,
+                                document_id=model.document_id,
+                                text=model.text,
+                                summary=model.summary,
+                                token_count=model.token_count,
+                                node_ids=json.loads(model.node_ids_json),
+                                embedding_ref=model.embedding_ref,
+                                sparse_ref=model.sparse_ref,
+                                metadata=json.loads(model.metadata_json) if model.metadata_json else {},
+                            )
+                            hit = self._build_chunk_hit(
+                                chunk=chunk_entity,
+                                document_titles=document_titles,
+                                score=c["score"],
+                                stage="dense_turbovec",
+                            )
+                            dense_hits.append(hit)
+            except Exception as e:
+                logger.warning("TurboQuant dense chunk search failed: %s", e)
+
+        if not dense_hits and self._qdrant.is_available:
+            try:
+                dense_hits = self._convert_qdrant_hits(
+                    await self._qdrant.search(f"collection_{query.collection_id}", query_vector, limit=40),
+                    default_source_type="chunk",
+                    document_titles=document_titles,
+                    query_text=query.normalized_text or query.text,
+                )
+            except Exception as e:
+                logger.warning("Qdrant dense chunk search failed: %s", e)
+
+        sparse_hits = []
+        if self._qdrant.is_available:
+            try:
+                sparse_encoder = StableSparseEncoder()
+                sparse_indices, sparse_values = sparse_encoder.encode_query(query.normalized_text or query.text)
+                sparse_hits = self._convert_qdrant_hits(
+                    await self._qdrant.search(
+                        f"collection_{query.collection_id}",
+                        query_vector=None,
+                        limit=40,
+                        query_sparse_indices=sparse_indices,
+                        query_sparse_values=sparse_values,
+                    ),
+                    default_source_type="chunk",
+                    document_titles=document_titles,
+                    query_text=query.normalized_text or query.text,
+                )
+            except Exception as e:
+                logger.warning("Qdrant sparse chunk search failed: %s", e)
+        else:
             if not chunks:
                 repo = SqlChunkRepository(self._session)
                 chunks = await repo.list_by_collection(query.collection_id)
-            if not chunks:
-                return []
-            logger.info("Qdrant unavailable, falling back to local BM25 search for chunks")
-            return self._score_sparse_candidates(
-                query_text=query.normalized_text or query.text,
-                items=chunks,
-                builder=lambda item, score: self._build_chunk_hit(item, document_titles, score, "local_sparse"),
-                text_getter=lambda item: item.text,
-                limit=20,
-            )
-
-        dense_hits = []
-        try:
-            dense_hits = self._convert_qdrant_hits(
-                await self._qdrant.search(f"collection_{query.collection_id}", query_vector, limit=40),
-                default_source_type="chunk",
-                document_titles=document_titles,
-                query_text=query.normalized_text or query.text,
-            )
-        except Exception as e:
-            logger.warning("Qdrant dense chunk search failed: %s", e)
-
-        sparse_hits = []
-        try:
-            sparse_encoder = StableSparseEncoder()
-            sparse_indices, sparse_values = sparse_encoder.encode_query(query.normalized_text or query.text)
-            sparse_hits = self._convert_qdrant_hits(
-                await self._qdrant.search(
-                    f"collection_{query.collection_id}",
-                    query_vector=None,
+            if chunks:
+                sparse_hits = self._score_sparse_candidates(
+                    query_text=query.normalized_text or query.text,
+                    items=chunks,
+                    builder=lambda item, score: self._build_chunk_hit(item, document_titles, score, "local_sparse"),
+                    text_getter=lambda item: item.text,
                     limit=40,
-                    query_sparse_indices=sparse_indices,
-                    query_sparse_values=sparse_values,
-                ),
-                default_source_type="chunk",
-                document_titles=document_titles,
-                query_text=query.normalized_text or query.text,
-            )
-        except Exception as e:
-            logger.warning("Qdrant sparse chunk search failed: %s", e)
+                )
 
         if not dense_hits and not sparse_hits:
-            logger.info("Qdrant search returned no hits for chunks, falling back to local BM25")
+            logger.info("TurboQuant and local search returned no hits for chunks, falling back to local BM25")
             if not chunks:
                 repo = SqlChunkRepository(self._session)
                 chunks = await repo.list_by_collection(query.collection_id)
@@ -498,57 +549,97 @@ class RetrievalOrchestrator:
         document_titles: dict[str, str],
         route_mode: str,
     ) -> list[SearchHit]:
-        if not self._qdrant.is_available:
+        use_turbo = self._use_turbovec()
+        dense_hits = []
+        if use_turbo:
+            try:
+                candidates = await self._candidate_index.search(
+                    collection_id=query.collection_id,
+                    memory_layers=["proposition"],
+                    query_vector=query_vector,
+                    top_n=200,
+                )
+                if candidates:
+                    node_ids = [c["node_id"] for c in candidates]
+                    from sqlmodel import select
+
+                    from atenex_nova.infrastructure.db.models.tables import PropositionModel
+                    stmt = select(PropositionModel).where(PropositionModel.id.in_(node_ids))
+                    res = await self._session.execute(stmt)
+                    prop_models = res.scalars().all()
+                    prop_map = {m.id: m for m in prop_models}
+
+                    for c in candidates:
+                        nid = c["node_id"]
+                        if nid in prop_map:
+                            model = prop_map[nid]
+                            prop_entity = Proposition(
+                                id=model.id,
+                                document_id=model.document_id,
+                                source_chunk_id=model.source_chunk_id,
+                                text=model.text,
+                                kind=model.kind,
+                                embedding_ref=model.embedding_ref,
+                            )
+                            hit = self._build_proposition_hit(
+                                proposition=prop_entity,
+                                document_titles=document_titles,
+                                score=c["score"],
+                                stage="dense_turbovec",
+                            )
+                            dense_hits.append(hit)
+            except Exception as e:
+                logger.warning("TurboQuant dense proposition search failed: %s", e)
+
+        if not dense_hits and self._qdrant.is_available:
+            try:
+                dense_hits = self._convert_qdrant_hits(
+                    await self._qdrant.search(
+                        f"collection_{query.collection_id}_propositions",
+                        query_vector,
+                        limit=40,
+                    ),
+                    default_source_type="proposition",
+                    document_titles=document_titles,
+                    query_text=query.normalized_text or query.text,
+                )
+            except Exception as e:
+                logger.warning("Qdrant dense proposition search failed: %s", e)
+
+        sparse_hits = []
+        if self._qdrant.is_available:
+            try:
+                sparse_encoder = StableSparseEncoder()
+                sparse_indices, sparse_values = sparse_encoder.encode_query(query.normalized_text or query.text)
+                sparse_hits = self._convert_qdrant_hits(
+                    await self._qdrant.search(
+                        f"collection_{query.collection_id}_propositions",
+                        query_vector=None,
+                        limit=40,
+                        query_sparse_indices=sparse_indices,
+                        query_sparse_values=sparse_values,
+                    ),
+                    default_source_type="proposition",
+                    document_titles=document_titles,
+                    query_text=query.normalized_text or query.text,
+                )
+            except Exception as e:
+                logger.warning("Qdrant sparse proposition search failed: %s", e)
+        else:
             if not propositions:
                 repo = SqlPropositionRepository(self._session)
                 propositions = await repo.list_by_collection(query.collection_id)
-            if not propositions:
-                return []
-            logger.info("Qdrant unavailable, falling back to local BM25 search for propositions")
-            return self._score_sparse_candidates(
-                query_text=query.normalized_text or query.text,
-                items=propositions,
-                builder=lambda item, score: self._build_proposition_hit(item, document_titles, score, "local_sparse"),
-                text_getter=lambda item: item.text,
-                limit=20,
-            )
-
-        dense_hits = []
-        try:
-            dense_hits = self._convert_qdrant_hits(
-                await self._qdrant.search(
-                    f"collection_{query.collection_id}_propositions",
-                    query_vector,
+            if propositions:
+                sparse_hits = self._score_sparse_candidates(
+                    query_text=query.normalized_text or query.text,
+                    items=propositions,
+                    builder=lambda item, score: self._build_proposition_hit(item, document_titles, score, "local_sparse"),
+                    text_getter=lambda item: item.text,
                     limit=40,
-                ),
-                default_source_type="proposition",
-                document_titles=document_titles,
-                query_text=query.normalized_text or query.text,
-            )
-        except Exception as e:
-            logger.warning("Qdrant dense proposition search failed: %s", e)
-
-        sparse_hits = []
-        try:
-            sparse_encoder = StableSparseEncoder()
-            sparse_indices, sparse_values = sparse_encoder.encode_query(query.normalized_text or query.text)
-            sparse_hits = self._convert_qdrant_hits(
-                await self._qdrant.search(
-                    f"collection_{query.collection_id}_propositions",
-                    query_vector=None,
-                    limit=40,
-                    query_sparse_indices=sparse_indices,
-                    query_sparse_values=sparse_values,
-                ),
-                default_source_type="proposition",
-                document_titles=document_titles,
-                query_text=query.normalized_text or query.text,
-            )
-        except Exception as e:
-            logger.warning("Qdrant sparse proposition search failed: %s", e)
+                )
 
         if not dense_hits and not sparse_hits:
-            logger.info("Qdrant search returned no hits for propositions, falling back to local BM25")
+            logger.info("TurboQuant and local search returned no hits for propositions, falling back to local BM25")
             if not propositions:
                 repo = SqlPropositionRepository(self._session)
                 propositions = await repo.list_by_collection(query.collection_id)
@@ -576,60 +667,99 @@ class RetrievalOrchestrator:
         document_titles: dict[str, str],
         route_mode: str,
     ) -> list[SearchHit]:
-        if not self._qdrant.is_available:
+        use_turbo = self._use_turbovec()
+        dense_hits = []
+        if use_turbo:
+            try:
+                candidates = await self._candidate_index.search(
+                    collection_id=query.collection_id,
+                    memory_layers=["summary"],
+                    query_vector=query_vector,
+                    top_n=200,
+                )
+                if candidates:
+                    node_ids = [c["node_id"] for c in candidates]
+                    from sqlmodel import select
+
+                    from atenex_nova.infrastructure.db.models.tables import SummaryNodeModel
+                    stmt = select(SummaryNodeModel).where(SummaryNodeModel.id.in_(node_ids))
+                    res = await self._session.execute(stmt)
+                    sum_models = res.scalars().all()
+                    sum_map = {m.id: m for m in sum_models}
+
+                    for c in candidates:
+                        nid = c["node_id"]
+                        if nid in sum_map:
+                            model = sum_map[nid]
+                            sum_entity = SummaryNode(
+                                id=model.id,
+                                scope_type=model.scope_type,
+                                scope_id=model.scope_id,
+                                text=model.text,
+                                embedding_ref=model.embedding_ref,
+                            )
+                            hit = self._build_summary_hit(
+                                summary=sum_entity,
+                                document_titles=document_titles,
+                                score=c["score"],
+                                stage="dense_turbovec",
+                            )
+                            dense_hits.append(hit)
+            except Exception as e:
+                logger.warning("TurboQuant dense summary search failed: %s", e)
+
+        if not dense_hits and self._qdrant.is_available:
+            try:
+                dense_hits = self._convert_qdrant_hits(
+                    await self._qdrant.search(
+                        f"collection_{query.collection_id}_summaries",
+                        query_vector,
+                        limit=30,
+                    ),
+                    default_source_type="summary",
+                    document_titles=document_titles,
+                    query_text=query.normalized_text or query.text,
+                )
+            except Exception as e:
+                logger.warning("Qdrant dense summary search failed: %s", e)
+
+        sparse_hits = []
+        if self._qdrant.is_available:
+            try:
+                sparse_encoder = StableSparseEncoder()
+                sparse_indices, sparse_values = sparse_encoder.encode_query(query.normalized_text or query.text)
+                sparse_hits = self._convert_qdrant_hits(
+                    await self._qdrant.search(
+                        f"collection_{query.collection_id}_summaries",
+                        query_vector=None,
+                        limit=30,
+                        query_sparse_indices=sparse_indices,
+                        query_sparse_values=sparse_values,
+                    ),
+                    default_source_type="summary",
+                    document_titles=document_titles,
+                    query_text=query.normalized_text or query.text,
+                )
+            except Exception as e:
+                logger.warning("Qdrant sparse summary search failed: %s", e)
+        else:
             if not summaries:
                 doc_repo = SqlDocumentRepository(self._session)
                 documents = await doc_repo.list_by_collection(query.collection_id)
                 chunk_repo = SqlChunkRepository(self._session)
                 repo = SqlSummaryRepository(self._session)
                 summaries = await self._load_summaries(repo, documents, chunk_repo, [], query.collection_id)
-            if not summaries:
-                return []
-            logger.info("Qdrant unavailable, falling back to local BM25 search for summaries")
-            return self._score_sparse_candidates(
-                query_text=query.normalized_text or query.text,
-                items=summaries,
-                builder=lambda item, score: self._build_summary_hit(item, document_titles, score, "local_sparse"),
-                text_getter=lambda item: item.text,
-                limit=16,
-            )
-
-        dense_hits = []
-        try:
-            dense_hits = self._convert_qdrant_hits(
-                await self._qdrant.search(
-                    f"collection_{query.collection_id}_summaries",
-                    query_vector,
-                    limit=30,
-                ),
-                default_source_type="summary",
-                document_titles=document_titles,
-                query_text=query.normalized_text or query.text,
-            )
-        except Exception as e:
-            logger.warning("Qdrant dense summary search failed: %s", e)
-
-        sparse_hits = []
-        try:
-            sparse_encoder = StableSparseEncoder()
-            sparse_indices, sparse_values = sparse_encoder.encode_query(query.normalized_text or query.text)
-            sparse_hits = self._convert_qdrant_hits(
-                await self._qdrant.search(
-                    f"collection_{query.collection_id}_summaries",
-                    query_vector=None,
-                    limit=30,
-                    query_sparse_indices=sparse_indices,
-                    query_sparse_values=sparse_values,
-                ),
-                default_source_type="summary",
-                document_titles=document_titles,
-                query_text=query.normalized_text or query.text,
-            )
-        except Exception as e:
-            logger.warning("Qdrant sparse summary search failed: %s", e)
+            if summaries:
+                sparse_hits = self._score_sparse_candidates(
+                    query_text=query.normalized_text or query.text,
+                    items=summaries,
+                    builder=lambda item, score: self._build_summary_hit(item, document_titles, score, "local_sparse"),
+                    text_getter=lambda item: item.text,
+                    limit=40,
+                )
 
         if not dense_hits and not sparse_hits:
-            logger.info("Qdrant search returned no hits for summaries, falling back to local BM25")
+            logger.info("TurboQuant and local search returned no hits for summaries, falling back to local BM25")
             if not summaries:
                 doc_repo = SqlDocumentRepository(self._session)
                 documents = await doc_repo.list_by_collection(query.collection_id)
@@ -720,10 +850,12 @@ class RetrievalOrchestrator:
     ) -> list[SearchHit]:
         query_text = query.normalized_text or query.text
 
-        from atenex_nova.infrastructure.embeddings.reranker_adapter import RerankerAdapter
-        reranker = RerankerAdapter()
-        pairs = [(query_text, f"{hit.title} {hit.snippet}") for hit in hits]
-        neural_scores = reranker.predict(pairs)
+        neural_scores = []
+        if self._settings.reranker_enabled or self._settings.reranker_required:
+            from atenex_nova.infrastructure.embeddings.reranker_adapter import RerankerAdapter
+            reranker = RerankerAdapter(required=self._settings.reranker_required)
+            pairs = [(query_text, f"{hit.title} {hit.snippet}") for hit in hits]
+            neural_scores = reranker.predict(pairs)
 
         for i, hit in enumerate(hits):
             overlap = self._lexical_overlap(query_text, f"{hit.title} {hit.snippet}")
@@ -753,7 +885,12 @@ class RetrievalOrchestrator:
         query: Query,
         document_titles: dict[str, str],
     ) -> list[SearchHit]:
-        pages = await self._visual.search(collection_id, query.normalized_text or query.text, limit=8)
+        pages = await self._visual.search(
+            collection_id,
+            query.normalized_text or query.text,
+            limit=8,
+            session=self._session,
+        )
         hits: list[SearchHit] = []
         for page in pages:
             metadata = page.get("metadata") or {}

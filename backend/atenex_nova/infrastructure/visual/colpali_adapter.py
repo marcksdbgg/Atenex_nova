@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from atenex_nova.domain.value_objects.identifiers import new_id
 from atenex_nova.infrastructure.embeddings.bm25_encoder import BM25SparseEncoder
 from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
@@ -55,13 +57,33 @@ class ColPaliAdapter:
         )
         logger.info("VisualPageRetriever initialized")
 
-    async def upsert_pages(self, collection_id: str, pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    async def upsert_pages(
+        self,
+        collection_id: str,
+        pages: list[dict[str, Any]],
+        session: AsyncSession | None = None,
+    ) -> list[dict[str, Any]]:
         records = [self._normalize_page(collection_id, page) for page in pages]
         if not records:
             return []
 
         await self._persist_local(collection_id, records)
         vectors = await self._embedder.embed([record.text for record in records])
+
+        if session is not None:
+            from atenex_nova.application.orchestrators.ingestion_orchestrator import (
+                IngestionOrchestrator,
+            )
+            orchestrator = IngestionOrchestrator(session)
+            await orchestrator.index_nodes(
+                collection_id=collection_id,
+                memory_layer="visual",
+                node_ids=[record.id for record in records],
+                vectors=vectors,
+                embedding_model=self._embedder._model_name,
+                dimension=self._embedder.embedding_dim,
+            )
+
         await self._qdrant.init_collection("pages_visual", self._embedder.embedding_dim)
         await self._qdrant.upsert(
             "pages_visual",
@@ -80,7 +102,13 @@ class ColPaliAdapter:
         )
         return [asdict(record) for record in records]
 
-    async def search(self, collection_id: str, query: str, limit: int = 5) -> list[dict[str, Any]]:
+    async def search(
+        self,
+        collection_id: str,
+        query: str,
+        limit: int = 5,
+        session: AsyncSession | None = None,
+    ) -> list[dict[str, Any]]:
         query = query.strip()
         if not query:
             return []
@@ -102,6 +130,36 @@ class ColPaliAdapter:
         if not local_records:
             return []
 
+        # Try to use local quantized candidate index first to avoid slow on-the-fly embeddings
+        if session is not None:
+            try:
+                from atenex_nova.infrastructure.indexes.turboquant_candidate_index import (
+                    TurboQuantCandidateIndex,
+                )
+                candidate_index = TurboQuantCandidateIndex(session)
+                candidates = await candidate_index.search(
+                    collection_id=collection_id,
+                    memory_layers=["visual"],
+                    query_vector=query_vector,
+                    top_n=limit * 4,
+                )
+                if candidates:
+                    record_map = {r["id"]: r for r in local_records}
+                    quant_ranked: list[dict[str, Any]] = []
+                    for c in candidates:
+                        nid = c["node_id"]
+                        if nid in record_map:
+                            record = record_map[nid]
+                            # Use dense score from quantized index
+                            score = float(c["score"])
+                            quant_ranked.append({**record, "score": round(score, 4)})
+                    if quant_ranked:
+                        quant_ranked.sort(key=lambda item: item.get("score", 0.0), reverse=True)
+                        return quant_ranked[:limit]
+            except Exception as exc:
+                logger.warning("TurboQuant local visual page search failed: %s. Falling back.", exc)
+
+        # Fallback: Slow on-the-fly embeddings loop
         texts = [str(record.get("text") or "") for record in local_records]
         sparse_scores = BM25SparseEncoder().score(query, texts)
         query_tokens = set(query.lower().split())

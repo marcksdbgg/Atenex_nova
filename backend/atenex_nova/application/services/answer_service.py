@@ -90,6 +90,8 @@ class AnswerService:
                 await self._citation_repo.create_many(citations)
 
             if chat_id and chat_repo is not None:
+                from datetime import timedelta
+
                 from atenex_nova.domain.entities.chat import ChatMessage
 
                 user_msg = ChatMessage(
@@ -103,6 +105,7 @@ class AnswerService:
                     chat_id=chat_id,
                     role="assistant",
                     content=bundle.answer.text,
+                    created_at=user_msg.created_at + timedelta(milliseconds=1),
                 )
                 await chat_repo.add_message(user_msg)
                 await chat_repo.add_message(assistant_msg)

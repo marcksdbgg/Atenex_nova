@@ -4,7 +4,7 @@ This guide documents the current backend implementation of Atenex Nova as it exi
 
 ## Scope
 
-The backend is a modular monolith built around FastAPI, SQLAlchemy, and worker-driven background jobs. It follows the product contract in [docs/baseline.md](baseline.md) and the current implementation gap inventory in [docs/final-gap-inventory.md](final-gap-inventory.md).
+The backend is a modular monolith built around FastAPI, SQLAlchemy, and worker-driven background jobs. It follows the product contract in [docs/baseline.md](baseline.md) and the current technical audit in [docs/auditoria-completa.md](auditoria-completa.md).
 
 ## Entry Points
 
@@ -146,7 +146,8 @@ In strict mode, missing evidence, empty LLM outputs, or unavailable required ser
 
 ## Data Model Notes
 
-- Document lifecycle is stateful: `registered -> parsed -> normalized -> segmented -> embedded -> indexed -> ready`
+- Document lifecycle is stateful: `registered -> parsed -> normalized -> segmented -> embedded -> indexed -> ready`. Under strict mode, the document remains in the `indexed` state during async enrichment jobs (propositions extraction, summaries, and graph building), only transitioning to `ready` at the very end of the visual indexing job.
+- Dense vectors are quantized via `VectorQuantizerPort` and indexed using local `.tvim` files through `CandidateIndexPort` (see [docs/turboquant-integration.md](turboquant-integration.md)).
 - Job lifecycle is stateful: `pending -> running -> succeeded / failed / cancelled`
 - Query mode and answer plan are persisted so the UI can show the actual route taken
 - Qdrant collections are namespaced by collection id for chunks, propositions, summaries, and visual pages
@@ -161,7 +162,7 @@ In strict mode, missing evidence, empty LLM outputs, or unavailable required ser
 ## Related Docs
 
 - [docs/baseline.md](baseline.md)
-- [docs/final-gap-inventory.md](final-gap-inventory.md)
-
+- [docs/auditoria-completa.md](auditoria-completa.md)
+- [docs/turboquant-integration.md](turboquant-integration.md)
 - [docs/jobs-and-workers.md](jobs-and-workers.md)
 - [docs/api-endpoints.md](api-endpoints.md)
