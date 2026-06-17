@@ -4,6 +4,7 @@ import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from atenex_nova.application.policies.indexing_policy import dense_goes_to_qdrant
 from atenex_nova.application.services.quantization_policy_service import (
     QuantizationPolicyService,
 )
@@ -24,7 +25,11 @@ class IngestionOrchestrator:
         self._session = session
         self._quant_service = QuantizationPolicyService(session)
         self._code_store = QuantizedCodeStore(session)
-        self._candidate_index = TurboQuantCandidateIndex(session)
+        from atenex_nova.infrastructure.indexes.candidate_index_factory import (
+            build_candidate_index,
+        )
+
+        self._candidate_index = build_candidate_index(session)
         self._settings = get_settings()
 
     async def index_nodes(
@@ -72,13 +77,22 @@ class IngestionOrchestrator:
                 vector_norm=code["vector_norm"],
             )
 
-        # 3. Add to the local turbovec IdMapIndex file
-        await self._candidate_index.add_vectors(
-            collection_id=collection_id,
-            memory_layer=memory_layer,
-            node_ids=node_ids,
-            vectors=vectors,
-        )
+        # 3. Update candidate index (PurePy cache invalidation; turbovec float32 only in MAX)
+        if not isinstance(self._candidate_index, TurboQuantCandidateIndex) or dense_goes_to_qdrant(
+            self._settings
+        ):
+            await self._candidate_index.add_vectors(
+                collection_id=collection_id,
+                memory_layer=memory_layer,
+                node_ids=node_ids,
+                vectors=vectors,
+            )
+        else:
+            logger.debug(
+                "Skipping turbovec float32 write for collection %s layer %s (canonical SQL codes)",
+                collection_id,
+                memory_layer,
+            )
 
         logger.info(
             "Quantized and indexed %d vectors for collection %s layer %s",

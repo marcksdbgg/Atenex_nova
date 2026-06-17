@@ -9,7 +9,9 @@ from atenex_nova.domain.repositories.vector_index import VectorDocument
 class DenseIndexPort(Protocol):
     """Protocol for full/exact dense and sparse search operations (e.g. Qdrant)."""
 
-    async def init_collection(self, collection_name: str, vector_size: int) -> None:
+    async def init_collection(
+        self, collection_name: str, vector_size: int, *, dense_enabled: bool = True
+    ) -> None:
         """Initialize collection if it does not exist."""
         ...
 

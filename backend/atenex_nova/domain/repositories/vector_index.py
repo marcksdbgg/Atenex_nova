@@ -6,7 +6,7 @@ from typing import Any, Protocol
 
 class VectorDocument(Protocol):
     id: str
-    vector: list[float]
+    vector: list[float] | None
     payload: Mapping[str, Any]
     sparse_indices: list[int] | None = None
     sparse_values: list[float] | None = None
@@ -15,7 +15,9 @@ class VectorDocument(Protocol):
 class HybridIndex(Protocol):
     """Protocol for a vector database index."""
 
-    async def init_collection(self, collection_name: str, vector_size: int) -> None: ...
+    async def init_collection(
+        self, collection_name: str, vector_size: int, *, dense_enabled: bool = True
+    ) -> None: ...
     async def delete_collection(self, collection_name: str) -> None: ...
     async def upsert(self, collection_name: str, documents: Sequence[VectorDocument]) -> None: ...
     async def search(

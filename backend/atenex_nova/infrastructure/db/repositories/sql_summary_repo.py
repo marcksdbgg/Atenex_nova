@@ -47,11 +47,30 @@ class SqlSummaryRepository:
     async def list_by_document(self, document_id: str) -> list[SummaryNode]:
         result = await self._session.execute(
             select(SummaryNodeModel).where(
-                SummaryNodeModel.scope_type.in_(["document", "section"]),
+                SummaryNodeModel.scope_type == "document",
                 SummaryNodeModel.scope_id == document_id,
             )
         )
         return [self._to_entity(model) for model in result.scalars().all()]
+
+    async def get_by_ids(self, summary_ids: list[str]) -> list[SummaryNode]:
+        if not summary_ids:
+            return []
+        result = await self._session.execute(
+            select(SummaryNodeModel).where(SummaryNodeModel.id.in_(summary_ids))
+        )
+        by_id = {model.id: self._to_entity(model) for model in result.scalars().all()}
+        return [by_id[sid] for sid in summary_ids if sid in by_id]
+
+    async def mark_embedded(self, summary_ids: list[str], embedding_ref: str) -> None:
+        if not summary_ids:
+            return
+        result = await self._session.execute(
+            select(SummaryNodeModel).where(SummaryNodeModel.id.in_(summary_ids))
+        )
+        for model in result.scalars().all():
+            model.embedding_ref = embedding_ref
+        await self._session.flush()
 
     async def delete_by_scope(self, scope_type: str, scope_id: str) -> bool:
         result = await self._session.execute(

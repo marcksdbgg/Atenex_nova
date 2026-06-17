@@ -75,7 +75,7 @@ presentation  →  application  →  domain  →  infrastructure  →  workers  
 | **Vector Store** | Qdrant (dense + sparse + multi-vector) |
 | **Document Parser** | Docling (structural parsing: headings, tables, captions, OCR, reading order) |
 | **LLM Generation** | Gemma 4 via Ollama or llama.cpp (E2B / 12B / 26B profiles) |
-| **Embeddings** | EmbeddingGemma (256d / 384d / 768d via Matryoshka Representation Learning) |
+| **Embeddings** | EmbeddingGemma via Ollama, local/offline-first (256d / 384d / 768d via Matryoshka Representation Learning) |
 | **Visual Retrieval** | ColPali-style visual page retrieval |
 | **Frontend** | React 18, TypeScript, Vite |
 
@@ -253,11 +253,13 @@ To spin up all services (databases, LLM, backend API, workers, and frontend) in 
    ```
    *(Qdrant will run on `http://localhost:6333` and PostgreSQL on port `5432`)*
 
-2. **LLM Runtime (Ollama with Gemma 4)**:
+2. **LLM + Embeddings Runtime (Ollama, fully local)**:
    ```powershell
    ollama serve
-   ollama pull gemma4:12b
+   ollama pull gemma4:12b        # LLM generator
+   ollama pull embeddinggemma    # EmbeddingGemma dense embeddings (offline-first, no Hugging Face)
    ```
+   *Both the generator and the embeddings run locally on the GPU via Ollama — no Hugging Face download or login is required.*
 
 3. **Backend API Server**:
    ```powershell
@@ -332,9 +334,10 @@ npm run dev
 docker run -d --name qdrant -p 6333:6333 -p 6334:6334 \
   -v qdrant_storage:/qdrant/storage qdrant/qdrant
 
-# LLM runtime: Ollama + Gemma 4
+# LLM + Embeddings runtime: Ollama (fully local, no Hugging Face)
 ollama serve
-ollama pull gemma4:12b
+ollama pull gemma4:12b        # generator
+ollama pull embeddinggemma    # EmbeddingGemma dense embeddings
 
 # Alternative: llama.cpp
 llama-server -m models/gemma-4-12b.gguf --port 8080 --ctx-size 8192
@@ -439,12 +442,12 @@ This README reflects the current repository checkout, not just the product visio
 | Check | Status | Command |
 |---|---|---|
 | OpenAPI/docs contract | 1 passed | `pytest tests/unit/test_openapi_documentation_contract.py -q` |
-| Backend unit, integration, and e2e tests | 63 passed | `pytest tests -q` |
+| Backend unit, integration, and e2e tests | 96 passed, 3 skipped (2026-06-16, Qdrant+Ollama live) | `backend/.venv312/Scripts/python.exe -m pytest tests -q` |
 | Frontend build | success | `npm run build` |
 | Frontend lint | success | `npm run lint` |
 | Backend `ruff` | 0 issues | `ruff check .` |
 | Backend `mypy` | 0 errors | `mypy atenex_nova` |
-| Integration / e2e | 100% passing | All 63 tests passing with active local runtimes |
+| Integration / e2e | passing with local runtimes | 3 skipped when Qdrant/HF unavailable; see pytest output |
 
 The canonical technical audit is [docs/auditoria-completa.md](docs/auditoria-completa.md).
 

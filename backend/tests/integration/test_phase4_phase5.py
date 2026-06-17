@@ -33,12 +33,12 @@ from atenex_nova.workers.jobs.memory_enrichment_job import (
 
 @pytest.fixture(autouse=True)
 def _mock_llm_and_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _fast_init(self, model_name: str = "google/embeddinggemma-300m", dim: int = 384, required: bool | None = None) -> None:
-        self._model_name = model_name or "google/embeddinggemma-300m"
+    def _fast_init(self, model_name: str = "embeddinggemma", dim: int = 384, required: bool | None = None) -> None:
+        self._model_name = model_name or "embeddinggemma"
         self._dim = dim
         self._required = False if required is None else required
-        self.model = None
-        self._fallback_only = True
+        self.model = object()
+        self._fallback_only = False
 
     monkeypatch.setattr(EmbeddingGemmaAdapter, "__init__", _fast_init)
 

@@ -9,11 +9,18 @@ from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlparse
 
+from atenex_nova.application.policies.indexing_policy import dense_goes_to_qdrant
+from atenex_nova.application.policies.visual_index_policy import should_index_visual
 from atenex_nova.domain.entities.job import Job
 from atenex_nova.domain.entities.proposition import Proposition
 from atenex_nova.domain.entities.relation_edge import RelationEdge
 from atenex_nova.domain.entities.summary_node import SummaryNode
-from atenex_nova.domain.value_objects.identifiers import JobType, RelationType, new_id
+from atenex_nova.domain.value_objects.identifiers import (
+    DocumentStatus,
+    JobType,
+    RelationType,
+    new_id,
+)
 from atenex_nova.infrastructure.db.repositories.sql_chunk_repo import SqlChunkRepository
 from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocumentRepository
 from atenex_nova.infrastructure.db.repositories.sql_job_repo import SqlJobRepository
@@ -165,6 +172,7 @@ class EmbedPropositionsJobHandler(BaseJobHandler):
                     dim=settings.embedding_dimensions,
                     required=settings.embeddings_required,
                 )
+                embedder.ensure_indexable()
                 vectors = await embedder.embed([prop.text for prop in propositions])
 
                 # Quantize and index candidates using IngestionOrchestrator
@@ -191,13 +199,18 @@ class EmbedPropositionsJobHandler(BaseJobHandler):
                         required=settings.qdrant_required,
                     )
                     collection_name = f"collection_{document.collection_id}_propositions"
-                    await qdrant.init_collection(collection_name, embedder.embedding_dim)
+                    store_dense_in_qdrant = dense_goes_to_qdrant(settings)
+                    await qdrant.init_collection(
+                        collection_name,
+                        embedder.embedding_dim,
+                        dense_enabled=store_dense_in_qdrant,
+                    )
                     await qdrant.upsert(
                         collection_name,
                         [
                             QdrantDocument(
                                 id=prop.id,
-                                vector=vector,
+                                vector=vector if store_dense_in_qdrant else None,
                                 payload={
                                     "document_id": prop.document_id,
                                     "collection_id": document.collection_id,
@@ -293,7 +306,14 @@ class GenerateSummariesJobHandler(BaseJobHandler):
                 await summary_repo.create_many(summaries)
                 step.metrics(summaries_created=len(summaries), summary_scopes=[summary.scope_type for summary in summaries])
 
-            await job_repo.create(Job(id=new_id(), job_type=JobType.EMBED_SUMMARIES, target_id=document_id))
+            await job_repo.create(
+                Job(
+                    id=new_id(),
+                    job_type=JobType.EMBED_SUMMARIES,
+                    target_id=document_id,
+                    payload={"summary_ids": [summary.id for summary in summaries]},
+                )
+            )
             await session.commit()
             return {"summaries_created": len(summaries)}
 
@@ -314,10 +334,25 @@ class EmbedSummariesJobHandler(BaseJobHandler):
             if document is None:
                 raise ValueError(f"Document {document_id} not found")
 
-            summaries = await summary_repo.list_by_document(document_id)
-            summaries.extend(await summary_repo.list_by_collection(document.collection_id))
-            for chunk in await chunk_repo.get_by_document(document_id):
-                summaries.extend(await summary_repo.list_by_scope("section", chunk.id))
+            payload_ids = (getattr(job, "payload", None) or {}).get("summary_ids")
+            if isinstance(payload_ids, list) and payload_ids:
+                summaries = await summary_repo.get_by_ids([str(item) for item in payload_ids])
+            else:
+                summaries = await summary_repo.list_by_document(document_id)
+                for chunk in await chunk_repo.get_by_document(document_id):
+                    summaries.extend(await summary_repo.list_by_scope("section", chunk.id))
+
+            # Never re-embed the entire collection summary set per document (O(N²)).
+            summaries = [summary for summary in summaries if summary.scope_type != "collection"]
+            summaries = [summary for summary in summaries if not summary.embedding_ref]
+            seen_ids: set[str] = set()
+            deduped: list[SummaryNode] = []
+            for summary in summaries:
+                if summary.id in seen_ids:
+                    continue
+                seen_ids.add(summary.id)
+                deduped.append(summary)
+            summaries = deduped
             if not summaries:
                 return {"embedded_summaries": 0}
 
@@ -338,6 +373,7 @@ class EmbedSummariesJobHandler(BaseJobHandler):
                     dim=settings.embedding_dimensions,
                     required=settings.embeddings_required,
                 )
+                embedder.ensure_indexable()
                 vectors = await embedder.embed([summary.text for summary in summaries])
 
                 # Quantize and index candidates using IngestionOrchestrator
@@ -365,13 +401,18 @@ class EmbedSummariesJobHandler(BaseJobHandler):
                         required=settings.qdrant_required,
                     )
                     collection_name = f"collection_{document.collection_id}_summaries"
-                    await qdrant.init_collection(collection_name, embedder.embedding_dim)
+                    store_dense_in_qdrant = dense_goes_to_qdrant(settings)
+                    await qdrant.init_collection(
+                        collection_name,
+                        embedder.embedding_dim,
+                        dense_enabled=store_dense_in_qdrant,
+                    )
                     await qdrant.upsert(
                         collection_name,
                         [
                             QdrantDocument(
                                 id=summary.id,
-                                vector=vector,
+                                vector=vector if store_dense_in_qdrant else None,
                                 payload={
                                     "scope_type": summary.scope_type,
                                     "scope_id": summary.scope_id,
@@ -400,6 +441,10 @@ class EmbedSummariesJobHandler(BaseJobHandler):
                         qdrant_available=True,
                     )
 
+            await summary_repo.mark_embedded(
+                [summary.id for summary in summaries],
+                embedding_ref="quantized_vectors",
+            )
             await session.commit()
             if qdrant_unavailable:
                 return {"embedded_summaries": len(summaries), "qdrant": "unavailable"}
@@ -537,6 +582,24 @@ class BuildGraphJobHandler(BaseJobHandler):
                 await graph_store.upsert_edges(edges)
                 step.metrics(graph_edges_created=len(edges), relation_types=sorted({edge.relation for edge in edges}))
 
-            await job_repo.create(Job(id=new_id(), job_type=JobType.INDEX_VISUAL_PAGES, target_id=document_id))
+            settings = get_settings()
+            if should_index_visual(document, settings):
+                await job_repo.create(
+                    Job(id=new_id(), job_type=JobType.INDEX_VISUAL_PAGES, target_id=document_id)
+                )
+            else:
+                async with audit.step(
+                    run_id=job.id,
+                    entity_type="document",
+                    entity_id=document_id,
+                    pipeline="visual_indexing",
+                    stage="skipped_text_only",
+                    context={"mime_type": document.mime_type},
+                ) as skip_step:
+                    skip_step.metrics(visual_indexing="skipped_text_only")
+                if document.status != DocumentStatus.READY:
+                    document.mark_ready()
+                    await doc_repo.update(document)
+
             await session.commit()
             return {"graph_edges_created": len(edges)}

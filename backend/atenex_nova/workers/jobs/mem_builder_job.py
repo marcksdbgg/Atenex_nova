@@ -5,6 +5,7 @@ from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlparse
 
+from atenex_nova.application.policies.indexing_policy import dense_goes_to_qdrant
 from atenex_nova.domain.entities.chunk import Chunk
 from atenex_nova.domain.entities.job import Job
 from atenex_nova.domain.value_objects.identifiers import DocumentStatus, JobType, new_id
@@ -177,6 +178,7 @@ class EmbedDocumentJobHandler(BaseJobHandler):
                         dim=settings.embedding_dimensions,
                         required=settings.embeddings_required,
                     )
+                    embedder.ensure_indexable()
 
                     document_nodes = {node.id: node for node in await node_repo.get_by_document(document_id)}
 
@@ -219,11 +221,16 @@ class EmbedDocumentJobHandler(BaseJobHandler):
                     )
                     sparse_encoder = StableSparseEncoder()
                     collection_name = f"collection_{doc.collection_id}"
-                    await qdrant.init_collection(collection_name, embedder.embedding_dim)
+                    store_dense_in_qdrant = dense_goes_to_qdrant(settings)
+                    await qdrant.init_collection(
+                        collection_name,
+                        embedder.embedding_dim,
+                        dense_enabled=store_dense_in_qdrant,
+                    )
 
                     vector_docs: list[QdrantDocument] = []
                     for chunk, vector in zip(chunks_to_embed, vectors, strict=False):
-                        point_id = str(uuid.uuid4())
+                        point_id = str(uuid.uuid4()) if store_dense_in_qdrant else chunk.id
                         chunk.embedding_ref = point_id
                         sparse_terms = {
                             token.lower().strip(".,:;!?()[]{}")
@@ -255,7 +262,7 @@ class EmbedDocumentJobHandler(BaseJobHandler):
 
                         vector_docs.append(QdrantDocument(
                             id=point_id,
-                            vector=vector,
+                            vector=vector if store_dense_in_qdrant else None,
                             payload={
                                 "document_id": document_id,
                                 "collection_id": doc.collection_id,
@@ -341,6 +348,13 @@ class RebuildCollectionJobHandler(BaseJobHandler):
                 context={"document_count": len(documents)},
             ) as step:
                 removed_jobs = await job_repo.delete_pending_by_targets(target_ids, exclude_job_id=job.id)
+
+                from atenex_nova.infrastructure.indexes.candidate_index_factory import (
+                    build_candidate_index,
+                )
+
+                candidate_idx = build_candidate_index(session)
+                await candidate_idx.delete_collection_indexes(collection_id)
 
                 for document in documents:
                     document.mark_registered()

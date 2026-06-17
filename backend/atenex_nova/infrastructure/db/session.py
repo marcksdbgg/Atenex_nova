@@ -19,10 +19,14 @@ def get_engine():
     global _engine
     if _engine is None:
         settings = get_settings()
+        connect_args: dict[str, object] = {}
+        if settings.database_url.startswith("sqlite"):
+            connect_args["timeout"] = 30
         _engine = create_async_engine(
             settings.database_url,
             echo=settings.debug,
             future=True,
+            connect_args=connect_args,
         )
     return _engine
 
@@ -88,6 +92,8 @@ async def create_all_tables() -> None:
             await conn.exec_driver_sql(
                 "CREATE INDEX IF NOT EXISTS ix_documents_collection_checksum ON documents (collection_id, checksum)"
             )
+            await conn.exec_driver_sql("PRAGMA journal_mode=WAL")
+            await conn.exec_driver_sql("PRAGMA busy_timeout=30000")
         else:
             await conn.exec_driver_sql(
                 "ALTER TABLE documents ADD COLUMN IF NOT EXISTS collection_path VARCHAR(800) NOT NULL DEFAULT ''"

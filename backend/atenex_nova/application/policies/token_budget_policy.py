@@ -20,15 +20,15 @@ class DefaultTokenEstimator(TokenEstimator):
 
 
 class TransformersTokenEstimator(TokenEstimator):
-    """Real token estimator using HuggingFace transformers AutoTokenizer."""
+    """Optional token estimator using a tokenizer already present on local disk."""
 
-    def __init__(self, model_name: str = "google/embeddinggemma-300m") -> None:
+    def __init__(self, model_name: str) -> None:
         self.tokenizer: Any | None = None
         try:
             from transformers import AutoTokenizer
 
-            # fast loading, avoids downloading weights if not needed
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+            # Offline-first: never fetch a tokenizer from the network.
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
         except Exception as exc:
             logger.warning("Failed to load AutoTokenizer for '%s': %s. Falling back to heuristic.", model_name, exc)
             self.tokenizer = None
@@ -46,7 +46,7 @@ class TokenBudgetPolicy:
 
     def __init__(self, estimator: TokenEstimator | None = None) -> None:
         if estimator is None:
-            estimator = TransformersTokenEstimator()
+            estimator = DefaultTokenEstimator()
         self.estimator = estimator
 
     def estimate_tokens(self, text: str) -> int:

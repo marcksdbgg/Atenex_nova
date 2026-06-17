@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from atenex_nova.application.policies.indexing_policy import dense_goes_to_qdrant
 from atenex_nova.domain.value_objects.identifiers import new_id
 from atenex_nova.infrastructure.embeddings.bm25_encoder import BM25SparseEncoder
 from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
@@ -34,8 +35,8 @@ class VisualPage:
     metadata: dict[str, Any] | None = None
 
 
-class ColPaliAdapter:
-    """Visual retriever for page-level evidence."""
+class VisualPageRetriever:
+    """Page-level visual retriever using page-text embeddings (not ColPali VL)."""
 
     def __init__(self, storage_dir: Path | None = None) -> None:
         settings = get_settings()
@@ -84,13 +85,19 @@ class ColPaliAdapter:
                 dimension=self._embedder.embedding_dim,
             )
 
-        await self._qdrant.init_collection("pages_visual", self._embedder.embedding_dim)
+        settings = get_settings()
+        store_dense_in_qdrant = dense_goes_to_qdrant(settings)
+        await self._qdrant.init_collection(
+            "pages_visual",
+            self._embedder.embedding_dim,
+            dense_enabled=store_dense_in_qdrant,
+        )
         await self._qdrant.upsert(
             "pages_visual",
             [
                 QdrantDocument(
                     id=record.id,
-                    vector=vector,
+                    vector=vector if store_dense_in_qdrant else None,
                     payload={
                         **asdict(record),
                         "collection_id": collection_id,
@@ -133,10 +140,11 @@ class ColPaliAdapter:
         # Try to use local quantized candidate index first to avoid slow on-the-fly embeddings
         if session is not None:
             try:
-                from atenex_nova.infrastructure.indexes.turboquant_candidate_index import (
-                    TurboQuantCandidateIndex,
+                from atenex_nova.infrastructure.indexes.candidate_index_factory import (
+                    build_candidate_index,
                 )
-                candidate_index = TurboQuantCandidateIndex(session)
+
+                candidate_index = build_candidate_index(session)
                 candidates = await candidate_index.search(
                     collection_id=collection_id,
                     memory_layers=["visual"],
@@ -299,3 +307,7 @@ class ColPaliAdapter:
         if not left_norm or not right_norm:
             return 0.0
         return float(numerator / (left_norm * right_norm))
+
+
+# Backward-compatible alias; the implementation uses page-text embeddings, not ColPali VL.
+ColPaliAdapter = VisualPageRetriever

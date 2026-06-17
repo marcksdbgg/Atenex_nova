@@ -29,3 +29,21 @@ class VectorQuantizerPort(Protocol):
             The reconstructed float vector.
         """
         ...
+
+    def estimate_inner_products(
+        self,
+        query_vector: list[float],
+        codes: list[dict[str, Any]],
+        profile: Any,
+    ) -> list[float]:
+        """Estimate inner products between a query and quantized codes without dequantization.
+
+        Args:
+            query_vector: The query float vector.
+            codes: List of quantized code dicts (idx_blob, qjl_blob, residual_norm, vector_norm).
+            profile: The QuantizationProfileModel containing settings.
+
+        Returns:
+            Estimated inner products, one per code, in the same order as *codes*.
+        """
+        ...

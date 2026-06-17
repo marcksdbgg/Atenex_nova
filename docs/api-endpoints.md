@@ -24,6 +24,9 @@ This document catalogs the current public HTTP surface exposed by the backend.
 | POST | `/collections` | Create a collection |
 | GET | `/collections` | List collections |
 | GET | `/collections/{collection_id}` | Fetch one collection |
+| GET | `/collections/{collection_id}/pipeline-status` | Real pipeline/job counts for a collection |
+| GET | `/collections/{collection_id}/import-sessions` | List durable import sessions for a collection |
+| POST | `/collections/{collection_id}/import-sessions` | Start a durable import session (upload batch) |
 | PATCH | `/collections/{collection_id}` | Update collection metadata and profiles |
 | DELETE | `/collections/{collection_id}` | Delete a collection and cleanup derived artifacts |
 | GET | `/collections/{collection_id}/documents` | List collection documents with pagination and optional status filter |
@@ -31,6 +34,14 @@ This document catalogs the current public HTTP surface exposed by the backend.
 | POST | `/collections/{collection_id}/documents/import` | Register a local file path as a document |
 | POST | `/collections/{collection_id}/documents/import-folder` | Import a local folder into the collection |
 | POST | `/collections/{collection_id}/rebuild` | Requeue the collection rebuild pipeline |
+
+## Import Sessions
+
+| Method | Route | Purpose |
+|---|---|---|
+| GET | `/import-sessions/{session_id}` | Fetch one import session summary |
+| GET | `/import-sessions/{session_id}/items` | List items recorded for an import session |
+| POST | `/import-sessions/{session_id}/finalize` | Mark an import session as completed |
 
 ## Chats
 

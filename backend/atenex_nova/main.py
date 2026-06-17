@@ -14,6 +14,7 @@ from atenex_nova.presentation.api.routers import (
     documents,
     evaluation,
     health,
+    import_sessions,
     jobs,
     observability,
     queries,
@@ -56,6 +57,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(chats.router)
     app.include_router(collections.router)
+    app.include_router(import_sessions.router)
     app.include_router(documents.router)
     app.include_router(jobs.router)
     app.include_router(answers.router)

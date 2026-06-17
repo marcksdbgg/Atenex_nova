@@ -3,7 +3,7 @@
 import json
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from atenex_nova.domain.entities.job import Job
@@ -84,14 +84,33 @@ class SqlJobRepository:
         return job
 
     async def get_next_pending(self) -> Job | None:
-        r = await self._session.execute(
-            select(JobModel)
-            .where(JobModel.status == "pending")
+        return await self.claim_next_pending()
+
+    async def claim_next_pending(self) -> Job | None:
+        """Atomically claim the oldest pending job."""
+        pick = await self._session.execute(
+            select(JobModel.id)
+            .where(JobModel.status == JobStatus.PENDING.value)
             .order_by(JobModel.created_at.asc())
             .limit(1)
         )
-        model = r.scalar_one_or_none()
-        return self._to_entity(model) if model else None
+        job_id = pick.scalar_one_or_none()
+        if job_id is None:
+            return None
+
+        now = datetime.now(UTC)
+        claim = await self._session.execute(
+            update(JobModel)
+            .where(
+                JobModel.id == job_id,
+                JobModel.status == JobStatus.PENDING.value,
+            )
+            .values(status=JobStatus.RUNNING.value, started_at=now, error=None)
+        )
+        if int(claim.rowcount or 0) == 0:
+            return None
+        await self._session.flush()
+        return await self.get_by_id(job_id)
 
     async def requeue_stale_running(self, stale_after_minutes: int = 10) -> int:
         cutoff = datetime.now(UTC) - timedelta(minutes=max(1, stale_after_minutes))
@@ -116,6 +135,33 @@ class SqlJobRepository:
             select(JobModel.status, func.count()).group_by(JobModel.status)
         )
         return {JobStatus(row[0]): row[1] for row in r.all()}
+
+    async def count_by_status_for_targets(self, target_ids: list[str]) -> dict[str, int]:
+        if not target_ids:
+            return {}
+        r = await self._session.execute(
+            select(JobModel.status, func.count())
+            .where(JobModel.target_id.in_(target_ids))
+            .group_by(JobModel.status)
+        )
+        return {str(row[0]): int(row[1]) for row in r.all()}
+
+    async def count_by_type_and_status_for_targets(
+        self,
+        target_ids: list[str],
+    ) -> dict[str, dict[str, int]]:
+        if not target_ids:
+            return {}
+        r = await self._session.execute(
+            select(JobModel.job_type, JobModel.status, func.count())
+            .where(JobModel.target_id.in_(target_ids))
+            .group_by(JobModel.job_type, JobModel.status)
+        )
+        result: dict[str, dict[str, int]] = {}
+        for job_type, status, count in r.all():
+            bucket = result.setdefault(str(job_type), {})
+            bucket[str(status)] = int(count)
+        return result
 
     @staticmethod
     def _to_entity(m: JobModel) -> Job:

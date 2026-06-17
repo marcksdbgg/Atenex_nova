@@ -52,8 +52,12 @@ dev = [
     "mypy>=1.10.0",
     "httpx",  # for TestClient
 ]
+# Optional: local turbovec candidate indexes for TurboQuant dense search.
+accel = [
+    "turbovec==0.7.0",
+]
 all = [
-    "atenex-nova[ml,dev]",
+    "atenex-nova[ml,dev,accel]",
 ]
 
 [tool.hatch.build.targets.wheel]

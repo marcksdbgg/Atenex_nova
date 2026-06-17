@@ -7,13 +7,25 @@ from typing import Any
 
 import numpy as np
 from sqlalchemy.ext.asyncio import AsyncSession
-from turbovec import IdMapIndex  # type: ignore[import-untyped]
 
 from atenex_nova.domain.ports.candidate_index import CandidateIndexPort
 from atenex_nova.infrastructure.indexes.quantized_code_store import QuantizedCodeStore
 from atenex_nova.shared.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
+
+_TURBOVEC_INSTALL_HINT = (
+    "turbovec is required for TurboQuant candidate index operations. "
+    "Install with: pip install 'atenex-nova[accel]'"
+)
+
+
+def _id_map_index_type() -> Any:
+    try:
+        from turbovec import IdMapIndex  # type: ignore[import-untyped]
+    except ImportError as exc:
+        raise ImportError(_TURBOVEC_INSTALL_HINT) from exc
+    return IdMapIndex
 
 
 def string_to_uint64(s: str) -> int:
@@ -52,18 +64,19 @@ class TurboQuantCandidateIndex(CandidateIndexPort):
         if not node_ids or not vectors:
             return
 
+        id_map_index_cls = _id_map_index_type()
         index_path = self._storage_dir / f"{collection_id}_{memory_layer}.tvim"
         bit_width = self._settings.turbovec_bit_width if hasattr(self._settings, "turbovec_bit_width") else 4
         dim = len(vectors[0])
 
         if index_path.exists():
             try:
-                index = IdMapIndex.load(str(index_path))
+                index = id_map_index_cls.load(str(index_path))
             except Exception as e:
                 logger.warning("Error loading IdMapIndex, creating fresh: %s", e)
-                index = IdMapIndex(dim=dim, bit_width=bit_width)
+                index = id_map_index_cls(dim=dim, bit_width=bit_width)
         else:
-            index = IdMapIndex(dim=dim, bit_width=bit_width)
+            index = id_map_index_cls(dim=dim, bit_width=bit_width)
 
         vec_array = np.array(vectors, dtype=np.float32)
         uint64_ids = np.array([string_to_uint64(nid) & 0xFFFFFFFFFFFFFFFF for nid in node_ids], dtype=np.uint64)
@@ -87,6 +100,7 @@ class TurboQuantCandidateIndex(CandidateIndexPort):
         top_n: int = 200,
     ) -> list[dict[str, Any]]:
         """Search the candidate index files across memory layers and map uint64 ids back to nodes."""
+        id_map_index_cls = _id_map_index_type()
         query_arr = np.array([query_vector], dtype=np.float32)
         all_candidates: list[tuple[str, float, int]] = []
         all_uint64_ids = []
@@ -97,7 +111,7 @@ class TurboQuantCandidateIndex(CandidateIndexPort):
                 continue
 
             try:
-                index = IdMapIndex.load(str(index_path))
+                index = id_map_index_cls.load(str(index_path))
                 # Search the index for this layer
                 scores, ids = index.search(query_arr, k=top_n)
                 if len(scores) > 0 and len(ids) > 0:
@@ -138,12 +152,13 @@ class TurboQuantCandidateIndex(CandidateIndexPort):
         if not node_ids:
             return
 
+        id_map_index_cls = _id_map_index_type()
         index_files = list(self._storage_dir.glob(f"{collection_id}_*.tvim"))
         uint64_ids = [string_to_uint64(nid) & 0xFFFFFFFFFFFFFFFF for nid in node_ids]
 
         for index_path in index_files:
             try:
-                index = IdMapIndex.load(str(index_path))
+                index = id_map_index_cls.load(str(index_path))
                 removed_count = 0
                 for uid in uint64_ids:
                     try:

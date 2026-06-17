@@ -11,7 +11,7 @@ from atenex_nova.domain.entities.job import Job
 from atenex_nova.domain.value_objects.identifiers import DocumentStatus, NodeType, new_id
 from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocumentRepository
 from atenex_nova.infrastructure.db.repositories.sql_node_repo import SqlDocumentNodeRepository
-from atenex_nova.infrastructure.visual.colpali_adapter import ColPaliAdapter
+from atenex_nova.infrastructure.visual.colpali_adapter import VisualPageRetriever
 from atenex_nova.shared.observability.pipeline_audit import PipelineAuditService
 from atenex_nova.workers.runner import BaseJobHandler
 
@@ -78,7 +78,7 @@ class IndexVisualPagesJobHandler(BaseJobHandler):
                         }
                     )
 
-                adapter = ColPaliAdapter()
+                adapter = VisualPageRetriever()
                 indexed = await adapter.upsert_pages(document.collection_id, payloads, session=session)
                 step.metrics(
                     visual_pages_indexed=len(indexed),

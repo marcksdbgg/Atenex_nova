@@ -26,7 +26,10 @@ from atenex_nova.infrastructure.db.models.tables import (
     SummaryNodeModel,
 )
 from atenex_nova.infrastructure.db.repositories.sql_collection_repo import SqlCollectionRepository
-from atenex_nova.infrastructure.indexes.turboquant_candidate_index import TurboQuantCandidateIndex
+from atenex_nova.infrastructure.db.repositories.sql_import_session_repo import (
+    SqlImportSessionRepository,
+)
+from atenex_nova.infrastructure.indexes.candidate_index_factory import build_candidate_index
 from atenex_nova.infrastructure.qdrant.qdrant_adapter import QdrantAdapter
 from atenex_nova.shared.config.settings import get_settings
 
@@ -123,6 +126,8 @@ class CollectionCleanupService:
             await self._session.execute(delete(JobModel).where(JobModel.target_id.in_(target_ids)))
             await self._session.execute(delete(PipelineAuditModel).where(PipelineAuditModel.entity_id.in_(target_ids)))
 
+        await SqlImportSessionRepository(self._session).delete_by_collection(collection_id)
+
         deleted = await self._collection_repo.delete(collection_id)
 
         await self._delete_vector_indexes(collection_id)
@@ -136,11 +141,11 @@ class CollectionCleanupService:
         await self._qdrant.delete_by_filter("pages_visual", {"collection_id": collection_id})
 
         try:
-            candidate_idx = TurboQuantCandidateIndex(self._session)
+            candidate_idx = build_candidate_index(self._session)
             await candidate_idx.delete_collection_indexes(collection_id)
         except Exception as e:
             import logging
-            logging.getLogger(__name__).warning("Error cleaning up turbovec indexes for %s: %s", collection_id, e)
+            logging.getLogger(__name__).warning("Error cleaning up candidate index for %s: %s", collection_id, e)
 
     def _delete_visual_cache(self, collection_id: str) -> None:
         visual_root = get_settings().visual_pages_path

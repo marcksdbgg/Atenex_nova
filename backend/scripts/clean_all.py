@@ -113,7 +113,7 @@ async def main() -> None:
     if do_qdrant:
         try:
             await wipe_qdrant()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             print(f"[qdrant] skipped/failed (is Qdrant running?): {exc}")
     if do_storage:
         wipe_storage(keep_uploads=args.keep_uploads)

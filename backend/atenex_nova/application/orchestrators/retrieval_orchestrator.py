@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -14,6 +15,7 @@ from atenex_nova.application.policies.context_packing_policy import (
     ContextPackingPolicy,
     EvidencePack,
 )
+from atenex_nova.application.policies.indexing_policy import dense_goes_to_qdrant
 from atenex_nova.application.policies.query_routing_policy import QueryRoutingPolicy
 from atenex_nova.domain.entities.chunk import Chunk
 from atenex_nova.domain.entities.evidence_item import EvidenceItem
@@ -34,9 +36,9 @@ from atenex_nova.infrastructure.embeddings.bm25_encoder import (
     tokenize,
 )
 from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
-from atenex_nova.infrastructure.indexes.turboquant_candidate_index import TurboQuantCandidateIndex
+from atenex_nova.infrastructure.embeddings.reranker_adapter import RerankerAdapter
 from atenex_nova.infrastructure.qdrant.qdrant_adapter import QdrantAdapter
-from atenex_nova.infrastructure.visual.colpali_adapter import ColPaliAdapter
+from atenex_nova.infrastructure.visual.colpali_adapter import VisualPageRetriever
 from atenex_nova.shared.config.settings import get_settings
 from atenex_nova.shared.exceptions.base import StrictModeViolationError
 from atenex_nova.shared.logging.logger import get_logger
@@ -77,8 +79,9 @@ class RetrievalOrchestrator:
         session: AsyncSession,
         qdrant_adapter: HybridIndex | None = None,
         embedder: EmbeddingGemmaAdapter | None = None,
-        visual_adapter: ColPaliAdapter | None = None,
+        visual_adapter: VisualPageRetriever | None = None,
         audit: PipelineAuditService | None = None,
+        reranker: RerankerAdapter | None = None,
     ) -> None:
         self._session = session
         self._settings = get_settings()
@@ -95,14 +98,20 @@ class RetrievalOrchestrator:
             dim=self._settings.embedding_dimensions,
             required=self._settings.embeddings_required,
         )
-        self._visual = visual_adapter or ColPaliAdapter()
+        self._visual = visual_adapter or VisualPageRetriever()
         self._router = QueryRoutingPolicy()
         self._packer = ContextPackingPolicy()
         self._audit = audit or PipelineAuditService(session=session)
-        self._candidate_index = TurboQuantCandidateIndex(session)
+        from atenex_nova.infrastructure.indexes.candidate_index_factory import (
+            build_candidate_index,
+        )
 
-    def _use_turbovec(self) -> bool:
+        self._candidate_index = build_candidate_index(session)
+        self._reranker = reranker or RerankerAdapter(required=self._settings.reranker_required)
+
+    def _use_candidate_index(self) -> bool:
         from atenex_nova.shared.config.settings import EmbeddingProfile
+
         return self._settings.embedding_profile in {EmbeddingProfile.LITE, EmbeddingProfile.STANDARD}
 
     async def search(self, collection_id: str, query_text: str, mode: str = "auto") -> SearchResult:
@@ -144,6 +153,11 @@ class RetrievalOrchestrator:
                 "mode": mode,
                 "route_mode": route_mode_name,
                 "route_reason": route_reason,
+                "dense_candidate_backend": (
+                    "purepy"
+                    if self._use_candidate_index()
+                    else ("qdrant" if dense_goes_to_qdrant(self._settings) else "none")
+                ),
             },
         ) as audit:
             documents = await doc_repo.list_by_collection(collection_id)
@@ -159,6 +173,16 @@ class RetrievalOrchestrator:
             query_vector = (await self._embedder.embed([query.normalized_text or query.text]))[0]
 
             hits: list[SearchHit] = []
+            dense_metrics: dict[str, object] = {
+                "dense_candidate_backend": (
+                    "purepy"
+                    if self._use_candidate_index()
+                    else ("qdrant" if dense_goes_to_qdrant(self._settings) else "none")
+                ),
+                "dense_hits": 0,
+                "dense_latency_ms": 0.0,
+                "fallback_reason": None,
+            }
 
             async with self._audit.step(
                 run_id=query.id,
@@ -168,8 +192,15 @@ class RetrievalOrchestrator:
                 stage="score_chunks",
                 context={"documents": len(documents), "chunks": len(chunks)},
             ) as step:
-                chunk_hits = await self._score_chunks(query, query_vector, chunks, document_titles, route_mode_name)
-                step.metrics(hit_count=len(chunk_hits), source="chunks")
+                chunk_hits = await self._score_chunks(
+                    query,
+                    query_vector,
+                    chunks,
+                    document_titles,
+                    route_mode_name,
+                    dense_metrics=dense_metrics,
+                )
+                step.metrics(hit_count=len(chunk_hits), source="chunks", **dense_metrics)
                 hits.extend(chunk_hits)
 
             async with self._audit.step(
@@ -429,17 +460,21 @@ class RetrievalOrchestrator:
         chunks: list[Chunk],
         document_titles: dict[str, str],
         route_mode: str,
+        dense_metrics: dict[str, object] | None = None,
     ) -> list[SearchHit]:
-        use_turbo = self._use_turbovec()
+        use_candidate_index = self._use_candidate_index()
         dense_hits = []
-        if use_turbo:
+        if use_candidate_index:
             try:
+                dense_started = time.perf_counter()
                 candidates = await self._candidate_index.search(
                     collection_id=query.collection_id,
                     memory_layers=["chunk"],
                     query_vector=query_vector,
                     top_n=200,
                 )
+                if dense_metrics is not None:
+                    dense_metrics["dense_latency_ms"] = round((time.perf_counter() - dense_started) * 1000, 2)
                 if candidates:
                     node_ids = [c["node_id"] for c in candidates]
                     import json
@@ -471,13 +506,17 @@ class RetrievalOrchestrator:
                                 chunk=chunk_entity,
                                 document_titles=document_titles,
                                 score=c["score"],
-                                stage="dense_turbovec",
+                                stage="dense_turbo_ip",
                             )
                             dense_hits.append(hit)
+                    if dense_metrics is not None:
+                        dense_metrics["dense_hits"] = len(dense_hits)
             except Exception as e:
-                logger.warning("TurboQuant dense chunk search failed: %s", e)
+                logger.warning("Candidate index dense chunk search failed: %s", e)
+                if dense_metrics is not None:
+                    dense_metrics["fallback_reason"] = str(e)
 
-        if not dense_hits and self._qdrant.is_available:
+        if not dense_hits and dense_goes_to_qdrant(self._settings) and self._qdrant.is_available:
             try:
                 dense_hits = self._convert_qdrant_hits(
                     await self._qdrant.search(f"collection_{query.collection_id}", query_vector, limit=40),
@@ -521,7 +560,9 @@ class RetrievalOrchestrator:
                 )
 
         if not dense_hits and not sparse_hits:
-            logger.info("TurboQuant and local search returned no hits for chunks, falling back to local BM25")
+            logger.info("Candidate index and local search returned no hits for chunks, falling back to local BM25")
+            if dense_metrics is not None and dense_metrics.get("fallback_reason") is None:
+                dense_metrics["fallback_reason"] = "bm25_local_fallback"
             if not chunks:
                 repo = SqlChunkRepository(self._session)
                 chunks = await repo.list_by_collection(query.collection_id)
@@ -536,9 +577,9 @@ class RetrievalOrchestrator:
             return []
 
         if not dense_hits:
-            return self._rerank_hits(query, sparse_hits, route_mode, limit=20)
+            return self._sort_and_limit_hits(query, sparse_hits, route_mode, limit=20)
         if not sparse_hits:
-            return self._rerank_hits(query, dense_hits, route_mode, limit=20)
+            return self._sort_and_limit_hits(query, dense_hits, route_mode, limit=20)
         return self._fuse_hits(query, dense_hits, sparse_hits, route_mode, limit=20)
 
     async def _score_propositions(
@@ -549,9 +590,9 @@ class RetrievalOrchestrator:
         document_titles: dict[str, str],
         route_mode: str,
     ) -> list[SearchHit]:
-        use_turbo = self._use_turbovec()
+        use_candidate_index = self._use_candidate_index()
         dense_hits = []
-        if use_turbo:
+        if use_candidate_index:
             try:
                 candidates = await self._candidate_index.search(
                     collection_id=query.collection_id,
@@ -585,13 +626,13 @@ class RetrievalOrchestrator:
                                 proposition=prop_entity,
                                 document_titles=document_titles,
                                 score=c["score"],
-                                stage="dense_turbovec",
+                                stage="dense_turbo_ip",
                             )
                             dense_hits.append(hit)
             except Exception as e:
-                logger.warning("TurboQuant dense proposition search failed: %s", e)
+                logger.warning("Candidate index dense proposition search failed: %s", e)
 
-        if not dense_hits and self._qdrant.is_available:
+        if not dense_hits and dense_goes_to_qdrant(self._settings) and self._qdrant.is_available:
             try:
                 dense_hits = self._convert_qdrant_hits(
                     await self._qdrant.search(
@@ -639,7 +680,7 @@ class RetrievalOrchestrator:
                 )
 
         if not dense_hits and not sparse_hits:
-            logger.info("TurboQuant and local search returned no hits for propositions, falling back to local BM25")
+            logger.info("Candidate index and local search returned no hits for propositions, falling back to local BM25")
             if not propositions:
                 repo = SqlPropositionRepository(self._session)
                 propositions = await repo.list_by_collection(query.collection_id)
@@ -654,9 +695,9 @@ class RetrievalOrchestrator:
             return []
 
         if not dense_hits:
-            return self._rerank_hits(query, sparse_hits, route_mode, limit=20)
+            return self._sort_and_limit_hits(query, sparse_hits, route_mode, limit=20)
         if not sparse_hits:
-            return self._rerank_hits(query, dense_hits, route_mode, limit=20)
+            return self._sort_and_limit_hits(query, dense_hits, route_mode, limit=20)
         return self._fuse_hits(query, dense_hits, sparse_hits, route_mode, limit=20)
 
     async def _score_summaries(
@@ -667,9 +708,9 @@ class RetrievalOrchestrator:
         document_titles: dict[str, str],
         route_mode: str,
     ) -> list[SearchHit]:
-        use_turbo = self._use_turbovec()
+        use_candidate_index = self._use_candidate_index()
         dense_hits = []
-        if use_turbo:
+        if use_candidate_index:
             try:
                 candidates = await self._candidate_index.search(
                     collection_id=query.collection_id,
@@ -702,13 +743,13 @@ class RetrievalOrchestrator:
                                 summary=sum_entity,
                                 document_titles=document_titles,
                                 score=c["score"],
-                                stage="dense_turbovec",
+                                stage="dense_turbo_ip",
                             )
                             dense_hits.append(hit)
             except Exception as e:
-                logger.warning("TurboQuant dense summary search failed: %s", e)
+                logger.warning("Candidate index dense summary search failed: %s", e)
 
-        if not dense_hits and self._qdrant.is_available:
+        if not dense_hits and dense_goes_to_qdrant(self._settings) and self._qdrant.is_available:
             try:
                 dense_hits = self._convert_qdrant_hits(
                     await self._qdrant.search(
@@ -759,7 +800,7 @@ class RetrievalOrchestrator:
                 )
 
         if not dense_hits and not sparse_hits:
-            logger.info("TurboQuant and local search returned no hits for summaries, falling back to local BM25")
+            logger.info("Candidate index and local search returned no hits for summaries, falling back to local BM25")
             if not summaries:
                 doc_repo = SqlDocumentRepository(self._session)
                 documents = await doc_repo.list_by_collection(query.collection_id)
@@ -777,9 +818,9 @@ class RetrievalOrchestrator:
             return []
 
         if not dense_hits:
-            return self._rerank_hits(query, sparse_hits, route_mode, limit=16)
+            return self._sort_and_limit_hits(query, sparse_hits, route_mode, limit=16)
         if not sparse_hits:
-            return self._rerank_hits(query, dense_hits, route_mode, limit=16)
+            return self._sort_and_limit_hits(query, dense_hits, route_mode, limit=16)
         return self._fuse_hits(query, dense_hits, sparse_hits, route_mode, limit=16)
 
     def _score_sparse_candidates(
@@ -839,7 +880,45 @@ class RetrievalOrchestrator:
             if hit.metadata:
                 existing.metadata = {**(existing.metadata or {}), **hit.metadata}
 
-        return self._rerank_hits(query, list(fused.values()), route_mode, limit=limit)
+        return self._sort_and_limit_hits(query, list(fused.values()), route_mode, limit=limit)
+
+    def _sort_and_limit_hits(
+        self,
+        query: Query,
+        hits: list[SearchHit],
+        route_mode: str,
+        limit: int,
+    ) -> list[SearchHit]:
+        """Score hits with heuristics only; neural rerank runs once in ``_rank_hits``."""
+        self._apply_heuristic_scores(query, hits, route_mode)
+        ranked = sorted(hits, key=lambda item: item.score, reverse=True)
+        for index, hit in enumerate(ranked[:limit], start=1):
+            hit.rank = index
+        return ranked[:limit]
+
+    def _apply_heuristic_scores(
+        self,
+        query: Query,
+        hits: list[SearchHit],
+        route_mode: str,
+        neural_scores: list[float] | None = None,
+    ) -> None:
+        query_text = query.normalized_text or query.text
+        for index, hit in enumerate(hits):
+            overlap = self._lexical_overlap(query_text, f"{hit.title} {hit.snippet}")
+            phrase_bonus = 0.15 if route_mode == "exact" and query_has_phrase(hit.snippet, hit.title) else 0.0
+            contradiction_bonus = (
+                0.12 if route_mode == "argumentative" and self._contains_contradiction(hit.snippet) else 0.0
+            )
+            metadata_bonus = 0.08 if (hit.metadata or {}).get("heading_path") else 0.0
+
+            if neural_scores:
+                base_score = neural_scores[index]
+                hit.score = base_score + (hit.score * 0.1) + (overlap * 0.2) + phrase_bonus + contradiction_bonus + metadata_bonus
+            else:
+                hit.score += overlap * 0.35 + phrase_bonus + contradiction_bonus + metadata_bonus
+
+            hit.score *= self._route_source_weight(route_mode, hit.source_type)
 
     def _rerank_hits(
         self,
@@ -850,26 +929,12 @@ class RetrievalOrchestrator:
     ) -> list[SearchHit]:
         query_text = query.normalized_text or query.text
 
-        neural_scores = []
+        neural_scores: list[float] = []
         if self._settings.reranker_enabled or self._settings.reranker_required:
-            from atenex_nova.infrastructure.embeddings.reranker_adapter import RerankerAdapter
-            reranker = RerankerAdapter(required=self._settings.reranker_required)
             pairs = [(query_text, f"{hit.title} {hit.snippet}") for hit in hits]
-            neural_scores = reranker.predict(pairs)
+            neural_scores = self._reranker.predict(pairs)
 
-        for i, hit in enumerate(hits):
-            overlap = self._lexical_overlap(query_text, f"{hit.title} {hit.snippet}")
-            phrase_bonus = 0.15 if route_mode == "exact" and query_has_phrase(hit.snippet, hit.title) else 0.0
-            contradiction_bonus = 0.12 if route_mode == "argumentative" and self._contains_contradiction(hit.snippet) else 0.0
-            metadata_bonus = 0.08 if (hit.metadata or {}).get("heading_path") else 0.0
-
-            if neural_scores:
-                base_score = neural_scores[i]
-                hit.score = base_score + (hit.score * 0.1) + (overlap * 0.2) + phrase_bonus + contradiction_bonus + metadata_bonus
-            else:
-                hit.score += overlap * 0.35 + phrase_bonus + contradiction_bonus + metadata_bonus
-
-            hit.score *= self._route_source_weight(route_mode, hit.source_type)
+        self._apply_heuristic_scores(query, hits, route_mode, neural_scores=neural_scores or None)
 
         ranked = sorted(hits, key=lambda item: item.score, reverse=True)
         for index, hit in enumerate(ranked[:limit], start=1):
@@ -909,7 +974,7 @@ class RetrievalOrchestrator:
                     metadata=metadata if isinstance(metadata, dict) else None,
                 )
             )
-        return self._rerank_hits(query, hits, "visual", limit=8)
+        return self._sort_and_limit_hits(query, hits, "visual", limit=8)
 
     def _convert_qdrant_hits(
         self,

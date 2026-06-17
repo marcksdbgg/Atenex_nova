@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.stats import spearmanr
 
 from atenex_nova.infrastructure.db.models.tables import QuantizationProfileModel
 from atenex_nova.infrastructure.vector_quantization.turboquant_adapter import TurboQuantAdapter
@@ -8,7 +9,7 @@ def test_turboquant_quantize_dequantize():
     profile = QuantizationProfileModel(
         id="test-profile",
         algorithm="turboquant_prod",
-        embedding_model="google/embeddinggemma-300m",
+        embedding_model="embeddinggemma",
         dimension=384,
         bit_width=4,
         rotation_seed=42,
@@ -46,7 +47,7 @@ def test_turboquant_inner_product_estimation():
     profile = QuantizationProfileModel(
         id="test-profile",
         algorithm="turboquant_prod",
-        embedding_model="google/embeddinggemma-300m",
+        embedding_model="embeddinggemma",
         dimension=384,
         bit_width=4,
         rotation_seed=42,
@@ -57,25 +58,85 @@ def test_turboquant_inner_product_estimation():
     adapter = TurboQuantAdapter()
     rng = np.random.default_rng(100)
 
-    # Generate random normalized vectors
     vec_a = rng.standard_normal(384)
     vec_a /= np.linalg.norm(vec_a)
 
     vec_b = rng.standard_normal(384)
     vec_b /= np.linalg.norm(vec_b)
 
-    # Exact inner product
     exact_ip = float(np.dot(vec_a, vec_b))
-
-    # Quantize B
     code_b = adapter.quantize(vec_b.tolist(), profile)
+    est_ip = adapter.estimate_inner_products(vec_a.tolist(), [code_b], profile)[0]
 
-    # Dequantize B
-    recon_b = adapter.dequantize(code_b, profile)
-
-    # Estimated inner product via dequantized vector
-    est_ip = float(np.dot(vec_a, recon_b))
-
-    # Difference should be small (usually within 0.15 for 4-bit)
     error = abs(exact_ip - est_ip)
     assert error < 0.20
+
+
+def test_inner_product_ranking_recall():
+    profile = QuantizationProfileModel(
+        id="test-profile",
+        algorithm="turboquant_prod",
+        embedding_model="embeddinggemma",
+        dimension=384,
+        bit_width=4,
+        rotation_seed=42,
+        qjl_seed=1337,
+        codebook_version="v1",
+    )
+
+    adapter = TurboQuantAdapter()
+    rng = np.random.default_rng(5)
+    n_vectors = 1000
+    d = 384
+
+    database = rng.standard_normal((n_vectors, d)).astype(np.float32)
+    database /= np.linalg.norm(database, axis=1, keepdims=True)
+    codes = [adapter.quantize(database[i].tolist(), profile) for i in range(n_vectors)]
+
+    query = rng.standard_normal(d).astype(np.float32)
+    query /= np.linalg.norm(query)
+
+    exact_ips = database @ query
+    exact_top10 = set(np.argsort(-exact_ips)[:10].tolist())
+
+    est_ips = np.array(adapter.estimate_inner_products(query.tolist(), codes, profile))
+    est_top10 = set(np.argsort(-est_ips)[:10].tolist())
+
+    recall_at_10 = len(exact_top10 & est_top10) / 10.0
+    spearman_corr = float(spearmanr(exact_ips, est_ips).correlation)
+
+    assert recall_at_10 >= 0.90
+    assert spearman_corr >= 0.95
+
+
+def test_estimator_unbiased():
+    profile = QuantizationProfileModel(
+        id="test-profile",
+        algorithm="turboquant_prod",
+        embedding_model="embeddinggemma",
+        dimension=384,
+        bit_width=4,
+        rotation_seed=42,
+        qjl_seed=1337,
+        codebook_version="v1",
+    )
+
+    adapter = TurboQuantAdapter()
+    rng = np.random.default_rng(777)
+    n_pairs = 500
+    d = 384
+    errors: list[float] = []
+
+    for _ in range(n_pairs):
+        q = rng.standard_normal(d).astype(np.float32)
+        q /= np.linalg.norm(q)
+        k = rng.standard_normal(d).astype(np.float32)
+        k /= np.linalg.norm(k)
+
+        exact_ip = float(np.dot(q, k))
+        code_k = adapter.quantize(k.tolist(), profile)
+        est_ip = adapter.estimate_inner_products(q.tolist(), [code_k], profile)[0]
+        errors.append(est_ip - exact_ip)
+
+    mean_error = float(np.mean(errors))
+    assert abs(mean_error) < 0.05

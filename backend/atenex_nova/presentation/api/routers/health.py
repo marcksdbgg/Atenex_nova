@@ -77,15 +77,28 @@ async def _probe_embeddings(settings: Settings) -> DependencyHealthResponse:
         )
         vectors = await adapter.embed(["health probe embeddings"])
         has_vectors = bool(vectors and vectors[0])
-        available = has_vectors and not adapter.uses_fallback
+        using_fallback = adapter.uses_fallback
+        available = has_vectors and not using_fallback
         detail = None
-        if adapter.uses_fallback:
+        if using_fallback:
             detail = "Embedding model is using deterministic fallback vectors"
         elif not has_vectors:
             detail = "Embedding probe returned empty vectors"
-        return DependencyHealthResponse(name="embeddings", endpoint=endpoint, available=available, detail=detail)
+        return DependencyHealthResponse(
+            name="embeddings",
+            endpoint=endpoint,
+            available=available,
+            detail=detail,
+            fallback=using_fallback,
+        )
     except Exception as exc:
-        return DependencyHealthResponse(name="embeddings", endpoint=endpoint, available=False, detail=str(exc))
+        return DependencyHealthResponse(
+            name="embeddings",
+            endpoint=endpoint,
+            available=False,
+            detail=str(exc),
+            fallback=None,
+        )
 
 
 async def _probe_docling() -> DependencyHealthResponse:
@@ -133,6 +146,22 @@ async def runtime_dependencies_health() -> RuntimeHealthResponse:
     docling_probe = await _probe_docling()
     visual_probe = await _probe_visual_runtime(settings)
     turbovec_probe = await _probe_turbovec(settings)
+    sqlite_probe = _probe_sqlite(settings)
     dependencies = [llm_probe, qdrant_probe, embeddings_probe, docling_probe, visual_probe, turbovec_probe]
-    status = "ok" if all(item.available for item in dependencies) else "degraded"
+    if sqlite_probe is not None:
+        dependencies.append(sqlite_probe)
+    status = "ok" if all(item.available for item in dependencies if item.name != "database") else "degraded"
+    if sqlite_probe is not None and not sqlite_probe.available:
+        status = "degraded"
     return RuntimeHealthResponse(status=status, version="0.1.0", dependencies=dependencies)
+
+
+def _probe_sqlite(settings: Settings) -> DependencyHealthResponse | None:
+    if not settings.database_url.startswith("sqlite"):
+        return None
+    return DependencyHealthResponse(
+        name="database",
+        endpoint=settings.database_url,
+        available=True,
+        detail="SQLite mode: use a single worker for bulk ingestion or switch to PostgreSQL",
+    )

@@ -146,8 +146,67 @@ class TurboQuantAdapter(VectorQuantizerPort):
             "vector_norm": v_norm,
         }
 
+    def estimate_inner_products(
+        self,
+        query_vector: list[float],
+        codes: list[dict[str, Any]],
+        profile: Any,
+    ) -> list[float]:
+        """Estimate inner products using the TurboQuantprod unbiased IP estimator.
+
+        IP(q, k) ≈ ‖q‖·‖k‖·(⟨q_rot, k̂_v_rot⟩ + r_norm·√(π/(2·d))·⟨P·q_rot, signs⟩)
+
+        where q_rot = R·(q/‖q‖), k̂_v_rot = centroids[idx]/√d, and signs ∈ {±1} from qjl_blob.
+        q_rot and P·q_rot are precomputed once per query; scoring is vectorized over *codes*.
+        """
+        if not codes:
+            return []
+
+        d = profile.dimension
+        bit_width = profile.bit_width
+        rotation_seed = profile.rotation_seed
+        qjl_seed = profile.qjl_seed
+        centroids_bits = max(1, bit_width - 1)
+
+        q = np.array(query_vector, dtype=np.float32)
+        q_norm = float(np.linalg.norm(q))
+        q_unit = q / q_norm if q_norm > 0 else np.zeros(d, dtype=np.float32)
+
+        R = get_orthogonal_matrix(d, rotation_seed)
+        P = get_qjl_projection_matrix(d, qjl_seed)
+        q_rot = R @ q_unit
+        p_q_rot = P @ q_rot
+        qjl_scale = np.sqrt(np.pi / (2 * d))
+
+        centroids = np.array(
+            TurboQuantProfileRegistry.get_centroids(centroids_bits), dtype=np.float32
+        )
+
+        batch_size = len(codes)
+        idx_matrix = np.empty((batch_size, d), dtype=np.int32)
+        signs_matrix = np.empty((batch_size, d), dtype=np.float32)
+        residual_norms = np.empty(batch_size, dtype=np.float32)
+        vector_norms = np.empty(batch_size, dtype=np.float32)
+
+        for i, code in enumerate(codes):
+            idx_matrix[i] = unpack_indices(code["idx_blob"], d, centroids_bits)
+            qjl_bits = np.unpackbits(np.frombuffer(code["qjl_blob"], dtype=np.uint8))[:d]
+            signs_matrix[i] = np.where(qjl_bits == 1, 1.0, -1.0)
+            residual_norms[i] = code["residual_norm"]
+            vector_norms[i] = code["vector_norm"]
+
+        hat_v_rot = centroids[idx_matrix] / np.sqrt(d)
+        centroid_terms = np.einsum("ij,j->i", hat_v_rot, q_rot)
+        signs_terms = signs_matrix @ p_q_rot
+        rotated_ips = centroid_terms + residual_norms * qjl_scale * signs_terms
+        estimated = q_norm * vector_norms * rotated_ips
+        return cast(list[float], estimated.tolist())
+
     def dequantize(self, code: dict[str, Any], profile: Any) -> list[float]:
-        """Dequantize packed centroids and residual signs to approximate the original vector."""
+        """Diagnostic utility: reconstruct an approximate vector from quantized codes.
+
+        Not used for retrieval scoring — use :meth:`estimate_inner_products` instead.
+        """
         d = profile.dimension
         bit_width = profile.bit_width
         rotation_seed = profile.rotation_seed

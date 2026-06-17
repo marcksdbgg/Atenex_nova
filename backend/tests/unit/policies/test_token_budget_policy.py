@@ -54,6 +54,6 @@ def test_transformers_token_estimator():
     from atenex_nova.application.policies.token_budget_policy import TransformersTokenEstimator
     # If the tokenizer is not available, it uses the fallback.
     # Otherwise, it uses the fast tokenizer.
-    estimator = TransformersTokenEstimator()
+    estimator = TransformersTokenEstimator("embeddinggemma")
     tokens = estimator.estimate("12345678901234567890")
     assert tokens > 0

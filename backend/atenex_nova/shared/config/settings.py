@@ -80,8 +80,13 @@ class Settings(BaseSettings):
     llm_url: str = "http://localhost:11434"
     llm_model: str = "gemma4:12b"
 
-    # --- Embeddings ---
-    embedding_model: str = "google/embeddinggemma-300m"
+    # --- Embeddings (offline-first: Ollama local, igual que el LLM) ---
+    # backend "ollama" → usa el modelo embeddinggemma servido por Ollama (sin Hugging Face).
+    # backend "sentence_transformers" → carga el modelo desde disco con SentenceTransformers.
+    embedding_backend: Literal["ollama", "sentence_transformers"] = "ollama"
+    embedding_url: str = "http://localhost:11434"
+    embedding_ollama_model: str = "embeddinggemma"
+    embedding_model: str = "embeddinggemma"
     embedding_profile: EmbeddingProfile = EmbeddingProfile.STANDARD
     embedding_batch_size: int = 32
 
@@ -96,8 +101,13 @@ class Settings(BaseSettings):
     visual_pages_path: Path = STORAGE_ROOT / "visual_pages"
     turbovec_path: Path = STORAGE_ROOT / "turbovec"
 
-    # --- TurboVec ---
+    # --- TurboVec / candidate index ---
+    candidate_backend: Literal["auto", "purepy", "turbovec"] = "auto"
     turbovec_bit_width: int = 4
+
+    # --- Visual indexing ---
+    visual_indexing_enabled: bool = True
+    visual_index_text_documents: bool = False
 
     # --- Worker ---
     worker_poll_interval: float = 2.0
@@ -114,6 +124,8 @@ class Settings(BaseSettings):
     store_prompts: bool = False
     min_evidence_items: int = 1
     min_grounding_score: float = 0.35
+    grounding_floor: float = 0.0
+    allow_fallback_embeddings: bool = False
 
     @property
     def strict_mode_enabled(self) -> bool:

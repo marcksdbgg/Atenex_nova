@@ -10,7 +10,7 @@
 
 ## Current Verified Snapshot
 - OpenAPI/docs contract test: 1 passed in the current checkout.
-- Backend unit, integration, and E2E tests: 63 passed in the current checkout (100% green).
+- Backend unit, integration, and E2E tests: **96 passed, 3 skipped** (2026-06-16, Qdrant+Ollama live; `backend/.venv312/Scripts/python.exe -m pytest tests -q`).
 - Frontend build: successful (green).
 - Frontend lint: successful (green).
 - Backend `ruff`: clean (0 issues, green).
@@ -43,7 +43,7 @@
 
 ## Implementation Notes
 - Current backend flow is a modular monolith with FastAPI routers over application services and worker-driven ingestion jobs.
-- Current retrieval is hybrid: dense EmbeddingGemma (quantized via TurboQuantprod and indexed using local turbovec indexes), local sparse/BM25, reranking, and optional visual retrieval through ColPali-style adapters.
+- Current retrieval is hybrid: dense via TurboQuant IP estimator (`PurePyTurboQuantCandidateIndex` or optional turbovec), local sparse/BM25, reranking, and page-text visual retrieval (`VisualPageRetriever`, not ColPali VL).
 - Current query UX is chat-first and includes history, evidence, citations, document drill-down, and page viewers.
 - Storage paths remain: uploads under `backend/storage/uploads/{collection_id}/{document_id}/{filename}`, visual page cache under `backend/storage/visual_pages/`, and local turbovec candidate indexes under `backend/storage/turbovec/`.
 - Qdrant collections are namespaced per corpus for chunks, propositions, summaries, and visual pages.
@@ -63,6 +63,6 @@
 - Do not let routers call infrastructure directly; go through application services and orchestrators.
 - When changing jobs, review [backend/atenex_nova/workers/main.py](backend/atenex_nova/workers/main.py) and [backend/atenex_nova/workers/runner.py](backend/atenex_nova/workers/runner.py) together.
 - For frontend API behavior and fallback rules, check [frontend/src/services/api.ts](frontend/src/services/api.ts).
-- Local services: Qdrant runs on `6333/6334`; PostgreSQL runs on `5432` only when started with `docker compose --profile prod up -d`; default LLM runtime is Ollama on `11434` with `gemma4:12b` (llama.cpp on `8080` is an optional alternative).
+- Local services: Qdrant runs on `6333/6334`; PostgreSQL runs on `5432` only when started with `docker compose --profile prod up -d`; default LLM runtime is Ollama on `11434` with `gemma4:12b` (llama.cpp on `8080` is an optional alternative). Embeddings are also local/offline-first via Ollama (`embeddinggemma`, `ATENEX_EMBEDDING_BACKEND=ollama` by default) — no Hugging Face download or login is required; run `ollama pull embeddinggemma` once.
 - The backend CORS setup already allows localhost and 127.0.0.1 on ports 5173 and 5174.
 - Keep changes small and local; prefer existing patterns over introducing new abstractions.

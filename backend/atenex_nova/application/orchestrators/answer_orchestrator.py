@@ -535,7 +535,9 @@ class AnswerOrchestrator:
         overlap = sum(1 for token in answer_tokens if token in evidence_text)
         coverage = overlap / max(len(answer_tokens), 1)
         citation_score = min(len(citations), 5) / 5.0
-        grounding_score = min(1.0, 0.35 + (coverage * 0.45) + (citation_score * 0.2))
+        floor = float(self._settings.grounding_floor)
+        grounding_score = min(1.0, floor + (coverage * 0.55) + (citation_score * 0.45))
+        unverified_threshold = float(self._settings.min_grounding_score)
         logger.info(
             f"Verification details: overlap={overlap} | answer_tokens={len(answer_tokens)} | "
             f"coverage={coverage:.3f} | citation_score={citation_score:.3f} | "
@@ -548,7 +550,7 @@ class AnswerOrchestrator:
             issues.append("unresolved_citation_binding")
         if contradictions and plan_type != "argument_synthesis":
             issues.append("unresolved_contradiction")
-        if grounding_score < 0.35:
+        if grounding_score < unverified_threshold:
             verdict = AnswerVerdict.UNVERIFIED
         elif issues and "unresolved_contradiction" in issues:
             verdict = AnswerVerdict.CONFLICTING

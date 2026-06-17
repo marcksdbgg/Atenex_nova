@@ -13,6 +13,7 @@ import type {
   Citation,
   Chunk,
   Collection,
+  CollectionPipelineStatus,
   Document,
   DocumentNode,
   DocumentPage,
@@ -450,6 +451,7 @@ export function DashboardPage() {
 export function CollectionsPage() {
   const [collections, setCollections] = useState<Collection[]>([]);
   const [documentsByCollection, setDocumentsByCollection] = useState<Record<string, Document[]>>({});
+  const [pipelineStatusByCollection, setPipelineStatusByCollection] = useState<Record<string, CollectionPipelineStatus>>({});
   const [uploadQueues, setUploadQueues] = useState<Record<string, UploadQueueItem[]>>({});
   const [localSourcePaths, setLocalSourcePaths] = useState<Record<string, string>>({});
   const [localFolderPaths, setLocalFolderPaths] = useState<Record<string, string>>({});
@@ -526,13 +528,24 @@ export function CollectionsPage() {
     [documentsByCollection],
   );
 
+  const realJobQueueCount = useMemo(
+    () =>
+      Object.values(pipelineStatusByCollection).reduce((count, status) => {
+        const pending = status.jobs_by_status.pending ?? 0;
+        const running = status.jobs_by_status.running ?? 0;
+        return count + pending + running;
+      }, 0),
+    [pipelineStatusByCollection],
+  );
+
   const queuedFileCount = useMemo(
     () =>
+      realJobQueueCount +
       Object.values(uploadQueues).reduce(
         (count, items) => count + items.filter(item => item.status === 'queued' || item.status === 'uploading').length,
         0,
       ),
-    [uploadQueues],
+    [uploadQueues, realJobQueueCount],
   );
 
   const erroredFileCount = useMemo(
@@ -598,10 +611,17 @@ export function CollectionsPage() {
     const entries = await Promise.all(
       collectionIds.map(async collectionId => [collectionId, await api.listAllCollectionDocuments(collectionId)] as const),
     );
+    const pipelineEntries = await Promise.all(
+      collectionIds.map(async collectionId => [collectionId, await api.getCollectionPipelineStatus(collectionId)] as const),
+    );
     const nextDocuments = Object.fromEntries(entries);
     setDocumentsByCollection(current => ({
       ...current,
       ...nextDocuments,
+    }));
+    setPipelineStatusByCollection(current => ({
+      ...current,
+      ...Object.fromEntries(pipelineEntries),
     }));
     setUploadQueues(current => {
       const next = { ...current };
@@ -819,13 +839,24 @@ export function CollectionsPage() {
   };
 
   const enqueueUploadBatch = async (collectionId: string, batch: UploadQueueItem[]) => {
+    let importSessionId: string | undefined;
+    try {
+      const importSession = await api.startImportSession(collectionId, {
+        source_kind: 'upload_batch',
+        discovered_count: batch.length,
+      });
+      importSessionId = importSession.id;
+    } catch {
+      importSessionId = undefined;
+    }
+
     setUploadQueues(current => ({
       ...current,
       [collectionId]: [...(current[collectionId] ?? []), ...batch],
     }));
     const collectionName = collections.find(collection => collection.id === collectionId)?.name ?? collectionId;
     setMessage(`Cola ampliada en ${collectionName}: ${batch.length} archivos añadidos.`);
-    await processCollectionQueue(collectionId, batch);
+    await processCollectionQueue(collectionId, batch, importSessionId);
   };
 
   const openFolderWizard = (collectionId: string, candidates: UploadCandidate[]) => {
@@ -887,18 +918,27 @@ export function CollectionsPage() {
     setMessage('Carga por carpeta cancelada.');
   };
 
-  const processCollectionQueue = async (collectionId: string, initialBatch: UploadQueueItem[] = []) => {
+  const processCollectionQueue = async (
+    collectionId: string,
+    initialBatch: UploadQueueItem[] = [],
+    importSessionId?: string,
+  ) => {
     if (processingUploadsRef.current[collectionId]) return;
 
     setProcessingUploads(current => ({ ...current, [collectionId]: true }));
 
     try {
-      let pendingBatch = initialBatch;
+      let remainingInitial = [...initialBatch];
       while (true) {
         const queue = uploadQueuesRef.current[collectionId] ?? [];
-        const batch = pendingBatch.length > 0 ? pendingBatch : queue.filter(item => item.status === 'queued').slice(0, 8);
+        const batch =
+          remainingInitial.length > 0
+            ? remainingInitial.slice(0, 8)
+            : queue.filter(item => item.status === 'queued').slice(0, 8);
+        if (remainingInitial.length > 0) {
+          remainingInitial = remainingInitial.slice(8);
+        }
         if (batch.length === 0) break;
-        pendingBatch = [];
 
         await Promise.all(
           batch.map(async item => {
@@ -907,6 +947,7 @@ export function CollectionsPage() {
               const document = await api.uploadDocument(collectionId, item.file, {
                 collectionPath: item.collectionPath,
                 displayTitle: item.displayTitle,
+                importSessionId,
               });
               updateQueueItem(collectionId, item.id, {
                 status: 'done',
@@ -931,6 +972,13 @@ export function CollectionsPage() {
           ...current,
           [collectionId]: (current[collectionId] ?? []).filter(item => item.status !== 'done'),
         }));
+      }
+      if (importSessionId) {
+        try {
+          await api.finalizeImportSession(importSessionId);
+        } catch {
+          // Session may auto-finalize when all items are recorded.
+        }
       }
     } finally {
       setProcessingUploads(current => ({ ...current, [collectionId]: false }));
@@ -981,7 +1029,9 @@ export function CollectionsPage() {
     setMessage('');
     try {
       const result = await api.importLocalFolder(collectionId, sourceFolder, collectionPath || undefined, true);
-      setMessage(`Carpeta importada: ${result.imported} archivos registrados sin duplicar bytes.`);
+      setMessage(
+        `Carpeta importada: ${result.discovered_count} descubiertos, ${result.created_count} creados, ${result.deduplicated_count} duplicados${result.failed_count ? `, ${result.failed_count} fallidos` : ''}.`,
+      );
       setLocalFolderPaths(current => ({ ...current, [collectionId]: '' }));
       setLocalFolderCollectionPaths(current => ({ ...current, [collectionId]: '' }));
       await syncCollectionDocuments([collectionId]);
@@ -1258,7 +1308,15 @@ export function CollectionsPage() {
         <div className="collections-page-metric card">
           <span>Cola</span>
           <strong>{queuedFileCount}</strong>
-          <small>{erroredFileCount > 0 ? `${erroredFileCount} con error` : hasRebuildPolling ? 'rebuild en seguimiento' : 'sin actividad'}</small>
+          <small>
+            {realJobQueueCount > 0
+              ? `${realJobQueueCount} jobs reales`
+              : erroredFileCount > 0
+                ? `${erroredFileCount} con error`
+                : hasRebuildPolling
+                  ? 'rebuild en seguimiento'
+                  : 'sin actividad'}
+          </small>
         </div>
       </div>
 
@@ -1327,6 +1385,7 @@ export function CollectionsPage() {
             const readyCount = collectionDocuments.filter(document => document.status === 'ready').length;
             const failedCount = collectionDocuments.filter(document => document.status === 'failed').length;
             const collectionAudit = collectionAuditByCollection[collection.id] ?? [];
+            const pipelineStatus = pipelineStatusByCollection[collection.id];
             const collectionAuditLoading = collectionAuditLoadingByCollection[collection.id] ?? false;
             const collectionAuditError = collectionAuditErrorByCollection[collection.id] ?? '';
             const isRebuilding = busyCollectionId === collection.id || rebuildPollingByCollection[collection.id];
@@ -1409,6 +1468,43 @@ export function CollectionsPage() {
                   </button>
                 </div>
               </div>
+              {pipelineStatus ? (
+                <div className="collection-activity-panel card">
+                  <div className="card__header">
+                    <div>
+                      <div className="card__title">Estado real del pipeline</div>
+                      <p style={{ color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>
+                        Jobs y documentos desde la base de datos (no cola local).
+                      </p>
+                    </div>
+                    <span className="badge badge--info">{pipelineStatus.candidate_backend_default}</span>
+                  </div>
+                  <div style={{ display: 'grid', gap: 'var(--space-3)', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))' }}>
+                    <div><strong>{pipelineStatus.jobs_by_status.pending ?? 0}</strong><small> pending</small></div>
+                    <div><strong>{pipelineStatus.jobs_by_status.running ?? 0}</strong><small> running</small></div>
+                    <div><strong>{pipelineStatus.jobs_by_status.failed ?? 0}</strong><small> failed</small></div>
+                    <div><strong>{pipelineStatus.stale_running_jobs}</strong><small> stale</small></div>
+                    <div><strong>{readyCount}</strong><small> ready</small></div>
+                    <div><strong>{liveDocuments.length}</strong><small> activos</small></div>
+                  </div>
+                  {pipelineStatus.recent_import_sessions?.length ? (
+                    <div style={{ marginTop: 'var(--space-3)' }}>
+                      <strong>Import sessions recientes</strong>
+                      <ul style={{ margin: 'var(--space-2) 0 0', paddingLeft: 'var(--space-5)' }}>
+                        {pipelineStatus.recent_import_sessions.slice(0, 3).map(session => (
+                          <li key={session.id}>
+                            {session.source_kind}: {session.discovered_count} descubiertos, {session.created_count} creados, {session.deduplicated_count} duplicados
+                            {session.failed_count > 0 ? `, ${session.failed_count} fallidos` : ''}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                  <p style={{ color: 'var(--color-text-tertiary)', marginTop: 'var(--space-3)', fontSize: 'var(--font-xs)' }}>
+                    Logs de colección abajo muestran solo los últimos 8 eventos.
+                  </p>
+                </div>
+              ) : null}
               <div className="collection-activity-panel card">
                 <div className="card__header">
                   <div>

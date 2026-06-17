@@ -31,6 +31,7 @@ from atenex_nova.infrastructure.db.repositories.sql_proposition_repo import SqlP
 from atenex_nova.infrastructure.db.repositories.sql_relation_repo import SqlRelationRepository
 from atenex_nova.infrastructure.db.repositories.sql_summary_repo import SqlSummaryRepository
 from atenex_nova.infrastructure.db.session import get_session
+from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
 from atenex_nova.infrastructure.files.blob_store import BlobStore
 from atenex_nova.infrastructure.parsing.docling_adapter import DoclingParserAdapter
 from atenex_nova.main import app
@@ -89,6 +90,24 @@ async def e2e_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "atenex_nova.application.services.collection_cleanup_service.get_settings",
         lambda: SimpleNamespace(visual_pages_path=visual_root),
     )
+
+    def _fast_embed_init(
+        self: EmbeddingGemmaAdapter,
+        model_name: str = "embeddinggemma",
+        dim: int = 384,
+        required: bool | None = None,
+    ) -> None:
+        self._model_name = model_name or "embeddinggemma"
+        self._dim = dim
+        self._required = False if required is None else required
+        self.model = object()
+        self._fallback_only = False
+
+    async def _deterministic_embed(self: EmbeddingGemmaAdapter, texts: list[str]) -> list[list[float]]:
+        return [[float(len(text) % 7) / 7.0] * self._dim for text in texts]
+
+    monkeypatch.setattr(EmbeddingGemmaAdapter, "__init__", _fast_embed_init)
+    monkeypatch.setattr(EmbeddingGemmaAdapter, "embed", _deterministic_embed)
 
     app.dependency_overrides[get_session] = override_get_session
     app.dependency_overrides[get_blob_store] = lambda: blob_store
@@ -210,7 +229,7 @@ async def test_end_to_end_upload_ingestion_reaches_queryable_state(e2e_env, tmp_
         assert audit_response.status_code == 200
         audit_events = audit_response.json()
         stages = {event["stage"] for event in audit_events}
-        assert {"parse", "normalize", "segment", "embed_index", "index_visual_pages"}.issubset(stages)
+        assert {"parse", "normalize", "segment", "embed_index", "skipped_text_only"}.issubset(stages)
         assert all("duration_ms" in event for event in audit_events)
 
         query_result = await _search(client, collection_id, "What does EmbeddingGemma support?")
@@ -273,7 +292,7 @@ async def test_end_to_end_local_path_import_keeps_original_file_reference(e2e_en
         )
         assert audit_response.status_code == 200
         audit_events = audit_response.json()
-        assert {"parse", "normalize", "segment", "embed_index", "index_visual_pages"}.issubset(
+        assert {"parse", "normalize", "segment", "embed_index", "skipped_text_only"}.issubset(
             {event["stage"] for event in audit_events}
         )
 

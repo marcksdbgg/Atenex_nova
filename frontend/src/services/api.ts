@@ -5,6 +5,7 @@ import type {
   Chunk,
   CollectionRebuildResponse,
   Collection,
+  CollectionPipelineStatus,
   CreateCollectionRequest,
   Document,
   DocumentPage,
@@ -15,6 +16,7 @@ import type {
   EvaluationRunResponse,
   HealthStatus,
   ImportLocalFolderResponse,
+  ImportSession,
   Job,
   PipelineAuditEntry,
   Proposition,
@@ -25,6 +27,7 @@ import type {
   Chat,
   ChatMessage,
   CreateChatRequest,
+  StartImportSessionRequest,
 } from '../types/api';
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -152,6 +155,21 @@ class ApiClient {
   /* Collections */
   listCollections = () => this.request<Collection[]>('/collections');
   getCollection = (id: string) => this.request<Collection>(`/collections/${id}`);
+  getCollectionPipelineStatus = (id: string) =>
+    this.request<CollectionPipelineStatus>(`/collections/${id}/pipeline-status`);
+  listCollectionImportSessions = (collectionId: string, offset = 0, limit = 20) =>
+    this.request<ImportSession[]>(
+      `/collections/${collectionId}/import-sessions?offset=${offset}&limit=${limit}`,
+    );
+  startImportSession = (collectionId: string, body: StartImportSessionRequest) =>
+    this.request<ImportSession>(`/collections/${collectionId}/import-sessions`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  getImportSession = (sessionId: string) =>
+    this.request<ImportSession>(`/import-sessions/${sessionId}`);
+  finalizeImportSession = (sessionId: string) =>
+    this.request<ImportSession>(`/import-sessions/${sessionId}/finalize`, { method: 'POST' });
   createCollection = (data: CreateCollectionRequest) =>
     this.request<Collection>('/collections', { method: 'POST', body: JSON.stringify(data) });
   deleteCollection = (id: string) =>
@@ -161,7 +179,7 @@ class ApiClient {
   uploadDocument = async (
     collectionId: string,
     file: File,
-    options: { collectionPath?: string; displayTitle?: string } = {},
+    options: { collectionPath?: string; displayTitle?: string; importSessionId?: string } = {},
   ): Promise<Document> => {
     const formData = new FormData();
     formData.append('file', file);
@@ -170,6 +188,9 @@ class ApiClient {
     }
     if (options.displayTitle) {
       formData.append('display_title', options.displayTitle);
+    }
+    if (options.importSessionId) {
+      formData.append('import_session_id', options.importSessionId);
     }
     return this.uploadForm<Document>(`/collections/${collectionId}/documents`, formData);
   };

@@ -11,6 +11,42 @@ export interface Collection {
   updated_at: string;
 }
 
+export interface CollectionPipelineStatus {
+  collection_id: string;
+  documents_by_status: Record<string, number>;
+  jobs_by_status: Record<string, number>;
+  jobs_by_type: Record<string, Record<string, number>>;
+  stale_running_jobs: number;
+  candidate_backend_default: string;
+  recent_import_sessions: ImportSession[];
+}
+
+export interface ImportSession {
+  id: string;
+  collection_id: string;
+  source_kind: string;
+  source_root: string;
+  collection_path: string;
+  status: string;
+  discovered_count: number;
+  attempted_count: number;
+  created_count: number;
+  deduplicated_count: number;
+  skipped_count: number;
+  failed_count: number;
+  queued_jobs_count: number;
+  started_at: string;
+  completed_at?: string | null;
+  error?: string | null;
+}
+
+export interface StartImportSessionRequest {
+  source_kind?: string;
+  source_root?: string;
+  collection_path?: string;
+  discovered_count?: number;
+}
+
 export interface CreateCollectionRequest {
   name: string;
   description?: string;
@@ -37,6 +73,11 @@ export interface ImportLocalFolderResponse {
   source_folder: string;
   collection_path: string;
   document_ids: string[];
+  import_session_id: string;
+  discovered_count: number;
+  created_count: number;
+  deduplicated_count: number;
+  failed_count: number;
 }
 
 export interface QueryHistoryItem {

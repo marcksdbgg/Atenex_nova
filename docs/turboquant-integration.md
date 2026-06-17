@@ -22,23 +22,35 @@ Esto permite que la estimación de producto interno entre el vector de consulta 
 
 ## 2. ¿Qué reemplaza y qué optimiza en el Pipeline?
 
-### Reemplazo de Persistencia y Carga de Embeddings
-Antes de la integración de TurboQuant, el pipeline almacenaba los embeddings completos en formato de punto flotante de 32 bits (float32) directamente en memoria RAM o requería desplegar colecciones completas e intensivas de Qdrant en dispositivos con recursos limitados.
+### Una sola copia dense canónica (LITE/STANDARD)
 
-Con TurboQuant, el pipeline se optimiza mediante la persistencia híbrida:
+En perfiles **LITE** y **STANDARD**, el dense ya **no** se duplica en Qdrant ni en archivos `.tvim` como fuente de verdad. La representación canónica es:
+
 1. **Ingesta**:
-   * El documento se procesa (Docling), segmenta y se generan los embeddings vectoriales locales (`EmbeddingGemma`).
-   * Los embeddings se normalizan, rotan ortogonalmente y se cuantizan a un formato binario comprimido mediante `TurboQuantprod`.
-   * Los códigos cuantizados (blobs de índices de centroides y signos residuales) se guardan en la tabla SQL `quantized_vectors`.
-   * Las representaciones compactas se agregan al índice en disco local `.tvim` (`turbovec.IdMapIndex`), manteniendo la RAM limpia.
-2. **Decoplamiento de Citas (Citations)**:
-   * Las citas y anclas de evidencia (spans, páginas, regiones visuales) no apuntan a los vectores cuantizados. Siguen apuntando a sus tablas relacionales específicas (`retrieval_chunks`, `propositions`, `summary_nodes`, `document_nodes`). Esto mantiene el motor de verificación determinístico y robusto frente a compresión.
+   * Docling segmenta el documento; `EmbeddingGemma` genera embeddings float32 en memoria.
+   * `TurboQuantAdapter` cuantiza cada vector (Lloyd-Max + QJL) y persiste los códigos en SQL (`quantized_vectors`).
+   * Qdrant recibe **solo sparse** (BM25/SPLADE) en LITE/STANDARD; dense float32 en Qdrant queda reservado al perfil **MAX** (`dense_goes_to_qdrant`).
+   * `turbovec` (extra opcional `[accel]`) puede acelerar la búsqueda de candidatos construyendo un índice `.tvim` a partir de los mismos códigos; si no está instalado, `PurePyTurboQuantCandidateIndex` puntúa directamente sobre SQL.
 
-### Optimización en Consulta (Candidate Generation Stage)
-Para realizar una consulta, Atenex Nova no recupera directamente de Qdrant ni de fuerza bruta. El flujo se optimiza en tres etapas de búsqueda:
-* **Stage 1 (Generación de Candidatos)**: Se realiza una búsqueda dense de bajo costo sobre el índice local cuantizado de `turbovec` recuperando los **top 200 candidatos**.
-* **Stage 2 (Fusión e Hibridación)**: Se combinan los candidatos del Stage 1 con los resultados de `BM25` (búsqueda sparse local) mediante Reciprocal Rank Fusion (RRF).
-* **Stage 3 (Reranking Exacto)**: Solo los candidatos supervivientes finalistas se cargan (o se decuantizan para aproximar el vector original) y se pasan al reranker neural para construir el `EvidencePack` definitivo.
+2. **Decoplamiento de citas**: las citas siguen apuntando a tablas relacionales (`retrieval_chunks`, proposiciones, resúmenes, nodos de documento), no a blobs cuantizados.
+
+### Scoring por estimador de producto interno (H-3 cerrado)
+
+La búsqueda dense **no reconstruye** vectores para rankear. `TurboQuantAdapter.estimate_inner_products` aplica el estimador insesgado de TurboQuantprod sobre los códigos Lloyd-Max+QJL. El stage de auditoría en retrieval es `dense_turbo_ip`.
+
+### Flujo de consulta (Candidate Generation)
+
+* **Stage 1 (candidatos dense)**: `CandidateIndexPort.search` — pure-python o turbovec — devuelve top-N usando el estimador IP.
+* **Stage 2 (sparse + fusión)**: BM25/SPLADE en Qdrant o local; fusión RRF con candidatos dense.
+* **Stage 3 (rerank)**: reranker neural sobre texto de los finalistas (una pasada final, no por capa).
+
+### Selección de backend
+
+| `ATENEX_CANDIDATE_BACKEND` | Comportamiento |
+|---|---|
+| `purepy` (default implícito sin turbovec) | Lee `quantized_vectors`, puntúa con estimador IP |
+| `turbovec` | Requiere `pip install -e ".[accel]"`; acelera con `.tvim` |
+| `auto` | turbovec si importable y perfil LITE/STANDARD; si no, purepy |
 
 ---
 
@@ -48,21 +60,22 @@ La integración de TurboQuant respeta estrictamente la arquitectura hexagonal de
 
 ```
 Domain (domain/ports/)
-  ├── VectorQuantizerPort (Define quantize/dequantize)
-  └── CandidateIndexPort (Define add_vectors/search/remove_vectors/delete_collection_indexes)
+  ├── VectorQuantizerPort (quantize + estimate_inner_products)
+  └── CandidateIndexPort (add_vectors/search/remove_vectors/delete_collection_indexes)
 
 Application (application/)
-  ├── IngestionOrchestrator (Orquesta cuantización y guardado tras generación de embeddings)
-  ├── RetrievalOrchestrator (Consulta el índice de candidatos antes de fusionar y reordenar)
-  └── QuantizationPolicyService (Resuelve perfiles y configura el bit-width según hardware)
+  ├── IngestionOrchestrator (cuantiza → SQL; invalida caché del índice)
+  ├── RetrievalOrchestrator (dense_turbo_ip + sparse + rerank final)
+  └── QuantizationPolicyService (perfiles y bit-width)
 
 Infrastructure
   ├── vector_quantization/
-  │     ├── TurboQuantAdapter (Implementa VectorQuantizerPort con Lloyd-Max + QJL)
-  │     └── TurboQuantProfileRegistry (Contiene los centroides Lloyd-Max optimizados)
+  │     └── TurboQuantAdapter (Lloyd-Max + QJL + estimador IP)
   └── indexes/
-        ├── TurboQuantCandidateIndex (Implementa CandidateIndexPort con turbovec y archivos .tvim)
-        └── QuantizedCodeStore (Capa de persistencia SQL de metadatos y blobs cuantizados)
+        ├── PurePyTurboQuantCandidateIndex (canónico sin turbovec)
+        ├── TurboQuantCandidateIndex (acelerador opcional .tvim)
+        ├── candidate_index_factory.py (auto | purepy | turbovec)
+        └── QuantizedCodeStore (persistencia SQL)
 ```
 
 ### Detalle de Base de Datos (SQLModel)

@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class QdrantDocument:
     id: str
-    vector: list[float]
+    vector: list[float] | None
     payload: Mapping[str, Any]
     sparse_indices: list[int] | None = None
     sparse_values: list[float] | None = None
@@ -91,21 +91,35 @@ class QdrantAdapter(HybridIndex):
         logger.info("Qdrant unavailable, skipping %s (retry in %.1fs)", operation, wait_for)
         return False
 
-    async def init_collection(self, collection_name: str, vector_size: int) -> None:
+    async def init_collection(
+        self, collection_name: str, vector_size: int, *, dense_enabled: bool = True
+    ) -> None:
         """Create collection if it does not exist."""
         if not self._guard("init_collection"):
             return
         try:
             exists = await self.client.collection_exists(collection_name)
             if not exists:
-                await self.client.create_collection(
-                    collection_name=collection_name,
-                    vectors_config={
-                        "dense": models.VectorParams(size=vector_size, distance=models.Distance.COSINE)
-                    },
-                    sparse_vectors_config={"sparse": models.SparseVectorParams()},
+                if dense_enabled:
+                    await self.client.create_collection(
+                        collection_name=collection_name,
+                        vectors_config={
+                            "dense": models.VectorParams(
+                                size=vector_size, distance=models.Distance.COSINE
+                            )
+                        },
+                        sparse_vectors_config={"sparse": models.SparseVectorParams()},
+                    )
+                else:
+                    await self.client.create_collection(
+                        collection_name=collection_name,
+                        sparse_vectors_config={"sparse": models.SparseVectorParams()},
+                    )
+                logger.info(
+                    "Created Qdrant collection %s (dense=%s)",
+                    collection_name,
+                    dense_enabled,
                 )
-                logger.info("Created Qdrant collection %s", collection_name)
             self._register_success()
         except Exception as exc:
             self._register_failure(f"init collection '{collection_name}'", exc)
@@ -121,6 +135,17 @@ class QdrantAdapter(HybridIndex):
             self._register_success()
         except Exception as exc:
             self._register_failure(f"delete collection '{collection_name}'", exc)
+
+    async def list_collections(self) -> list[dict[str, str]]:
+        if not self._guard("list_collections"):
+            return []
+        try:
+            collections = await self.client.get_collections()
+            self._register_success()
+            return [{"name": item.name} for item in collections.collections]
+        except Exception as exc:
+            self._register_failure("list collections", exc)
+            return []
 
     async def delete_by_filter(self, collection_name: str, filter_dict: dict[str, str]) -> None:
         """Delete points in an existing collection using exact-match payload filters."""
@@ -155,11 +180,16 @@ class QdrantAdapter(HybridIndex):
             return
         points = []
         for doc in documents:
-            vector_dict: dict[str, Any] = {"dense": doc.vector}
+            vector_dict: dict[str, Any] = {}
+            if doc.vector is not None:
+                vector_dict["dense"] = doc.vector
             if doc.sparse_indices and doc.sparse_values:
                 vector_dict["sparse"] = models.SparseVector(
                     indices=doc.sparse_indices, values=doc.sparse_values
                 )
+            if not vector_dict:
+                logger.warning("Skipping Qdrant point %s: no dense or sparse vector", doc.id)
+                continue
             points.append(
                 models.PointStruct(id=doc.id, vector=vector_dict, payload=doc.payload)
             )

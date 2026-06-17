@@ -65,6 +65,51 @@ class ImportLocalFolderResponse(BaseModel):
     source_folder: str
     collection_path: str
     document_ids: list[str]
+    import_session_id: str
+    discovered_count: int = 0
+    created_count: int = 0
+    deduplicated_count: int = 0
+    failed_count: int = 0
+
+
+class StartImportSessionRequest(BaseModel):
+    source_kind: str = Field(default="upload_batch", max_length=30)
+    source_root: str = Field(default="", max_length=1000)
+    collection_path: str = Field(default="", max_length=800)
+    discovered_count: int = Field(default=0, ge=0)
+
+
+class ImportSessionResponse(BaseModel):
+    id: str
+    collection_id: str
+    source_kind: str
+    source_root: str
+    collection_path: str
+    status: str
+    discovered_count: int
+    attempted_count: int
+    created_count: int
+    deduplicated_count: int
+    skipped_count: int
+    failed_count: int
+    queued_jobs_count: int
+    started_at: datetime
+    completed_at: datetime | None = None
+    error: str | None = None
+
+
+class ImportSessionItemResponse(BaseModel):
+    id: str
+    session_id: str
+    relative_path: str
+    source_path: str
+    checksum: str | None = None
+    mime_type: str | None = None
+    status: str
+    document_id: str | None = None
+    job_id: str | None = None
+    error: str | None = None
+    created_at: datetime
 
 
 class DocumentNodeResponse(BaseModel):
@@ -123,6 +168,16 @@ class JobResponse(BaseModel):
     created_at: datetime
     started_at: datetime | None = None
     completed_at: datetime | None = None
+
+
+class CollectionPipelineStatusResponse(BaseModel):
+    collection_id: str
+    documents_by_status: dict[str, int] = Field(default_factory=dict)
+    jobs_by_status: dict[str, int] = Field(default_factory=dict)
+    jobs_by_type: dict[str, dict[str, int]] = Field(default_factory=dict)
+    stale_running_jobs: int = 0
+    candidate_backend_default: str = "purepy"
+    recent_import_sessions: list[ImportSessionResponse] = Field(default_factory=list)
 
 
 # --- Query ---
@@ -319,6 +374,7 @@ class DependencyHealthResponse(BaseModel):
     endpoint: str
     available: bool
     detail: str | None = None
+    fallback: bool | None = None
 
 
 class RuntimeHealthResponse(BaseModel):

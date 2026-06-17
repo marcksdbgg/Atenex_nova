@@ -31,7 +31,7 @@ async def test_runtime_dependencies_health_is_degraded_when_llm_unavailable(
     async def fake_embeddings(_settings):
         return DependencyHealthResponse(
             name="embeddings",
-            endpoint="google/embeddinggemma-300m",
+            endpoint="embeddinggemma",
             available=True,
             detail=None,
         )
@@ -70,6 +70,6 @@ async def test_runtime_dependencies_health_is_degraded_when_llm_unavailable(
     response = await health.runtime_dependencies_health()
 
     assert response.status == "degraded"
-    assert len(response.dependencies) == 6
+    assert len(response.dependencies) == 7
     llm = next(item for item in response.dependencies if item.name == "llm")
     assert llm.available is False
