@@ -128,7 +128,10 @@ Una integración local puede ejecutar `index` incremental inmediatamente antes d
 abrir el transporte `stdio`, como hace
 `backend/scripts/serve_repo_context_mcp.sh`. Esa preparación ocurre fuera de la
 superficie MCP; durante la conversación las seis herramientas permanecen de solo
-lectura.
+lectura. Para roots relativos, el launcher exige además el checkout Git principal
+esperado y verifica que el root resuelto sea ese checkout o uno de sus worktrees. Una
+configuración global ambigua con `.` falla antes de indexar, en vez de servir otro
+repositorio silenciosamente.
 
 ## Datos y seguridad
 

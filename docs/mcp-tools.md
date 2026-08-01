@@ -49,8 +49,10 @@ atenex-context index --repo PATH [--data-dir PATH] [--full]
 
 See [operations.md](operations.md) for indexing, staleness, and recovery.
 The checked-in Claude/Cursor configuration calls the local launcher documented
-there; it refreshes incrementally before starting the read-only server. Indexing is
-still outside the MCP tool surface.
+there; it verifies the resolved Git checkout/worktree identity, refreshes
+incrementally, and only then starts the read-only server. Relative roots require an
+expected main checkout so a user-scoped `.` endpoint cannot silently serve a
+different repository. Indexing is still outside the MCP tool surface.
 
 ## Common response envelope
 

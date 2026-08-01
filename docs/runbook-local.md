@@ -51,8 +51,9 @@ No iniciar servicios manualmente. Claude consume `.mcp.json` y Cursor consume
 local en uno de esos clientes:
 
 1. seleccionar el repositorio o worktree correcto;
-2. el cliente ejecuta `serve_repo_context_mcp.sh .`;
-3. el launcher refresca incrementalmente el índice ligado a ese root;
+2. el cliente ejecuta `serve_repo_context_mcp.sh . CHECKOUT_PRINCIPAL`;
+3. el launcher comprueba que `.` pertenece al mismo repositorio Git y refresca
+   incrementalmente el índice ligado a ese root;
 4. el mismo proceso publica las seis herramientas por `stdio`;
 5. el proceso termina al cerrar la conversación o desconectar el servidor.
 
@@ -67,6 +68,15 @@ Debe aparecer `repo-context` como `Connected`. El MCP no abre un puerto TCP. La
 primera indexación de un repositorio o worktree nuevo puede tardar más; un snapshot
 sin cambios usa el no-op incremental.
 
+No debe existir otro `repo-context` con alcance de usuario. Claude Desktop puede
+mantener ese proceso global con el `cwd` de otro proyecto y resolver el nombre
+duplicado de forma inesperada. Para retirarlo y usar solo `.mcp.json`:
+
+```bash
+claude mcp remove --scope user repo-context
+claude mcp list
+```
+
 Codex mantiene sus MCP en la configuración del usuario, no en `.mcp.json`. En la
 comprobación del 2026-07-31, `codex mcp list` todavía mostraba solo `neon`. Registrar
 Repo Context una sola vez desde el repositorio que se quiere usar:
@@ -76,12 +86,13 @@ cd /mnt/ssd/Atenex/Atenex_nova
 codex mcp add repo-context -- \
   /usr/bin/bash \
   /mnt/ssd/Atenex/Atenex_nova/backend/scripts/serve_repo_context_mcp.sh \
-  .
+  /mnt/ssd/Atenex/Atenex_nova
 codex mcp list
 ```
 
-El argumento `.` hace que el servidor se ligue al checkout/worktree desde el cual lo
-lanza el cliente. Si ya existe un registro con ese nombre, inspeccionarlo antes de
+Codex usa aquí un root absoluto porque su registro es de usuario. Los archivos MCP de
+proyecto pueden usar `.` para seguir el worktree, pero deben pasarlo junto al checkout
+principal esperado. Si ya existe un registro con ese nombre, inspeccionarlo antes de
 reemplazarlo.
 
 Diagnóstico directo del índice de Atenex:
@@ -97,9 +108,11 @@ env \
   doctor --repo /mnt/ssd/Atenex/Atenex_nova --json
 ```
 
-Para otro repositorio, su `.mcp.json` debe conservar el launcher absoluto anterior y
-usar `.` como segundo argumento. Cada root recibe un sidecar independiente bajo
-`.atenex/context/repositories/`.
+Para otro repositorio, su `.mcp.json` debe conservar el launcher absoluto anterior,
+usar `.` como segundo argumento y la ruta absoluta de su checkout principal como
+tercero. Cada root recibe un sidecar independiente bajo
+`.atenex/context/repositories/`. El launcher rechaza un `cwd` de otra familia Git con
+`repository binding mismatch`.
 
 ## Arranque completo del RAG documental
 

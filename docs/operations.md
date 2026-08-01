@@ -105,13 +105,16 @@ atenex-context serve --repo PATH [--data-dir PATH] --transport stdio
 En esta estación, Claude Desktop/Code y Cursor usan el launcher persistente:
 
 ```bash
-backend/scripts/serve_repo_context_mcp.sh PATH
+backend/scripts/serve_repo_context_mcp.sh PATH [EXPECTED_CHECKOUT]
 ```
 
 El launcher resuelve el root, ejecuta una actualización incremental y después
 reemplaza el proceso con el servidor `stdio`. No imprime la indexación por stdout.
-Cuando Claude crea un worktree, el argumento `.` liga el proceso a ese worktree y su
-sidecar derivado queda bajo
+Cuando Claude crea un worktree, el argumento `.` liga el proceso a ese worktree y el
+segundo argumento identifica el checkout principal esperado. El launcher compara los
+`git-common-dir`: permite worktrees del mismo repositorio y rechaza otro `cwd` antes de
+indexar. Por eso `.` no se admite sin `EXPECTED_CHECKOUT` y el launcher no debe
+registrarse globalmente con un root relativo. El sidecar derivado queda bajo
 `INSTALL_ROOT/.atenex/context/repositories/HASH_DEL_ROOT/`; así no ensucia el
 worktree ni comparte una base ligada a otro root. El checkout principal conserva
 `INSTALL_ROOT/.atenex/context/index.sqlite3`. El runtime y las gramáticas son

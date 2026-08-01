@@ -147,7 +147,11 @@ Configuración conceptual equivalente:
 ```toml
 [mcp_servers.repo_context]
 command = "/usr/bin/bash"
-args = ["/ruta/Atenex_nova/backend/scripts/serve_repo_context_mcp.sh", "."]
+args = [
+  "/ruta/Atenex_nova/backend/scripts/serve_repo_context_mcp.sh",
+  ".",
+  "/ruta/al/checkout/principal"
+]
 ```
 
 Para Claude Code, `.mcp.json` es suficiente. La aprobación del servidor de proyecto
@@ -156,6 +160,12 @@ es una decisión local de seguridad del cliente y no se guarda en Git:
 ```bash
 claude mcp list
 ```
+
+`repo-context` no debe registrarse también con alcance de usuario. Un endpoint global
+con `.` hereda el directorio de trabajo de la aplicación y puede quedar ligado a otro
+repositorio. El tercer argumento identifica el checkout principal esperado; el
+launcher acepta sus worktrees Git, pero rechaza cualquier repositorio diferente antes
+de indexar o publicar herramientas.
 
 Claude Desktop en la pestaña **Code** comparte `.mcp.json`, `CLAUDE.md` y la
 configuración de Claude Code. Seleccione ambiente **Local** y esta carpeta como

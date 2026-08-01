@@ -4,7 +4,8 @@
       "command": "/usr/bin/bash",
       "args": [
         "/mnt/ssd/Atenex/Atenex_nova/backend/scripts/serve_repo_context_mcp.sh",
-        "."
+        ".",
+        "/mnt/ssd/Atenex/Atenex_nova"
       ]
     }
   }

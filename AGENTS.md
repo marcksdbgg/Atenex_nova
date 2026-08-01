@@ -21,7 +21,9 @@ Para backend o arquitectura, leer también
 `atenex-context` está implementado en este checkout. Claude Code y los clientes que
 usan `.mcp.json` arrancan
 `backend/scripts/serve_repo_context_mcp.sh`, que refresca incrementalmente el índice
-del checkout o worktree antes de publicar MCP. Antes de una tarea no trivial:
+del checkout o worktree antes de publicar MCP. La configuración de proyecto pasa
+además el checkout Git principal esperado; no registrar otro `repo-context` global
+con `.`. Antes de una tarea no trivial:
 
 1. Llamar `repo_overview` con la tarea como `focus`; no reconstruir contexto leyendo
    todo el repositorio.
