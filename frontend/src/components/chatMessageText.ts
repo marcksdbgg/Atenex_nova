@@ -5,6 +5,9 @@ export function normalizeAssistantText(text: string, language: string): string {
   const cleaned = normalized
     .replace(/^\*{3,}\s*/gm, '')
     .replace(/^#{1,6}\s*/gm, '')
+    .replace(/^\s*[-*]\s+/gm, '• ')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*\n]+)\*/g, '$1')
     .replace(/\r\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n');
 

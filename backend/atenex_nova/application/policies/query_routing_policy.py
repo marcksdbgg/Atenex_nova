@@ -43,6 +43,15 @@ class QueryRoutingPolicy:
         "although",
         "sin embargo",
         "contradict",
+        "contradicts",
+        "contradicted",
+        "contradiction",
+        "contradictions",
+        "contradictory",
+        "contradice",
+        "contradiccion",
+        "contradicción",
+        "contradicciones",
         "contra",
         "conflict",
     }
@@ -75,17 +84,16 @@ class QueryRoutingPolicy:
         has_exact_tokens = any(
             len(token) >= 8 and any(char.isdigit() for char in token) for token in tokens
         ) or any(marker in tokens for marker in self.exact_markers)
-        has_comparison = any(marker in normalized for marker in self.comparison_markers)
-        has_contradiction = any(marker in normalized for marker in self.contradiction_markers)
-        has_global_terms = any(marker in normalized for marker in self.global_markers)
-        has_visual_terms = any(marker in normalized for marker in self.visual_markers)
+        has_comparison = self._contains_marker(normalized, tokens, self.comparison_markers)
+        has_contradiction = self._contains_marker(normalized, tokens, self.contradiction_markers)
+        has_global_terms = self._contains_marker(normalized, tokens, self.global_markers)
+        has_visual_terms = self._contains_marker(normalized, tokens, self.visual_markers)
         multi_clause = (
             normalized.count(" and ")
             + normalized.count(" y ")
             + normalized.count(",")
             + normalized.count(";")
             >= 1
-            or normalized.count("?") > 0
         )
         return QueryFeatures(
             text=text,
@@ -150,10 +158,20 @@ class QueryRoutingPolicy:
         return " ".join(text.strip().lower().split())
 
     @staticmethod
+    def _contains_marker(normalized: str, tokens: set[str], markers: set[str]) -> bool:
+        """Match routing cues as words or phrases, never as arbitrary substrings."""
+        return any(
+            marker in tokens
+            if " " not in marker
+            else re.search(rf"(?<!\w){re.escape(marker)}(?!\w)", normalized) is not None
+            for marker in markers
+        )
+
+    @staticmethod
     def detect_language(text: str) -> str:
         lower = text.lower().strip()
         if not lower:
-            return "en"
+            return "es"
 
         if any(char in lower for char in "aeioun¿¡"):
             accent_hits = sum(char in lower for char in ("á", "é", "í", "ó", "ú", "ñ", "¿", "¡"))
@@ -162,6 +180,28 @@ class QueryRoutingPolicy:
 
         tokens = TOKEN_RE.findall(lower)
         spanish_markers = {
+            "a",
+            "al",
+            "de",
+            "del",
+            "el",
+            "ella",
+            "en",
+            "es",
+            "esta",
+            "este",
+            "la",
+            "las",
+            "lo",
+            "los",
+            "para",
+            "por",
+            "se",
+            "sin",
+            "son",
+            "un",
+            "una",
+            "y",
             "que",
             "como",
             "cual",
@@ -182,6 +222,17 @@ class QueryRoutingPolicy:
             "pagina",
         }
         english_markers = {
+            "a",
+            "an",
+            "are",
+            "for",
+            "in",
+            "is",
+            "of",
+            "the",
+            "to",
+            "with",
+            "without",
             "what",
             "why",
             "how",
@@ -211,5 +262,13 @@ class QueryRoutingPolicy:
             spanish_score += 1
 
         if spanish_score == english_score == 0:
-            return "en"
+            return "es"
         return "es" if spanish_score >= english_score else "en"
+
+    @staticmethod
+    def resolve_language(detected_language: str, collection_language_profile: str) -> str:
+        """Honor an explicit corpus language; use detection only for auto profiles."""
+        profile = collection_language_profile.strip().lower()
+        if profile and profile != "auto":
+            return profile.split("-", 1)[0]
+        return detected_language

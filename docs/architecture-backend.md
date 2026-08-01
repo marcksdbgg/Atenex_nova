@@ -1,10 +1,27 @@
 # Backend Architecture
 
-This guide documents the current backend implementation of Atenex Nova as it exists in the repository today.
+Estado: **Implemented** para Repo Context y para el RAG documental descrito abajo.
+Solo el bounded context Repo Context fue **Verified** en la ejecución del
+2026-07-30; la evidencia del RAG sigue siendo **Historical**.
+
+This guide documents the current backend implementation of Atenex Nova as it exists
+in the repository today. The product now has two explicitly separate bounded
+contexts:
+
+- `repo_context`: the primary product direction, with its own domain, application,
+  infrastructure and presentation packages.
+- the existing document-memory/RAG packages: maintained legacy functionality.
+
+The implemented Repo Context architecture is documented in
+[architecture-repo-context.md](architecture-repo-context.md). Its sidecar database
+must not reuse the document RAG tables or entities.
 
 ## Scope
 
-The backend is a modular monolith built around FastAPI, SQLAlchemy, and worker-driven background jobs. It follows the product contract in [docs/baseline.md](baseline.md) and the current technical audit in [docs/auditoria-completa.md](auditoria-completa.md).
+The legacy backend is a modular monolith built around FastAPI, SQLAlchemy, and
+worker-driven background jobs. It follows the product contract in
+[docs/baseline.md](baseline.md). The technical audit linked through
+[docs/auditoria-completa.md](auditoria-completa.md) is a historical ledger.
 
 ## Entry Points
 
@@ -90,6 +107,14 @@ Current infrastructure adapters include:
 - ColPali-style visual page indexing
 - LLM gateway / runtime adapters
 
+The answer-facing Ollama adapter requests `think=false`. Current Gemma 4 builds
+otherwise spend the generation budget on hidden reasoning before emitting visible
+answer text; retrieval evidence and answer verification remain the responsibility
+of Atenex's application layer. `QueryRoutingPolicy` matches heuristic cues as whole
+words or phrases before it selects a retrieval strategy. An explicit collection
+language profile overrides query-language detection. Spanish lexical tokens fold
+vowel accents for queries written without diacritics while preserving `ñ`.
+
 The repository uses SQLAlchemy async sessions and a single DB session factory, with tables created on startup by the FastAPI lifespan hook.
 
 ### Workers
@@ -132,6 +157,23 @@ The query subsystem first classifies the request, then chooses a routing mode, t
 - visual pages when relevant
 
 Answer generation then selects a synthesis plan, builds a prompt, calls the local LLM adapter, binds citations, computes grounding, and persists the answer.
+
+For the maintained documentary RAG path:
+
+- a question mark alone does not imply `multi_hop`, and local/exact routes retain a
+  direct-answer plan even when a summary appears in the evidence pack;
+- transcript envelopes are removed and long chunks expose a query-centered excerpt;
+  if Qdrant sparse retrieval is empty, chunks retain a local BM25 signal;
+- full `metadata.source_text` remains available for span binding but is excluded
+  from prompt token estimation because only the compact snippet is formatted;
+- graph edges are diversified and may explain traversal, but are not accepted as
+  documentary citations;
+- citation audit expands grouped markers, records invalid/non-citable/unresolved
+  indices, and never appends synthetic markers after binding;
+- the LLM verifier may lower the deterministic verdict or grounding score, never
+  raise it. A clearly English draft for an `es` query triggers one repair attempt;
+  persistent failure returns a Spanish unverified fallback rather than a translated
+  answer.
 
 ### 5. Strict runtime mode
 

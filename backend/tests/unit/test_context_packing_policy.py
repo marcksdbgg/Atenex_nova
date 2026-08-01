@@ -73,3 +73,52 @@ def test_context_packing_limits_document_saturation_for_multi_hop() -> None:
 
     assert per_document["document-a"] <= 2
     assert per_document["document-b"] <= 2
+
+
+def test_context_budget_does_not_count_unprompted_full_source_text() -> None:
+    policy = ContextPackingPolicy()
+    items = [
+        EvidenceItem(
+            id=f"item-{index}",
+            query_id="query-1",
+            source_type="chunk",
+            source_id=f"chunk-{index}",
+            document_id=f"document-{index}",
+            score=1.0 - (index * 0.01),
+            rank=index + 1,
+            snippet=f"Fragmento breve y pertinente número {index} para responder.",
+            metadata={"source_text": "transcripción " * 20_000},
+        )
+        for index in range(4)
+    ]
+
+    pack = policy.build("query-1", "factual_local", items, token_budget=300)
+
+    assert len(pack.items) == 4
+    assert pack.estimated_tokens < 100
+
+
+def test_graph_edges_cannot_saturate_multi_hop_context() -> None:
+    policy = ContextPackingPolicy()
+    edges = [
+        _make_item(
+            index,
+            f"Relación de grafo repetida número {index}",
+            source_type="graph_edge",
+            document_id="document-a",
+        )
+        for index in range(6)
+    ]
+    chunks = [
+        _make_item(
+            index + 10,
+            f"Fragmento documental diverso número {index}",
+            document_id=f"document-{index + 2}",
+        )
+        for index in range(4)
+    ]
+
+    pack = policy.build("query-1", "multi_hop", [*edges, *chunks], token_budget=600)
+
+    assert sum(item.source_type == "graph_edge" for item in pack.items) <= 2
+    assert sum(item.source_type == "chunk" for item in pack.items) == 4

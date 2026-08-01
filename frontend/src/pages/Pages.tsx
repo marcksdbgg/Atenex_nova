@@ -26,6 +26,7 @@ import type {
   QueryHistoryResponse,
   QuerySearchResponse,
   Chat,
+  ChatMessage,
 } from '../types/api';
 
 type UploadStatus = 'queued' | 'uploading' | 'done' | 'error';
@@ -331,6 +332,61 @@ function createPendingTurn(prompt: string, mode: string, action: 'search' | 'ans
     totalHits: 0,
     isPending: true,
   };
+}
+
+function mapChatMessagesToTurns(messages: ChatMessage[]): ChatTurn[] {
+  const chatTurns: ChatTurn[] = [];
+
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (message.role !== 'user') continue;
+
+    const assistant = messages[index + 1]?.role === 'assistant' ? messages[index + 1] : null;
+    chatTurns.push({
+      id: message.id,
+      queryId: message.id,
+      query: message.content,
+      answerId: assistant?.id,
+      routeMode: 'auto',
+      intent: 'user_chat',
+      language: 'es',
+      createdAt: message.created_at,
+      kind: 'answer',
+      answer: assistant?.content,
+      isPending: false,
+    });
+
+    if (assistant) index += 1;
+  }
+
+  return chatTurns;
+}
+
+async function recoverSavedAnswer(chatId: string, prompt: string): Promise<AnswerResponse | null> {
+  const normalizedPrompt = prompt.trim().toLocaleLowerCase('es');
+
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      const messages = await api.getChatMessages(chatId, 50);
+      for (let index = messages.length - 2; index >= 0; index -= 1) {
+        const userMessage = messages[index];
+        const assistantMessage = messages[index + 1];
+        if (
+          userMessage.role === 'user'
+          && userMessage.content.trim().toLocaleLowerCase('es') === normalizedPrompt
+          && assistantMessage?.role === 'assistant'
+        ) {
+          return await api.getAnswer(assistantMessage.id);
+        }
+      }
+    } catch {
+      // The API may still be finishing the request; retry while the pending turn stays visible.
+    }
+
+    await new Promise(resolve => window.setTimeout(resolve, 3_000));
+  }
+
+  return null;
 }
 
 type DashboardGlyphName = 'collections' | 'documents' | 'queries' | 'jobs';
@@ -1253,6 +1309,20 @@ export function CollectionsPage() {
     }
   };
 
+  const handleResumeIngestion = async (collectionId: string) => {
+    setBusyCollectionId(collectionId);
+    setMessage('');
+    try {
+      const response = await api.resumeCollectionIngestion(collectionId);
+      setMessage(`Se han vuelto a encolar ${response.requeued_count} documentos pendientes para procesar.`);
+      await refreshCollectionDocuments(collectionId, { silent: true });
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'No se pudo reanudar la ingesta.');
+    } finally {
+      setBusyCollectionId('');
+    }
+  };
+
   useEffect(() => {
     collections.forEach(collection => {
       const documents = documentsByCollection[collection.id] ?? [];
@@ -1450,6 +1520,17 @@ export function CollectionsPage() {
                   <span className="badge badge--accent">{collection.language_profile}</span>
                   <span className="badge badge--info">{collectionDocuments.length} documentos</span>
                   <span className={`badge badge--${failedCount > 0 ? 'error' : 'success'}`}>{failedCount > 0 ? `${failedCount} con error` : 'estable'}</span>
+                  {failedCount > 0 || liveDocuments.length > 0 ? (
+                    <button
+                      className="btn btn-primary collection-card__action"
+                      onClick={() => void handleResumeIngestion(collection.id)}
+                      disabled={isRebuilding || busyCollectionId === collection.id}
+                      type="button"
+                      style={{ background: '#d97706', borderColor: '#b45309', color: '#fff' }}
+                    >
+                      {busyCollectionId === collection.id ? 'Reanudando...' : 'Resumir ingesta'}
+                    </button>
+                  ) : null}
                   <button
                     className="btn btn-secondary collection-card__action"
                     onClick={() => void handleRebuild(collection.id)}
@@ -1468,6 +1549,53 @@ export function CollectionsPage() {
                   </button>
                 </div>
               </div>
+
+              {collectionDocuments.length > 0 ? (
+                <div style={{ display: 'grid', gap: 'var(--space-2)', background: 'var(--color-bg-secondary)', padding: 'var(--space-3) var(--space-4)', borderRadius: 'var(--radius-md)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--font-xs)', fontWeight: '500', color: 'var(--color-text-secondary)' }}>
+                    <span>Progreso de Ingesta: {readyCount} de {collectionDocuments.length} listos</span>
+                    <span>{Math.round((readyCount / collectionDocuments.length) * 100)}%</span>
+                  </div>
+                  <div style={{ width: '100%', height: '8px', background: 'var(--color-bg-primary)', border: '1px solid var(--color-border)', borderRadius: '4px', overflow: 'hidden' }}>
+                    <div style={{ width: `${(readyCount / collectionDocuments.length) * 100}%`, height: '100%', background: readyCount === collectionDocuments.length ? '#10b981' : 'var(--color-primary)', transition: 'width 0.4s ease-out' }} />
+                  </div>
+                </div>
+              ) : null}
+
+              {failedCount > 0 || liveDocuments.length > 0 ? (
+                <div style={{
+                  background: 'rgba(217, 119, 6, 0.08)',
+                  border: '1px solid rgba(217, 119, 6, 0.25)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: 'var(--space-4)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 'var(--space-4)',
+                  marginTop: '-8px'
+                }}>
+                  <div style={{ display: 'flex', gap: 'var(--space-3)', alignItems: 'center' }}>
+                    <span style={{ fontSize: '1.25rem' }}>⚠️</span>
+                    <div>
+                      <strong style={{ color: '#d97706', fontSize: 'var(--font-sm)' }}>Corpus Incompleto / Pendiente</strong>
+                      <p style={{ margin: 'var(--space-1) 0 0', fontSize: 'var(--font-xs)', color: 'var(--color-text-secondary)' }}>
+                        {liveDocuments.length > 0 ? `${liveDocuments.length} documentos procesándose. ` : ''}
+                        {failedCount > 0 ? `${failedCount} documentos fallaron. ` : ''}
+                        Puedes reanudar la ingesta para encolar los documentos pendientes sin volver a subir todo.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => void handleResumeIngestion(collection.id)}
+                    disabled={isRebuilding || busyCollectionId === collection.id}
+                    type="button"
+                    style={{ background: '#d97706', borderColor: '#b45309', color: '#fff', fontSize: 'var(--font-xs)', padding: 'var(--space-2) var(--space-4)' }}
+                  >
+                    Resumir Ingesta
+                  </button>
+                </div>
+              ) : null}
               {pipelineStatus ? (
                 <div className="collection-activity-panel card">
                   <div className="card__header">
@@ -2041,8 +2169,21 @@ export function CollectionsPage() {
                           <div style={{ minWidth: 0 }}>
                             <div className="inventory-name" title={displayTitle}>{displayTitle}</div>
                             <div className="inventory-meta" title={(collectionPath || document.source_path) ?? undefined}>{collectionPath || document.source_path || 'Ruta no disponible'}</div>
+                            {document.status === 'failed' && document.error_message && (
+                              <div className="inventory-error" style={{ color: '#ef4444', fontSize: 'var(--font-xs)', marginTop: 'var(--space-1)', whiteSpace: 'pre-wrap', textAlign: 'left' }}>
+                                ⚠️ {document.error_message}
+                              </div>
+                            )}
                           </div>
-                          <span className={`badge badge--${pipeline.tone}`}>{pipeline.label}</span>
+                          <span className={`badge badge--${pipeline.tone}`}>
+                            {document.status !== 'ready' && document.status !== 'failed' && (
+                              <svg className="animate-spin" style={{ width: '0.75rem', height: '0.75rem', marginRight: '0.25rem', display: 'inline-block', verticalAlign: 'middle' }} viewBox="0 0 24 24" fill="none">
+                                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" style={{ opacity: 0.25 }} />
+                                <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                              </svg>
+                            )}
+                            {pipeline.label}
+                          </span>
                           <span className="inventory-meta">{document.mime_type}</span>
                           <span className="inventory-meta">{formatRelativeDate(document.updated_at)}</span>
                         </button>
@@ -2113,6 +2254,7 @@ export function QueryPage() {
   const [contextMobileOpen, setContextMobileOpen] = useState(false);
   const [pendingQuery, setPendingQuery] = useState('');
   const [pendingTurnId, setPendingTurnId] = useState('');
+  const [recoveringResponse, setRecoveringResponse] = useState(false);
   const [error, setError] = useState('');
   const [activeAnswer, setActiveAnswer] = useState<AnswerResponse | null>(null);
   const [activeSearchHits, setActiveSearchHits] = useState<QueryHit[]>([]);
@@ -2130,15 +2272,16 @@ export function QueryPage() {
   const [newChatTitle, setNewChatTitle] = useState<string>('');
   const [loadingChats, setLoadingChats] = useState<boolean>(false);
   const [technicalTab, setTechnicalTab] = useState<'summary' | 'rag_audit'>('summary');
-  const [isLargeScreen, setIsLargeScreen] = useState(typeof window !== 'undefined' ? window.innerWidth > 1280 : true);
+  const [isLargeScreen, setIsLargeScreen] = useState(typeof window !== 'undefined' ? window.innerWidth > 900 : true);
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const handleResize = () => setIsLargeScreen(window.innerWidth > 1280);
+    const handleResize = () => setIsLargeScreen(window.innerWidth > 900);
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
   const answerDetailByTurnIdRef = useRef<Record<string, AnswerResponse>>({});
+  const pendingTurnIdRef = useRef('');
   const composerFormRef = useRef<HTMLFormElement | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
   const threadViewportRef = useRef<HTMLDivElement | null>(null);
@@ -2295,45 +2438,21 @@ export function QueryPage() {
       .then(messages => {
         if (!mounted) return;
 
-        const chatTurns: ChatTurn[] = [];
-        for (let i = 0; i < messages.length; i++) {
-          const msg = messages[i];
-          if (msg.role === 'user') {
-            const nextMsg = messages[i + 1];
-            const hasAssistant = nextMsg && nextMsg.role === 'assistant';
-            const assistantContent = hasAssistant ? nextMsg.content : undefined;
-            const assistantId = hasAssistant ? nextMsg.id : undefined;
+        const chatTurns = mapChatMessagesToTurns(messages);
 
-            chatTurns.push({
-              id: msg.id,
-              queryId: msg.id,
-              query: msg.content,
-              answerId: assistantId,
-              routeMode: 'auto',
-              intent: 'user_chat',
-              language: 'es',
-              createdAt: msg.created_at,
-              kind: 'answer',
-              answer: assistantContent,
-              isPending: false,
-            });
-
-            if (hasAssistant) {
-              i++;
-            }
-          }
-        }
-
-        setTurns(chatTurns);
+        setTurns(current => {
+          const pendingTurns = current.filter(turn => turn.id === pendingTurnIdRef.current);
+          return [...chatTurns, ...pendingTurns];
+        });
         setHydrationFailedByTurnId({});
         const lastTurn = chatTurns.at(-1) ?? null;
 
-        if (!lastTurn) {
+        if (lastTurn) {
+          void hydrateTurn(lastTurn);
+        } else if (!pendingTurnIdRef.current) {
           setActiveTurnId('');
           setActiveAnswer(null);
           setActiveSearchHits([]);
-        } else {
-          void hydrateTurn(lastTurn);
         }
       })
       .catch(() => {
@@ -2347,11 +2466,11 @@ export function QueryPage() {
 
   const handleCreateChat = async (e: FormEvent) => {
     e.preventDefault();
-    if (!collectionId || !newChatTitle.trim()) return;
+    if (!collectionId) return;
     try {
       const chat = await api.createChat({
         collection_id: collectionId,
-        title: newChatTitle.trim(),
+        title: newChatTitle.trim() || 'Nueva conversación',
       });
       setChats(current => [chat, ...current]);
       setActiveChatId(chat.id);
@@ -2544,35 +2663,30 @@ export function QueryPage() {
   useEffect(() => {
     const viewport = threadViewportRef.current;
     if (!viewport) return;
-    viewport.scrollTop = viewport.scrollHeight;
 
     const timer = setTimeout(() => {
+      if (pendingTurnId || loading) {
+        viewport.scrollTop = viewport.scrollHeight;
+        return;
+      }
+
+      if (activeTurnId) {
+        const activeElement = viewport.querySelector<HTMLElement>(`[data-turn-id="${activeTurnId}"]`);
+        if (activeElement) {
+          viewport.scrollTop = Math.max(activeElement.offsetTop - viewport.offsetTop, 0);
+          return;
+        }
+      }
+
       viewport.scrollTop = viewport.scrollHeight;
     }, 50);
 
     return () => clearTimeout(timer);
-  }, [visibleTurns.length, pendingTurnId, loading, lastTurnAnswer]);
+  }, [activeTurnId, visibleTurns.length, pendingTurnId, loading, lastTurnAnswer]);
 
   const canSubmit = collectionId.length > 0 && query.trim().length > 0 && !loading && !loadingCollections;
   const routeModes = ['auto', 'exact', 'factual_local', 'multi_hop', 'global', 'argumentative', 'visual'];
 
-
-  const quickQuerySuggestions = useMemo(() => {
-    const defaults = [
-      'Resume la idea principal del corpus en 4 líneas con citas.',
-      '¿Qué postura crítica se repite en los documentos y con qué evidencia?',
-      'Extrae 3 conceptos literarios clave y su fragmento más representativo.',
-      'Compara dos enfoques presentes en la colección y justifica con citas.',
-    ];
-
-    const memoryBased = recentMemory
-      .map(item => item.query.trim())
-      .filter(Boolean)
-      .slice(0, 2)
-      .map(item => `Reformula y sintetiza: ${item}`);
-
-    return Array.from(new Set([...memoryBased, ...defaults])).slice(0, 5);
-  }, [recentMemory]);
 
   const qualityAlerts = useMemo(() => {
     if (!activeTurn || activeTurn.kind !== 'answer') {
@@ -2640,42 +2754,23 @@ export function QueryPage() {
     setQuery('');
     setPendingQuery(prompt);
     setPendingTurnId(pendingTurn.id);
+    pendingTurnIdRef.current = pendingTurn.id;
     setActiveTurnId('');
     setActiveAnswer(null);
     setActiveSearchHits([]);
     setTurns(current => [...current, pendingTurn]);
-    try {
-      let submittedTurn: ChatTurn;
 
-      if (action === 'search') {
-        const response = await api.searchQuery({
-          collection_id: collectionId,
-          query: prompt,
-          mode,
-        });
-
-        submittedTurn = mapSearchResultToTurn(response);
-        setActiveAnswer(null);
-        setActiveSearchHits(response.hits);
-      } else {
-        const response = await api.answerQuery({
-          collection_id: collectionId,
-          query: prompt,
-          mode,
-          generation_profile: 'standard',
-          chat_id: chatIdToUse || null,
-        });
-
-        submittedTurn = mapAnswerResultToTurn(response);
-        const evidence = getAnswerEvidence(response);
-        setActiveAnswer(response);
-        setActiveSearchHits(evidence);
-        answerDetailByTurnIdRef.current[submittedTurn.id] = response;
+    const commitTurn = (submittedTurn: ChatTurn, answerResponse?: AnswerResponse) => {
+      if (answerResponse) {
+        setActiveAnswer(answerResponse);
+        setActiveSearchHits(getAnswerEvidence(answerResponse));
+        answerDetailByTurnIdRef.current[submittedTurn.id] = answerResponse;
       }
 
       setTurns(current => current.map(turn => (turn.id === pendingTurn.id ? submittedTurn : turn)));
       setActiveTurnId(submittedTurn.id);
       setPendingTurnId('');
+      pendingTurnIdRef.current = '';
 
       const historyEntry: QueryHistoryResponse = {
         query_id: submittedTurn.queryId,
@@ -2696,13 +2791,50 @@ export function QueryPage() {
         ...current,
         [collectionId]: [historyEntry, ...(current[collectionId] ?? [])].slice(0, 20),
       }));
-
       setPendingQuery('');
+    };
+
+    try {
+      if (action === 'search') {
+        const response = await api.searchQuery({
+          collection_id: collectionId,
+          query: prompt,
+          mode,
+        });
+
+        const submittedTurn = mapSearchResultToTurn(response);
+        setActiveAnswer(null);
+        setActiveSearchHits(response.hits);
+        commitTurn(submittedTurn);
+      } else {
+        const response = await api.answerQuery({
+          collection_id: collectionId,
+          query: prompt,
+          mode,
+          generation_profile: 'standard',
+          chat_id: chatIdToUse || null,
+        });
+
+        commitTurn(mapAnswerResultToTurn(response), response);
+      }
     } catch (submissionError) {
+      if (action === 'answer' && chatIdToUse) {
+        setRecoveringResponse(true);
+        const recoveredResponse = await recoverSavedAnswer(chatIdToUse, prompt);
+        if (recoveredResponse) {
+          commitTurn(mapAnswerResultToTurn(recoveredResponse), recoveredResponse);
+          setError('');
+          setRecoveringResponse(false);
+          return;
+        }
+      }
+
       setTurns(current => current.filter(turn => turn.id !== pendingTurn.id));
       setPendingQuery('');
       setPendingTurnId('');
-      setError(submissionError instanceof Error ? submissionError.message : 'La consulta falló.');
+      pendingTurnIdRef.current = '';
+      setRecoveringResponse(false);
+      setError(submissionError instanceof Error ? submissionError.message : 'No se pudo completar la consulta.');
     } finally {
       setLoading(false);
     }
@@ -2710,24 +2842,24 @@ export function QueryPage() {
 
   return (
     <div className="query-chat-page animate-fade-in-up">
-      <div className="query-chat-layout" style={{ display: 'grid', gridTemplateColumns: isLargeScreen ? '240px minmax(0, 1fr) minmax(320px, 420px)' : '1fr', gap: 'var(--space-4)' }}>
+      <div className="query-chat-layout" style={{ gridTemplateColumns: isLargeScreen ? '210px minmax(0, 1fr)' : '1fr' }}>
         {/* Sidebar de Chats/Conversaciones */}
-        <aside className="query-threads-sidebar card" style={{ padding: 'var(--space-3)', display: 'grid', gridTemplateRows: 'auto auto 1fr', gap: 'var(--space-3)', background: 'rgba(255, 252, 246, 0.55)', minWidth: 0, height: '100%' }}>
-          <div className="card__title" style={{ fontSize: 'var(--font-sm)', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--color-text-tertiary)' }}>Conversaciones</div>
+        <aside className="query-threads-sidebar">
+          <div className="query-threads-sidebar__title">Conversaciones</div>
           
-          <form onSubmit={handleCreateChat} style={{ display: 'flex', gap: 'var(--space-2)' }}>
+          <form onSubmit={handleCreateChat} className="query-new-chat">
             <input
               type="text"
-              placeholder="Nueva conversación..."
+              placeholder="Nombre opcional"
               value={newChatTitle}
               onChange={e => setNewChatTitle(e.target.value)}
               className="query-select"
-              style={{ flex: 1, padding: '0.4rem 0.6rem', fontSize: 'var(--font-xs)', border: '1px solid rgba(120,76,43,0.25)' }}
+              aria-label="Nombre de la nueva conversación"
             />
-            <button type="submit" className="btn btn-primary" style={{ padding: '0.4rem 0.6rem', fontSize: 'var(--font-xs)' }}>+</button>
+            <button type="submit" className="btn btn-ghost">Nueva</button>
           </form>
 
-          <div style={{ overflowY: 'auto', display: 'grid', gap: 'var(--space-2)', alignContent: 'start', height: '100%' }}>
+          <div className="query-thread-list">
             {loadingChats ? (
               <p className="query-panel-note">Cargando...</p>
             ) : chats.length === 0 ? (
@@ -2738,37 +2870,22 @@ export function QueryPage() {
                 return (
                   <div
                     key={c.id}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: 'var(--space-2)',
-                      borderRadius: 'var(--radius-md)',
-                      background: isActive ? 'rgba(99, 102, 241, 0.12)' : 'transparent',
-                      border: isActive ? '1px solid rgba(99, 102, 241, 0.35)' : '1px solid transparent',
-                      cursor: 'pointer',
-                    }}
+                    className={`query-thread-item${isActive ? ' query-thread-item--active' : ''}`}
                     onClick={() => setActiveChatId(c.id)}
                   >
-                    <span style={{ fontSize: 'var(--font-xs)', fontWeight: isActive ? 'bold' : 'normal', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, paddingRight: '0.5rem' }}>
+                    <span className="query-thread-item__title">
                       {c.title}
                     </span>
                     <button
                       type="button"
+                      className="query-thread-item__delete"
+                      aria-label={`Eliminar conversación ${c.title}`}
                       onClick={(e) => {
                         e.stopPropagation();
                         void handleDeleteChat(c.id);
                       }}
-                      style={{
-                        background: 'transparent',
-                        border: 'none',
-                        color: 'var(--color-error)',
-                        cursor: 'pointer',
-                        padding: '0 0.2rem',
-                        fontSize: 'var(--font-xs)'
-                      }}
                     >
-                      ✕
+                      ×
                     </button>
                   </div>
                 );
@@ -2778,49 +2895,45 @@ export function QueryPage() {
         </aside>
 
         <section className="query-chat" aria-label="Chat principal de consulta">
-          <header className="query-chat__header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 'var(--space-3)', paddingBottom: 'var(--space-3)', borderBottom: '1px solid rgba(120, 76, 43, 0.12)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
-              <label className="query-field" style={{ margin: 0, flexDirection: 'row', alignItems: 'center', gap: 'var(--space-2)' }}>
-                <span className="query-label" style={{ fontWeight: 'bold', fontSize: 'var(--font-sm)', color: 'var(--color-text-secondary)' }}>Colección:</span>
+          <header className="query-chat__header">
+            <div className="query-chat__toolbar">
+              <label className="query-collection-picker">
+                <span className="query-label">Colección</span>
                 <select
                   value={collectionId}
                   onChange={event => setCollectionId(event.target.value)}
                   disabled={loadingCollections}
                   className="query-select"
-                  style={{ minWidth: '180px', padding: '0.4rem 0.6rem' }}
                 >
                   {collections.length === 0 ? <option value="">No hay colecciones</option> : collections.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
                 </select>
               </label>
 
-              <button
-                type="button"
-                className="btn btn-secondary query-advanced-toggle"
-                onClick={() => setShowAdvancedControls(current => !current)}
-                aria-expanded={showAdvancedControls}
-                style={{ padding: '0.4rem 0.8rem', fontSize: 'var(--font-xs)' }}
-              >
-                {showAdvancedControls ? 'Ocultar opciones avanzadas' : 'Opciones avanzadas'}
-              </button>
-
-              <button
-                type="button"
-                className="btn btn-secondary query-context-toggle"
-                onClick={() => setContextMobileOpen(current => !current)}
-                style={{ padding: '0.4rem 0.8rem', fontSize: 'var(--font-xs)' }}
-              >
-                {contextMobileOpen ? 'Ocultar panel lateral' : 'Ver panel lateral'}
-              </button>
+              <span className="query-chat__count">{collectionDocuments.length} documentos · {visibleTurns.length} turnos</span>
             </div>
 
-            <div className="query-chat__meta" aria-label="Resumen de sesión">
-              <span className="query-chip" style={{ background: 'rgba(160, 90, 44, 0.08)', color: 'var(--color-text-accent)' }}>{collectionDocuments.length} documentos</span>
-              <span className="query-chip" style={{ background: 'rgba(160, 90, 44, 0.08)', color: 'var(--color-text-accent)' }}>{visibleTurns.length} turnos</span>
+            <div className="query-chat__header-actions">
+              <button
+                type="button"
+                className="btn btn-ghost query-advanced-toggle"
+                onClick={() => setShowAdvancedControls(current => !current)}
+                aria-expanded={showAdvancedControls}
+              >
+                {showAdvancedControls ? 'Cerrar ajustes' : 'Ajustes'}
+              </button>
+
+              <button
+                type="button"
+                className="btn btn-ghost query-context-toggle"
+                onClick={() => setContextMobileOpen(current => !current)}
+              >
+                {contextMobileOpen ? 'Ocultar fuentes' : 'Ver fuentes'}
+              </button>
             </div>
           </header>
 
           {showAdvancedControls ? (
-            <div className="query-advanced-panel" role="group" aria-label="Opciones avanzadas" style={{ border: '1px dashed rgba(120, 76, 43, 0.24)', borderRadius: 'var(--radius-lg)', background: 'rgba(255, 255, 255, 0.42)', padding: 'var(--space-3)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 'var(--space-3)' }}>
+            <div className="query-advanced-panel" role="group" aria-label="Opciones avanzadas">
               <label className="query-field">
                 <span className="query-label">Ruta de recuperación</span>
                 <select
@@ -2856,25 +2969,11 @@ export function QueryPage() {
             </div>
           ) : null}
 
-          <section className="query-chat__quick-prompts" aria-label="Sugerencias rápidas de consulta">
-            <div className="query-panel-heading">Sugerencias rápidas</div>
-            <div className="query-suggestion-list">
-              {quickQuerySuggestions.map(suggestion => (
-                <button
-                  key={suggestion}
-                  type="button"
-                  className="query-suggestion-pill"
-                  onClick={() => {
-                    setQuery(suggestion);
-                    composerInputRef.current?.focus();
-                  }}
-                  disabled={loading || loadingCollections}
-                >
-                  {suggestion}
-                </button>
-              ))}
+          {recoveringResponse ? (
+            <div className="query-recovery" role="status">
+              La conexión se interrumpió. Recuperando la respuesta que Atenex sigue procesando…
             </div>
-          </section>
+          ) : null}
 
           {error ? (
             <div className="query-alert" role="alert">
@@ -2912,21 +3011,21 @@ export function QueryPage() {
               }}
               rows={2}
               maxLength={1200}
-              placeholder="Escribe tu pregunta. Enter envia, Shift+Enter nueva linea."
+              placeholder="Pregunta sobre todos los documentos…"
               className="query-textarea query-textarea--chat"
               aria-label="Caja de mensaje"
             />
 
             <div className="query-chat__composer-footer">
               <button className="btn btn-primary" type="submit" disabled={!canSubmit}>
-                {loading ? (action === 'search' ? 'Buscando...' : 'Generando...') : action === 'search' ? 'Buscar evidencia' : 'Enviar'}
+                {recoveringResponse ? 'Recuperando…' : loading ? (action === 'search' ? 'Buscando…' : 'Generando…') : action === 'search' ? 'Buscar' : 'Enviar'}
               </button>
             </div>
           </form>
         </section>
 
-        <aside className={`query-side-rail${contextMobileOpen ? ' query-side-rail--open' : ''}`}>
-          <section className="query-side-card card" aria-label="Panel de citas y fragmentos">
+        <aside className={`query-side-rail${contextMobileOpen ? ' query-side-rail--open' : ''}`} aria-hidden={!contextMobileOpen}>
+          <section className="query-side-card" aria-label="Panel de citas y fragmentos">
             <div className="card__header">
               <div>
                 <div className="card__title">Citas y fragmentos</div>
@@ -2980,7 +3079,7 @@ export function QueryPage() {
             )}
           </section>
 
-          <section className="query-side-card card" aria-label="Panel técnico de contexto" style={{ display: 'grid', gap: 'var(--space-4)' }}>
+          <section className="query-side-card" aria-label="Panel técnico de contexto" style={{ display: 'grid', gap: 'var(--space-4)' }}>
             <div className="card__header" style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 'var(--space-2)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>

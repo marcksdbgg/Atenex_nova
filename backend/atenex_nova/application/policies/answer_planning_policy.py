@@ -13,8 +13,10 @@ class AnswerPlanningPolicy:
             return "visual_grounded_synthesis"
         if evidence_pack.contradictions:
             return "argument_synthesis"
+        if evidence_pack.route_mode in {"exact", "factual_local"}:
+            return "direct_answer"
         if len(evidence_pack.items) > 8:
             return "hierarchical_synthesis"
-        if evidence_pack.summaries:
+        if evidence_pack.route_mode == "global" and evidence_pack.summaries:
             return "global_synthesis"
         return "direct_answer"

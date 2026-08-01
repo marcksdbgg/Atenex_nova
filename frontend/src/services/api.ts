@@ -104,11 +104,11 @@ class ApiClient {
         signal: controller.signal,
       });
     } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') {
+      if (controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
         const fallbackSeconds = Math.round(timeoutMs / 1000);
         throw new Error(timeoutMessage ?? `La API tardó demasiado en responder (${fallbackSeconds}s).`);
       }
-      throw error;
+      throw new Error('Se perdió la conexión con la API local. Atenex intentará recuperar la respuesta guardada.');
     } finally {
       window.clearTimeout(timeout);
     }
@@ -157,6 +157,8 @@ class ApiClient {
   getCollection = (id: string) => this.request<Collection>(`/collections/${id}`);
   getCollectionPipelineStatus = (id: string) =>
     this.request<CollectionPipelineStatus>(`/collections/${id}/pipeline-status`);
+  resumeCollectionIngestion = (id: string) =>
+    this.request<{ requeued_count: number }>(`/collections/${id}/resume-ingestion`, { method: 'POST' });
   listCollectionImportSessions = (collectionId: string, offset = 0, limit = 20) =>
     this.request<ImportSession[]>(
       `/collections/${collectionId}/import-sessions?offset=${offset}&limit=${limit}`,

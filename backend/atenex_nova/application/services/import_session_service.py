@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from atenex_nova.application.services.document_service import DocumentService
 from atenex_nova.domain.entities.document import Document
+from atenex_nova.domain.value_objects.identifiers import DocumentStatus
 from atenex_nova.infrastructure.db.repositories.sql_import_session_repo import (
     ImportSessionItemRecord,
     ImportSessionRecord,
@@ -126,6 +127,7 @@ class ImportSessionService:
         )
 
         documents: list[Document] = []
+        seen_checksums: dict[str, Document] = {}
         for file_path in files:
             relative_file_path = file_path.relative_to(resolved_folder).as_posix()
             target_collection_path = DocumentService._join_collection_paths(
@@ -136,8 +138,11 @@ class ImportSessionService:
             checksum = DocumentService._checksum_file(file_path)
             try:
                 existing = await self._doc_service.find_by_collection_checksum(collection_id, checksum)
-                if existing is not None:
-                    doc = existing
+                doc_in_session = seen_checksums.get(checksum)
+                is_duplicate = doc_in_session is not None
+                doc = doc_in_session or existing
+
+                if is_duplicate or (doc is not None and doc.status == DocumentStatus.READY):
                     await self._repo.add_item(
                         import_session.id,
                         relative_path=relative_file_path,
@@ -145,7 +150,7 @@ class ImportSessionService:
                         checksum=checksum,
                         mime_type=mime_type,
                         status="deduplicated",
-                        document_id=doc.id,
+                        document_id=doc.id if doc else None,
                     )
                     await self._repo.increment_counters(
                         import_session.id,
@@ -159,6 +164,7 @@ class ImportSessionService:
                         title=target_collection_path or file_path.name,
                         collection_path=target_collection_path,
                     )
+                    seen_checksums[checksum] = doc
                     jobs = await self._job_repo.list_by_target(doc.id, limit=1)
                     await self._repo.add_item(
                         import_session.id,

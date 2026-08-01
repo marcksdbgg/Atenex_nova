@@ -65,6 +65,11 @@ class OllamaAdapter:
             "model": self._model,
             "prompt": prompt,
             "stream": False,
+            # Gemma 4 enables internal reasoning by default in current Ollama
+            # releases. Atenex needs the answer text, not hidden reasoning that
+            # can consume the entire generation budget before a response is
+            # emitted.
+            "think": False,
             "options": options,
         }
         if stop:

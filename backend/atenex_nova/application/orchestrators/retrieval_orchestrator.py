@@ -25,6 +25,7 @@ from atenex_nova.domain.entities.summary_node import SummaryNode
 from atenex_nova.domain.repositories.vector_index import HybridIndex
 from atenex_nova.domain.value_objects.identifiers import new_id
 from atenex_nova.infrastructure.db.repositories.sql_chunk_repo import SqlChunkRepository
+from atenex_nova.infrastructure.db.repositories.sql_collection_repo import SqlCollectionRepository
 from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocumentRepository
 from atenex_nova.infrastructure.db.repositories.sql_proposition_repo import SqlPropositionRepository
 from atenex_nova.infrastructure.db.repositories.sql_query_repo import SqlQueryRepository
@@ -116,6 +117,7 @@ class RetrievalOrchestrator:
 
     async def search(self, collection_id: str, query_text: str, mode: str = "auto") -> SearchResult:
         query_repo = SqlQueryRepository(self._session)
+        collection_repo = SqlCollectionRepository(self._session)
         doc_repo = SqlDocumentRepository(self._session)
         chunk_repo = SqlChunkRepository(self._session)
         proposition_repo = SqlPropositionRepository(self._session)
@@ -123,6 +125,11 @@ class RetrievalOrchestrator:
         relation_repo = SqlRelationRepository(self._session)
 
         features = self._router.extract_features(query_text)
+        collection = await collection_repo.get_by_id(collection_id)
+        language = self._router.resolve_language(
+            features.language,
+            collection.language_profile if collection is not None else "auto",
+        )
         route_mode = self._router.choose_mode(features) if mode == "auto" else mode
         route_mode_name = route_mode.value if hasattr(route_mode, "value") else str(route_mode)
         route_reason = self._router.explain_route(features, route_mode_name)
@@ -132,14 +139,14 @@ class RetrievalOrchestrator:
             collection_id=collection_id,
             text=query_text,
             normalized_text=features.normalized_text,
-            language=features.language,
+            language=language,
             intent=intent.value,
             route_mode=route_mode_name,
         )
         await query_repo.create(query)
         logger.info(
             f"Search started: '{query_text}' | Collection: {collection_id} | Mode: {mode} "
-            f"-> Routed Mode: {route_mode_name} | Intent: {intent.value} | Language: {features.language}"
+            f"-> Routed Mode: {route_mode_name} | Intent: {intent.value} | Language: {language}"
         )
 
         async with self._audit.step(
@@ -507,6 +514,7 @@ class RetrievalOrchestrator:
                                 document_titles=document_titles,
                                 score=c["score"],
                                 stage="dense_turbo_ip",
+                                query_text=query.normalized_text or query.text,
                             )
                             dense_hits.append(hit)
                     if dense_metrics is not None:
@@ -546,7 +554,7 @@ class RetrievalOrchestrator:
                 )
             except Exception as e:
                 logger.warning("Qdrant sparse chunk search failed: %s", e)
-        else:
+        if not sparse_hits:
             if not chunks:
                 repo = SqlChunkRepository(self._session)
                 chunks = await repo.list_by_collection(query.collection_id)
@@ -554,7 +562,13 @@ class RetrievalOrchestrator:
                 sparse_hits = self._score_sparse_candidates(
                     query_text=query.normalized_text or query.text,
                     items=chunks,
-                    builder=lambda item, score: self._build_chunk_hit(item, document_titles, score, "local_sparse"),
+                    builder=lambda item, score: self._build_chunk_hit(
+                        item,
+                        document_titles,
+                        score,
+                        "local_sparse",
+                        query.normalized_text or query.text,
+                    ),
                     text_getter=lambda item: item.text,
                     limit=40,
                 )
@@ -570,7 +584,13 @@ class RetrievalOrchestrator:
                 return self._score_sparse_candidates(
                     query_text=query.normalized_text or query.text,
                     items=chunks,
-                    builder=lambda item, score: self._build_chunk_hit(item, document_titles, score, "local_sparse"),
+                    builder=lambda item, score: self._build_chunk_hit(
+                        item,
+                        document_titles,
+                        score,
+                        "local_sparse",
+                        query.normalized_text or query.text,
+                    ),
                     text_getter=lambda item: item.text,
                     limit=20,
                 )
@@ -942,7 +962,15 @@ class RetrievalOrchestrator:
         return ranked[:limit]
 
     def _rank_hits(self, query: Query, hits: list[SearchHit], route_mode: str, limit: int) -> list[SearchHit]:
-        return self._rerank_hits(query, hits, route_mode, limit=limit)
+        substantive_hits = [
+            hit
+            for hit in hits
+            if not (
+                hit.source_type == "chunk"
+                and bool((hit.metadata or {}).get("metadata_only"))
+            )
+        ]
+        return self._rerank_hits(query, substantive_hits or hits, route_mode, limit=limit)
 
     async def _score_visual_pages(
         self,
@@ -1040,10 +1068,13 @@ class RetrievalOrchestrator:
         document_titles: dict[str, str],
         score: float,
         stage: str,
+        query_text: str = "",
     ) -> SearchHit:
         metadata = dict(chunk.metadata)
         metadata["source_text"] = chunk.text
         metadata["retrieval_stage"] = stage
+        content = self._clean_chunk_content(chunk.text)
+        metadata["metadata_only"] = not bool(content)
         page_numbers = metadata.get("page_numbers")
         page_number = None
         if isinstance(page_numbers, list) and page_numbers:
@@ -1056,12 +1087,75 @@ class RetrievalOrchestrator:
             source_id=chunk.id,
             document_id=chunk.document_id,
             title=document_titles.get(chunk.document_id, ""),
-            snippet=chunk.summary or chunk.text[:280],
+            snippet=(
+                self._best_chunk_excerpt(content, query_text)
+                if content
+                else (chunk.summary or chunk.text[:280])
+            ),
             score=score,
             rank=0,
             page_number=page_number,
             metadata=metadata,
         )
+
+    @staticmethod
+    def _clean_chunk_content(text: str) -> str:
+        """Remove source-envelope fields while preserving the original Spanish content."""
+        metadata_prefixes = (
+            "title:",
+            "video id:",
+            "video url:",
+            "channel:",
+            "subtitle language:",
+            "subtitle source:",
+            "generated at:",
+            "kind:",
+            "language:",
+        )
+        content_lines = []
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line or line == "-----" or line.lower().startswith(metadata_prefixes):
+                continue
+            content_lines.append(line)
+        return " ".join(content_lines)
+
+    @staticmethod
+    def _best_chunk_excerpt(content: str, query_text: str, max_chars: int = 520) -> str:
+        """Select a query-centered excerpt from long transcript chunks."""
+        if len(content) <= max_chars:
+            return content
+        query_terms = list(dict.fromkeys(tokenize(query_text)))
+        if not query_terms:
+            return content[:max_chars].rsplit(" ", 1)[0]
+
+        lowered = content.lower()
+        candidate_positions = [
+            match.start()
+            for term in query_terms
+            for match in re.finditer(rf"(?<!\w){re.escape(term)}(?!\w)", lowered)
+        ]
+        if not candidate_positions:
+            return content[:max_chars].rsplit(" ", 1)[0]
+
+        best_start = 0
+        best_score = -1
+        for position in candidate_positions:
+            start = max(0, position - (max_chars // 3))
+            window = lowered[start : start + max_chars]
+            unique_hits = sum(1 for term in query_terms if term in window)
+            total_hits = sum(window.count(term) for term in query_terms)
+            score = (unique_hits * 100) + total_hits
+            if score > best_score:
+                best_start = start
+                best_score = score
+
+        excerpt = content[best_start : best_start + max_chars]
+        if best_start > 0 and " " in excerpt:
+            excerpt = excerpt.split(" ", 1)[1]
+        if best_start + max_chars < len(content) and " " in excerpt:
+            excerpt = excerpt.rsplit(" ", 1)[0]
+        return excerpt.strip()
 
     def _build_proposition_hit(
         self,
@@ -1116,7 +1210,7 @@ class RetrievalOrchestrator:
         boosts = {
             "exact": {"chunk": 1.15, "proposition": 1.05, "summary": 0.85},
             "factual_local": {"chunk": 1.12, "proposition": 1.08, "summary": 0.9},
-            "multi_hop": {"chunk": 0.95, "proposition": 1.2, "summary": 1.0, "graph_edge": 1.15},
+            "multi_hop": {"chunk": 1.1, "proposition": 1.1, "summary": 0.9, "graph_edge": 0.8},
             "global": {"chunk": 0.88, "proposition": 1.0, "summary": 1.25},
             "argumentative": {"chunk": 1.0, "proposition": 1.22, "summary": 0.95, "graph_edge": 1.08},
             "visual": {"chunk": 1.0, "proposition": 0.92, "summary": 1.05, "visual_page": 1.3},
@@ -1169,7 +1263,7 @@ class RetrievalOrchestrator:
         return {
             "exact": 8,
             "factual_local": 10,
-            "multi_hop": 12,
+            "multi_hop": 20,
             "global": 8,
             "argumentative": 12,
             "visual": 8,

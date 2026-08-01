@@ -8,6 +8,7 @@ from typing import Any
 
 from atenex_nova.application.orchestrators.retrieval_orchestrator import SearchResult
 from atenex_nova.application.policies.answer_planning_policy import AnswerPlanningPolicy
+from atenex_nova.application.policies.query_routing_policy import QueryRoutingPolicy
 from atenex_nova.domain.entities.answer import Answer
 from atenex_nova.domain.entities.citation import Citation
 from atenex_nova.domain.entities.evidence_item import EvidenceItem
@@ -25,6 +26,7 @@ from atenex_nova.shared.logging.logger import get_logger
 logger = get_logger(__name__)
 
 TOKEN_RE = re.compile(r"[\w\-]+", re.UNICODE)
+CITATION_MARKER_RE = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
 PROMPT_FILES = {
     "direct_answer": "DIRECT_ANSWER_PROMPT.md",
     "hierarchical_synthesis": "HIERARCHICAL_MAP_PROMPT.md",
@@ -106,7 +108,11 @@ class AnswerOrchestrator:
         attempts = 1
 
         if self._should_retry_generation(verification, citations):
-            repair_prompt = self._build_repair_prompt(prompt, verification.issues)
+            repair_prompt = self._build_repair_prompt(
+                prompt,
+                verification.issues,
+                search_result.query.language,
+            )
             try:
                 repaired_gen = await self._generate(repair_prompt, plan_type)
                 repaired_draft = repaired_gen.text
@@ -138,6 +144,18 @@ class AnswerOrchestrator:
                     )
             except ServiceUnavailableError:
                 pass
+
+        if "wrong_output_language" in verification.issues and search_result.query.language.startswith("es"):
+            answer_text = (
+                "No pude producir una respuesta en español suficientemente fundamentada "
+                "con la evidencia recuperada. Reformula la pregunta o revisa los fragmentos disponibles."
+            )
+            citations = []
+            verification = VerificationResult(
+                verdict=AnswerVerdict.UNVERIFIED,
+                grounding_score=0.0,
+                issues=sorted(set([*verification.issues, "spanish_fallback_after_language_failure"])),
+            )
 
         logger.info(
             f"Answer composition finished (attempts={attempts}) | Verdict: {verification.verdict} | "
@@ -176,6 +194,11 @@ class AnswerOrchestrator:
                     self._serialize_evidence_item(item) for item in search_result.evidence_pack.items
                 ],
                 "generation_attempts": attempts,
+                "citation_audit": self._build_citation_audit(
+                    search_result.evidence_pack.items,
+                    answer_text,
+                    citations,
+                ),
                 "prompt_trace": self._build_prompt_trace(
                     search_result=search_result,
                     plan_type=plan_type,
@@ -243,8 +266,18 @@ class AnswerOrchestrator:
         return current_tuple > previous_tuple
 
     @staticmethod
-    def _build_repair_prompt(prompt: str, issues: list[str]) -> str:
+    def _build_repair_prompt(prompt: str, issues: list[str], query_language: str) -> str:
         issue_text = ", ".join(issues) if issues else "low grounding"
+        if query_language.startswith("es"):
+            return (
+                f"{prompt}\n\n"
+                "### Corrección posterior a la verificación\n"
+                f"El borrador anterior tuvo estos problemas: {issue_text}.\n"
+                "Reescribe la respuesta exclusivamente en español y usa solo afirmaciones sostenidas "
+                "por la evidencia. Coloca cada cita [1], [2] junto a la afirmación que respalda.\n"
+                "No cites resúmenes sin documento ni relaciones del grafo como si fueran citas textuales. "
+                "Si la evidencia no basta, dilo de forma explícita y breve.\n"
+            )
         return (
             f"{prompt}\n\n"
             "### Verification Repair\n"
@@ -293,13 +326,19 @@ class AnswerOrchestrator:
         uncertainty_policy = (
             "If evidence is weak or contradictory, say so explicitly and prefer uncertainty over invention."
         )
+        language_name = "español" if search_result.query.language.startswith("es") else "English"
+        if search_result.query.language.startswith("es"):
+            uncertainty_policy = (
+                "Si la evidencia es débil, indirecta o contradictoria, indícalo expresamente; "
+                "prefiere reconocer la incertidumbre antes que completar o traducir ideas."
+            )
         replacements = {
             "{{QUERY}}": search_result.query.text,
             "{{NORMALIZED_QUERY}}": search_result.query.normalized_text,
             "{{PLAN}}": plan_type,
             "{{ROUTE_MODE}}": search_result.query.route_mode,
             "{{ROUTE_REASON}}": search_result.route_reason,
-            "{{LANGUAGE}}": search_result.query.language,
+            "{{LANGUAGE}}": language_name,
             "{{GENERATION_PROFILE}}": generation_profile,
             "{{EVIDENCE}}": evidence_block,
             "{{UNCERTAINTY_POLICY}}": uncertainty_policy,
@@ -321,6 +360,16 @@ class AnswerOrchestrator:
                 turns.append(f"{prefix}: {content}")
             history_str = "Conversation history:\n" + "\n".join(turns) + "\n\n"
             template = history_str + template
+
+        if search_result.query.language.startswith("es"):
+            template += (
+                "\n\n### Restricción final de idioma\n"
+                "- Escribe toda la respuesta exclusivamente en español.\n"
+                "- La evidencia del corpus ya está en español: razona directamente sobre ella; "
+                "no redactes primero en inglés ni entregues traducciones.\n"
+                "- Conserva literalmente los marcadores de evidencia [n] y no cites una evidencia "
+                "que no respalde la afirmación adyacente.\n"
+            )
 
         return template
 
@@ -412,18 +461,22 @@ class AnswerOrchestrator:
 
     def _bind_citations(self, items: list[EvidenceItem], draft_text: str) -> list[Citation]:
         citations: list[Citation] = []
-        for index, item in enumerate(items[:5], start=1):
-            marker = f"[{index}]"
-            if marker not in draft_text:
+        referenced_indices = self._extract_citation_indices(draft_text)
+        for index in referenced_indices:
+            if index < 1 or index > len(items):
                 continue
-            if not item.document_id:
+            item = items[index - 1]
+            if not self._evidence_is_citable(item):
+                continue
+            document_id = item.document_id
+            if document_id is None:
                 continue
             source_text = str(item.metadata.get("source_text") or item.snippet)
             start, end = self._locate_source_span(source_text, item.snippet)
             citation = Citation(
                 id=new_id(),
                 answer_id="",
-                document_id=item.document_id,
+                document_id=document_id,
                 page_number=item.page_number,
                 node_id=self._extract_node_id(item),
                 char_start=start,
@@ -436,6 +489,45 @@ class AnswerOrchestrator:
             if self._citation_is_resolved(citation):
                 citations.append(citation)
         return citations
+
+    def _build_citation_audit(
+        self,
+        items: list[EvidenceItem],
+        answer_text: str,
+        citations: list[Citation],
+    ) -> dict[str, object]:
+        referenced_indices = self._extract_citation_indices(answer_text)
+        invalid_indices = [index for index in referenced_indices if index < 1 or index > len(items)]
+        valid_indices = [index for index in referenced_indices if 1 <= index <= len(items)]
+        uncitable_indices = [
+            index for index in valid_indices if not self._evidence_is_citable(items[index - 1])
+        ]
+        expected_bindings = len(valid_indices) - len(uncitable_indices)
+        return {
+            "referenced_evidence_indices": referenced_indices,
+            "invalid_evidence_indices": invalid_indices,
+            "uncitable_evidence_indices": uncitable_indices,
+            "expected_bindings": expected_bindings,
+            "resolved_bindings": len(citations),
+        }
+
+    @staticmethod
+    def _extract_citation_indices(text: str) -> list[int]:
+        indices = {
+            int(value.strip())
+            for group in CITATION_MARKER_RE.findall(text)
+            for value in group.split(",")
+        }
+        return sorted(indices)
+
+    def _evidence_is_citable(self, item: EvidenceItem) -> bool:
+        if not item.citation_candidate or not item.document_id or item.source_type == "graph_edge":
+            return False
+        source_text = str(item.metadata.get("source_text") or item.snippet)
+        start, end = self._locate_source_span(source_text, item.snippet)
+        has_text_anchor = start is not None and end is not None
+        has_visual_anchor = bool(item.page_number is not None and self._extract_page_asset_path(item))
+        return has_text_anchor or has_visual_anchor
 
 
     def _finalize_text(
@@ -474,9 +566,6 @@ class AnswerOrchestrator:
 
         if plan_type == "visual_grounded_synthesis" and route_mode == "visual":
             return text
-        if citations and not any(marker in text for marker in ("[1]", "[2]", "[3]")):
-            suffix = " ".join(f"[{index}]" for index in range(1, min(len(citations), 3) + 1))
-            text = f"{text} {suffix}".strip()
         return text
 
     def _enforce_strict_answer(
@@ -544,13 +633,38 @@ class AnswerOrchestrator:
             f"pre-LLM grounding_score={grounding_score:.3f}"
         )
 
+        citation_audit = self._build_citation_audit(evidence_items, answer_text, citations)
+        if citation_audit["invalid_evidence_indices"]:
+            issues.append("invalid_citation_markers")
+        if citation_audit["uncitable_evidence_indices"]:
+            issues.append("uncitable_evidence_references")
+        resolved_bindings = citation_audit["resolved_bindings"]
+        expected_bindings = citation_audit["expected_bindings"]
+        if (
+            isinstance(resolved_bindings, int)
+            and isinstance(expected_bindings, int)
+            and resolved_bindings < expected_bindings
+        ):
+            issues.append("unresolved_citation_markers")
+        expected_language = search_result.query.language.split("-", 1)[0].lower()
+        detected_answer_language = QueryRoutingPolicy.detect_language(answer_text)
+        if expected_language == "es" and detected_answer_language == "en":
+            issues.append("wrong_output_language")
+
         if not citations:
             issues.append("missing_citations")
         elif any(not self._citation_is_resolved(citation) for citation in citations):
             issues.append("unresolved_citation_binding")
         if contradictions and plan_type != "argument_synthesis":
             issues.append("unresolved_contradiction")
-        if grounding_score < unverified_threshold:
+        blocking_issues = {
+            "missing_citations",
+            "unresolved_citation_binding",
+            "unresolved_citation_markers",
+            "invalid_citation_markers",
+            "wrong_output_language",
+        }
+        if grounding_score < unverified_threshold or any(issue in blocking_issues for issue in issues):
             verdict = AnswerVerdict.UNVERIFIED
         elif issues and "unresolved_contradiction" in issues:
             verdict = AnswerVerdict.CONFLICTING
@@ -560,17 +674,25 @@ class AnswerOrchestrator:
             verdict = AnswerVerdict.VERIFIED
         llm_verification = await self._verify_with_llm(search_result, answer_text)
         if llm_verification is not None:
-            deterministic_issues = list(issues)
             issues = sorted(set([*issues, *llm_verification.issues]) - {"none"})
-            if deterministic_issues:
-                grounding_score = min(grounding_score, llm_verification.grounding_score or grounding_score)
-                if llm_verification.verdict == AnswerVerdict.UNVERIFIED:
-                    verdict = AnswerVerdict.UNVERIFIED
-                elif llm_verification.verdict == AnswerVerdict.CONFLICTING:
-                    verdict = AnswerVerdict.CONFLICTING
-            else:
+            verdict_rank = {
+                AnswerVerdict.UNVERIFIED: 0,
+                AnswerVerdict.CONFLICTING: 1,
+                AnswerVerdict.PARTIALLY_VERIFIED: 2,
+                AnswerVerdict.VERIFIED: 3,
+            }
+            if verdict_rank[llm_verification.verdict] < verdict_rank[verdict]:
                 verdict = llm_verification.verdict
-                grounding_score = max(grounding_score, llm_verification.grounding_score)
+            if llm_verification.grounding_score > 0:
+                grounding_score = min(grounding_score, llm_verification.grounding_score)
+
+        if "wrong_output_language" in issues:
+            verdict = AnswerVerdict.UNVERIFIED
+            grounding_score = min(grounding_score, max(0.0, unverified_threshold - 0.01))
+        elif any(issue in issues for issue in {"uncitable_evidence_references", "invalid_citation_markers"}):
+            if verdict == AnswerVerdict.VERIFIED:
+                verdict = AnswerVerdict.PARTIALLY_VERIFIED
+            grounding_score = min(grounding_score, 0.69)
         logger.info(
             f"Verification finished: verdict={verdict} | final grounding_score={grounding_score:.3f} | "
             f"issues={issues} | LLM verification={'none' if llm_verification is None else llm_verification}"
@@ -589,6 +711,12 @@ class AnswerOrchestrator:
             template.replace("{{QUERY}}", search_result.query.text)
             .replace("{{ANSWER}}", answer_text)
             .replace("{{EVIDENCE}}", self._format_evidence(search_result.evidence_pack.items))
+        )
+        prompt += (
+            "\nTreat each [n] marker as a reference only to evidence item [n]. "
+            "A marker pointing outside the list, to an item without a document, or to a graph edge "
+            "cannot verify a documentary claim. Report wrong_output_language when the answer "
+            f"is not in {search_result.query.language}.\n"
         )
         try:
             result = await self._generator.generate(prompt, max_tokens=256, temperature=0.0)

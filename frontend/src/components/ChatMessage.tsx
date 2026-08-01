@@ -51,7 +51,6 @@ export function ChatMessage({
   query,
   answer,
   routeMode,
-  intent,
   language,
   groundingScore,
   citationsCount,
@@ -79,7 +78,7 @@ export function ChatMessage({
   };
 
   return (
-    <li className={`conversation-turn${active ? ' conversation-turn--active' : ''}${loading ? ' conversation-turn--pending' : ''}`} role="listitem">
+    <li className={`conversation-turn${active ? ' conversation-turn--active' : ''}${loading ? ' conversation-turn--pending' : ''}`} role="listitem" data-turn-id={id}>
       <article
         className="conversation-turn__surface"
         role="button"
@@ -95,14 +94,8 @@ export function ChatMessage({
         }}
       >
         <div className="chat-row chat-row--user">
-          <div className="chat-row__icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none">
-              <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm0 2c-4.6 0-8 2.1-8 5v1h16v-1c0-2.9-3.4-5-8-5Z" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </div>
           <div className="chat-bubble chat-bubble--user">
             <div className="chat-bubble__meta">
-              <span>Usuario</span>
               <span>{loading ? 'Enviado ahora' : formatTurnDate(createdAt)}</span>
             </div>
             <p>{query}</p>
@@ -110,17 +103,9 @@ export function ChatMessage({
         </div>
 
         <div className="chat-row chat-row--assistant">
-          <div className="chat-row__icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none">
-              <rect x="4" y="4" width="16" height="13" rx="3" stroke="currentColor" strokeWidth="1.7" />
-              <path d="m9 20 3-3 3 3" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-              <circle cx="9" cy="10" r="1" fill="currentColor" />
-              <circle cx="15" cy="10" r="1" fill="currentColor" />
-            </svg>
-          </div>
           <div className="chat-bubble chat-bubble--assistant">
             <div className="chat-bubble__meta">
-              <span>Asistente IA</span>
+              <span>Atenex</span>
               <span>{loading ? 'Escribiendo...' : kind === 'answer' ? 'Respuesta' : 'Búsqueda'}</span>
             </div>
             <div className="chat-bubble__text">
@@ -153,19 +138,6 @@ export function ChatMessage({
               )}
             </div>
           </div>
-        </div>
-
-        <div className="conversation-turn__chips">
-          <span className="tag tag--info">{routeMode}</span>
-          <span className="tag tag--soft">{intent}</span>
-          <span className="tag tag--soft">{language}</span>
-          {kind === 'answer' ? (
-            <>
-              <span className="tag tag--success">Grounding {groundingScore?.toFixed(3) ?? '-'}</span>
-              <span className="tag tag--warning">{citationsCount ?? 0} citas</span>
-              {isLowConfidenceAnswer ? <span className="tag tag--danger">Baja confianza</span> : null}
-            </>
-          ) : null}
         </div>
       </article>
     </li>

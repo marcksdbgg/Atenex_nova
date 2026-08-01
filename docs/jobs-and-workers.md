@@ -1,6 +1,13 @@
 # Jobs and Workers
 
-This document describes the current background job system used by Atenex Nova.
+Estado: **Implemented / Historical scope**.
+
+This document describes the current background job system used by the document RAG
+bounded context. Repo Context indexing is not another document-ingestion job chain:
+v1 runs only from the explicit `atenex-context index` command. MCP startup validates
+the active generation but never indexes as a side effect. It uses a SQLite
+transaction and atomic generation activation; see
+[indexing-and-storage.md](indexing-and-storage.md).
 
 ## Core Model
 

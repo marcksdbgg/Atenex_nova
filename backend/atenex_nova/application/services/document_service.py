@@ -32,11 +32,13 @@ class DocumentService:
         normalized_collection_path = self._normalize_collection_path(collection_path)
         existing = await self.find_by_collection_checksum(collection_id, checksum)
         if existing is not None:
-            if existing.status == DocumentStatus.FAILED:
+            if existing.status != DocumentStatus.READY:
                 existing.source_path = source_path
                 existing.collection_path = normalized_collection_path
                 existing.mark_registered()
+                existing.error_message = None
                 await self._doc_repo.update(existing)
+                await self._job_repo.delete_pending_by_targets([existing.id])
                 await self._job_repo.create(Job(id=new_id(), job_type=JobType.PARSE_DOCUMENT, target_id=existing.id))
             return existing
 

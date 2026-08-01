@@ -12,15 +12,15 @@
 
 ### Layout Overrides
 
-- **Structure:** Notebook-style single chat workspace with one primary conversation pane and one sticky right rail.
-- **Order:** 1. Chat header + controls, 2. Conversation thread, 3. Composer fixed in the main pane, 4. Side card for citations/fragments, 5. Side card for technical details.
+- **Structure:** Two clear zones: a compact conversation list and one primary chat surface. Evidence and technical details are hidden until requested.
+- **Order:** 1. Conversation list, 2. Compact collection header, 3. Conversation thread, 4. Composer, 5. Optional sources/details region.
 - **Behavior:** Message send should behave like regular chat (`Enter` sends, `Shift+Enter` newline).
-- **Scrolling:** Main thread scrolls independently; side rail stays sticky on desktop and collapses to toggleable stack on mobile.
+- **Scrolling:** Main thread scrolls independently. A completed long answer opens at its beginning; pending output follows the latest message.
 
 ### Spacing Overrides
 
 - Use the master spacing scale.
-- Keep the composer and hero separated from the workspace with one clear vertical gap.
+- Keep one divider between navigation, conversation, and composer; do not wrap each subsection in another card.
 
 ### Typography Overrides
 
@@ -29,26 +29,25 @@
 
 ### Color Overrides
 
-- Preserve the warm cream palette from the master, but give the query workspace slightly lighter, higher-contrast surfaces.
-- Evidence and citations should use muted surface cards instead of dark blocks.
+- Preserve the warm cream palette from the master and use one continuous conversation surface.
+- Evidence and citations use a separate on-demand region instead of permanent nested cards.
 
 ### Component Overrides
 
-- **Chat header:** compact title, active collection, and session counters.
-- **Controls:** keep only essentials visible (collection + panel toggle). Route and output mode stay behind an explicit "opciones avanzadas" toggle.
-- **Conversation stream:** regular user/assistant bubble pairs; each turn remains selectable to hydrate side details.
+- **Chat header:** active collection, document/turn counts, `Ajustes`, and `Ver fuentes` only.
+- **Controls:** route and output mode stay behind `Ajustes`.
+- **Conversation stream:** a restrained user bubble followed by a plain assistant response; each turn remains selectable to hydrate details.
 - **Conversation quality:** hide redundant search-only turns when there is an equivalent answer turn for the same query to avoid noisy duplicated history.
-- **Confidence signaling:** when grounding is low and citations are weak, show explicit low-confidence labels in the turn chips.
-- **Prompt assist:** add lightweight quick-suggestion pills above the thread to help users start focused literary questions faster.
+- **Confidence signaling:** show low-confidence warnings with the response; keep routine metadata out of the main stream.
 - **Citations & fragments panel:** citation list and top evidence snippets for the selected turn.
 - **Technical panel:** context tags, metrics (grounding/citations/evidence/docs), compact context-used summary, recent memory, and export actions.
 - **Quality guardrails:** show short alert bullets in the technical panel when the answer lacks citations, has low grounding, or shows language/template mismatch.
-- **Pending query state:** while a new request is running, both side cards must show "consulta en curso" messaging for the latest prompt instead of stale previous-turn details.
+- **Pending query state:** never remove the provisional turn because the HTTP transport failed. Reconcile the active chat and hydrate any answer persisted by the backend.
 
 ---
 
 ## Recommendations
 
-- Keep backend metadata visible in compact chips or secondary text so the UI stays complete without becoming dense.
-- Prefer surface cards with subtle borders and shadows over nested heavy cards.
-- Use sticky side rails only on large screens; on smaller screens, let the workspace stack naturally.
+- Keep backend metadata in the optional details region.
+- Prefer whitespace and dividers over cards inside cards.
+- Keep sources and technical audit closed by default at every breakpoint.

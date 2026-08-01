@@ -1,5 +1,11 @@
 # Integración de TurboQuant en Atenex Nova
 
+Estado: **Historical / Experimental** para Repo Context.
+
+Este documento describe una optimización del bounded context RAG documental.
+TurboQuant no está en la ruta crítica de Repo Context v1: el core determinista usa
+SQLite FTS5 e índices estructurales; la recuperación semántica opcional usa Qdrant.
+
 Este documento describe la especificación técnica, el diseño de arquitectura y el estado de la integración de **TurboQuant / VecQuant** en la plataforma local de memoria documental **Atenex Nova**.
 
 ---

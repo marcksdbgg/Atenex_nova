@@ -14,10 +14,24 @@ from atenex_nova.shared.exceptions.base import ServiceUnavailableError
 
 logger = logging.getLogger(__name__)
 TOKEN_RE = re.compile(r"[\w\-]+", re.UNICODE)
+SPANISH_ACCENT_TRANSLATION = str.maketrans(
+    {
+        "á": "a",
+        "é": "e",
+        "í": "i",
+        "ó": "o",
+        "ú": "u",
+        "ü": "u",
+    }
+)
 
 
 def tokenize(text: str) -> list[str]:
-    return [token.lower() for token in TOKEN_RE.findall(text) if len(token) > 2]
+    return [
+        token.casefold().translate(SPANISH_ACCENT_TRANSLATION)
+        for token in TOKEN_RE.findall(text)
+        if len(token) > 2
+    ]
 
 
 def hash_token(token: str) -> int:
@@ -49,8 +63,11 @@ class StableSparseEncoder:
             return
         logger.info("Initializing SpladeSparseEncoder with model: %s", model_name)
         try:
-            import torch
-            from transformers import AutoModelForMaskedLM, AutoTokenizer
+            import torch  # type: ignore[import-not-found]
+            from transformers import (  # type: ignore[import-not-found]
+                AutoModelForMaskedLM,
+                AutoTokenizer,
+            )
 
             self._device = "cuda" if torch.cuda.is_available() else "cpu"
             self.__class__._tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -73,7 +90,7 @@ class StableSparseEncoder:
     def _encode(self, text: str) -> tuple[list[int], list[float]]:
         if self._model is None or self._tokenizer is None:
             return self._encode_lexical(text)
-        import torch
+        import torch  # type: ignore[import-not-found]
 
         inputs = self._tokenizer(text, return_tensors="pt", truncation=True, max_length=512).to(self._device)
         with torch.no_grad():

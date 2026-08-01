@@ -71,11 +71,73 @@ class ParseDocumentJobHandler(BaseJobHandler):
                     stage="parse",
                     context={"source_path": str(resolved_source_path), "mime_type": doc.mime_type},
                 ) as step:
+                    # Clean up existing database artifacts for this document to avoid duplicates on retry
+                    from atenex_nova.infrastructure.db.repositories.sql_chunk_repo import (
+                        SqlChunkRepository,
+                    )
+                    from atenex_nova.infrastructure.db.repositories.sql_proposition_repo import (
+                        SqlPropositionRepository,
+                    )
+                    from atenex_nova.infrastructure.db.repositories.sql_relation_repo import (
+                        SqlRelationRepository,
+                    )
+                    from atenex_nova.infrastructure.db.repositories.sql_summary_repo import (
+                        SqlSummaryRepository,
+                    )
+                    from atenex_nova.shared.config.settings import get_settings
+
+                    chunk_repo = SqlChunkRepository(session)
+                    proposition_repo = SqlPropositionRepository(session)
+                    summary_repo = SqlSummaryRepository(session)
+                    relation_repo = SqlRelationRepository(session)
+                    node_repo = SqlDocumentNodeRepository(session)
+
+                    chunks = await chunk_repo.get_by_document(document_id)
+                    propositions = await proposition_repo.list_by_document(document_id)
+                    prop_ids = [p.id for p in propositions]
+                    chunk_ids = [c.id for c in chunks]
+
+                    # 1. Clean up Candidate Index
+                    from atenex_nova.infrastructure.indexes.candidate_index_factory import (
+                        build_candidate_index,
+                    )
+                    candidate_idx = build_candidate_index(session)
+                    node_ids_to_remove = chunk_ids + prop_ids
+                    if node_ids_to_remove:
+                        await candidate_idx.remove_vectors(doc.collection_id, node_ids_to_remove)
+
+                    # 2. Clean up Qdrant points
+                    from atenex_nova.infrastructure.qdrant.qdrant_adapter import QdrantAdapter
+                    qdrant = QdrantAdapter()
+                    collection_name = f"collection_{doc.collection_id}"
+                    await qdrant.delete_by_filter(collection_name, {"document_id": document_id})
+                    await qdrant.delete_by_filter("pages_visual", {"document_id": document_id})
+
+                    # 3. Clean up DB records
+                    await proposition_repo.delete_by_document(document_id)
+                    await summary_repo.delete_by_scope("document", document_id)
+                    for chunk in chunks:
+                        await summary_repo.delete_by_scope("section", chunk.id)
+                    await relation_repo.delete_by_source_ids(prop_ids)
+                    await chunk_repo.delete_by_document(document_id)
+                    await node_repo.delete_by_document(document_id)
+
+                    # 4. Clean up visual pages local JSON cache
+                    visual_cache = get_settings().visual_pages_path / f"{doc.collection_id}.json"
+                    if visual_cache.exists():
+                        try:
+                            import json
+                            loaded = json.loads(visual_cache.read_text(encoding="utf-8"))
+                            if isinstance(loaded, list):
+                                filtered = [item for item in loaded if item.get("document_id") != document_id]
+                                visual_cache.write_text(json.dumps(filtered, ensure_ascii=False, indent=2), encoding="utf-8")
+                        except Exception as e:
+                            logger.warning("Could not filter visual cache for document %s: %s", document_id, e)
+
                     parser = DoclingParserAdapter()
                     nodes = await parser.parse(str(resolved_source_path), document_id)
                     if not nodes:
                         raise ValueError("No extractable nodes found in document")
-                    node_repo = SqlDocumentNodeRepository(session)
                     await node_repo.create_many(nodes)
                     doc.mark_parsed()
                     await doc_repo.update(doc)

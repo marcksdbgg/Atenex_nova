@@ -1,6 +1,10 @@
 # API Endpoints
 
-This document catalogs the current public HTTP surface exposed by the backend.
+Estado: **Implemented / Historical scope**.
+
+This document catalogs the current public HTTP surface exposed by the document RAG
+backend. It is separate from the Repo Context MCP contract in
+[mcp-tools.md](mcp-tools.md); MCP tools are not exposed implicitly as HTTP endpoints.
 
 ## Notes
 
@@ -34,6 +38,7 @@ This document catalogs the current public HTTP surface exposed by the backend.
 | POST | `/collections/{collection_id}/documents/import` | Register a local file path as a document |
 | POST | `/collections/{collection_id}/documents/import-folder` | Import a local folder into the collection |
 | POST | `/collections/{collection_id}/rebuild` | Requeue the collection rebuild pipeline |
+| POST | `/collections/{collection_id}/resume-ingestion` | Resume interrupted/failed document ingestion for a collection |
 
 ## Import Sessions
 

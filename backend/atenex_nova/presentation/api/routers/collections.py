@@ -461,3 +461,46 @@ async def import_local_folder(
             deduplicated_count=import_session.deduplicated_count,
             failed_count=import_session.failed_count,
         )
+
+
+@router.post("/{collection_id}/resume-ingestion", response_model=dict[str, int])
+async def resume_collection_ingestion(
+    collection_id: str,
+    session: AsyncSession = Depends(get_session),
+    collection_service: CollectionService = Depends(get_collection_service),
+    doc_service: DocumentService = Depends(get_document_service),
+) -> dict[str, int]:
+    try:
+        await collection_service.get(collection_id)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    documents = await doc_service.list_by_collection(collection_id, limit=100000)
+
+    from atenex_nova.domain.entities.job import Job
+    from atenex_nova.domain.value_objects.identifiers import (
+        DocumentStatus,
+        JobStatus,
+        JobType,
+        new_id,
+    )
+
+    job_repo = SqlJobRepository(session)
+
+    requeued_count = 0
+    for doc in documents:
+        if doc.status != DocumentStatus.READY:
+            # Check if there is an active job
+            jobs = await job_repo.list_by_target(doc.id, limit=10)
+            active_job = any(j.status in {JobStatus.PENDING, JobStatus.RUNNING} for j in jobs)
+            if not active_job:
+                # Re-queue
+                doc.status = DocumentStatus.REGISTERED
+                doc.error_message = None
+                await doc_service._doc_repo.update(doc)
+                await job_repo.delete_pending_by_targets([doc.id])
+                await job_repo.create(Job(id=new_id(), job_type=JobType.PARSE_DOCUMENT, target_id=doc.id))
+                requeued_count += 1
+
+    await session.commit()
+    return {"requeued_count": requeued_count}

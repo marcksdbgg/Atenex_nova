@@ -1,6 +1,10 @@
 # Frontend Architecture
 
-This guide documents the current frontend implementation in Atenex Nova.
+Estado: **Implemented / Historical scope**.
+
+This guide documents the current frontend implementation in Atenex Nova. It belongs
+to the document RAG bounded context. Repo Context v1 is CLI/MCP-only and does not add
+routes or retrieval behavior to this application.
 
 ## Scope
 
@@ -70,6 +74,7 @@ The UI currently expects the backend to support pagination for collection docume
 
 The query page is the most complex workspace in the app. It combines:
 
+- a compact conversation list
 - collection selector
 - route mode selector
 - search vs answer action switch
@@ -77,9 +82,12 @@ The query page is the most complex workspace in the app. It combines:
 - recent memory rail
 - document rail
 - conversation stream
-- evidence rail with answer, citations, and export actions
+- evidence and technical details revealed on demand
 
-The current page implementation is intentionally information-dense and is driven by the query-specific design override in [design-system/atenex-nova/pages/query.md](../design-system/atenex-nova/pages/query.md).
+The primary surface stays focused on the conversation. Retrieval controls remain
+behind `Ajustes`; citations, evidence, export, and RAG audit stay behind `Ver
+fuentes`. The layout is driven by the query-specific design override in
+[design-system/atenex-nova/pages/query.md](../design-system/atenex-nova/pages/query.md).
 
 ### Observability
 
@@ -107,6 +115,9 @@ The frontend uses a thin `fetch` wrapper in [services/api.ts](../frontend/src/se
 - evaluation runs
 
 The client is configured by `VITE_API_URL`, defaulting to `http://localhost:8000`.
+Long answer requests keep a provisional turn visible. If the browser loses the
+HTTP response while the backend continues, the query page polls the active chat
+and hydrates the answer already persisted by the backend.
 
 ## Component Pattern
 
@@ -123,7 +134,7 @@ These components are assembled into page-level workspaces rather than used as is
 
 ## Styling and Design System
 
-Styling is centralized in [frontend/src/styles/global.css](../frontend/src/styles/global.css) and design tokens. The current query workspace uses a more expressive surface hierarchy with lighter cards, chips, and sticky rails, while still keeping the warm palette defined in the design system master.
+Styling is centralized in [frontend/src/styles/global.css](../frontend/src/styles/global.css) and design tokens. The query workspace uses one continuous conversation surface, a restrained conversation list, and on-demand sources/details while retaining the warm palette defined in the design system master.
 
 Practical rules for frontend work:
 
@@ -135,7 +146,8 @@ Practical rules for frontend work:
 ## Current Implementation Notes
 
 - The query page now fetches the full collection document inventory through pagination-aware helpers.
-- The collections and query surfaces use richer metadata chips to make document state and answer state visible without opening a modal.
+- Query metadata is secondary and available on demand so the main conversation is
+  not fragmented into nested cards and chips.
 - The frontend does not currently rely on a global state library; most state is local to pages and components.
 
 ## Related Docs

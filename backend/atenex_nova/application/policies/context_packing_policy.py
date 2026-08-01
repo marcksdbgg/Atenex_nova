@@ -43,7 +43,7 @@ class ContextPackingPolicy:
                 break
 
             document_key = item.document_id or item.source_type
-            if document_counts[document_key] >= max_per_document and item.source_type not in {"summary", "graph_edge"}:
+            if document_counts[document_key] >= max_per_document:
                 continue
 
             if self._is_low_signal(item) and selected:
@@ -111,8 +111,9 @@ class ContextPackingPolicy:
     def _estimate_tokens(item: EvidenceItem) -> int:
         snippet_tokens = len(item.snippet.split())
         title_tokens = len(item.title.split()) if item.title else 0
-        metadata_tokens = sum(len(str(value).split()) for value in item.metadata.values()) if item.metadata else 0
-        return max(1, snippet_tokens + title_tokens + metadata_tokens + 8)
+        # Prompt formatting includes the compact snippet and location, but not
+        # metadata.source_text (which may contain an entire transcript).
+        return max(1, snippet_tokens + title_tokens + 12)
 
     @staticmethod
     def _is_contradictory(item: EvidenceItem) -> bool:

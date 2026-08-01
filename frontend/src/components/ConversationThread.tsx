@@ -29,13 +29,8 @@ export function ConversationThread({ turns, activeTurnId, hydratingTurnId, pendi
   if (turns.length === 0) {
     return (
       <div className="query-empty-state" role="status" aria-live="polite">
-        <div className="query-empty-state__icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none">
-            <path d="m21 21-4.4-4.4M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </div>
-        <h3 className="query-empty-state__title">Empieza una conversación</h3>
-        <p>Haz una pregunta para abrir memoria, evidencia y citas en esta colección.</p>
+        <h3 className="query-empty-state__title">Pregunta al corpus</h3>
+        <p>Atenex buscará en todos los documentos y mostrará la respuesta aquí.</p>
       </div>
     );
   }

@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "repositories": [
+    {
+      "id": "atenex-nova",
+      "root_hint": "../../..",
+      "queries": [
+        {
+          "tool": "get_symbol",
+          "query": "create_app",
+          "expected_paths": ["backend/atenex_nova/main.py"]
+        },
+        {
+          "tool": "search_repo",
+          "query": "RetrievalOrchestrator",
+          "expected_paths": [
+            "backend/atenex_nova/application/orchestrators/retrieval_orchestrator.py"
+          ]
+        },
+        {
+          "tool": "related_tests",
+          "query": "TokenBudgetPolicy",
+          "expected_paths": [
+            "backend/tests/unit/policies/test_token_budget_policy.py"
+          ]
+        },
+        {
+          "tool": "repo_overview",
+          "query": "baseline Repo Context",
+          "expected_paths": [
+            "docs/baseline.md",
+            "docs/architecture-repo-context.md"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "client-romero",
+      "root_hint": "",
+      "queries": [
+        {
+          "tool": "get_symbol",
+          "query": "sortCategoryNames",
+          "expected_paths": [
+            "packages/domain/src/entities/category-order.ts"
+          ]
+        },
+        {
+          "tool": "related_tests",
+          "query": "sortCategoryNames",
+          "expected_paths": [
+            "packages/domain/src/__tests__/category-order.test.ts"
+          ]
+        },
+        {
+          "tool": "trace_symbol",
+          "query": "processSyncBatch",
+          "expected_paths": [
+            "apps/api/src/services/sync/processor.ts",
+            "apps/api/src/routes/sync.ts"
+          ]
+        },
+        {
+          "tool": "analyze_impact",
+          "query": "requireStoreAccess",
+          "expected_paths": [
+            "apps/api/src/lib/authz.ts",
+            "apps/api/src/__tests__/store-isolation.test.ts"
+          ]
+        },
+        {
+          "tool": "search_repo",
+          "query": "store_product_price",
+          "expected_paths": [
+            "packages/db/migrations/025_store_product_price.sql",
+            "packages/db/migrations/030_store_product_availability.sql"
+          ]
+        },
+        {
+          "tool": "search_repo",
+          "query": "outbox enqueue sale offline sync",
+          "expected_paths": [
+            "apps/store/src/stores/salesStore.ts",
+            "apps/store/src/services/db/outbox.ts",
+            "apps/store/src/services/sync/syncService.ts"
+          ]
+        },
+        {
+          "tool": "repo_overview",
+          "query": "flujo de venta offline: PWA de caja, outbox, endpoint /sync, API, persistencia, multi-tenant y multi-tienda",
+          "expected_paths": [
+            "apps/store/src/stores/salesStore.ts",
+            "apps/api/src/services/sync/projector.ts",
+            "apps/api/src/services/sync/processor.ts"
+          ]
+        },
+        {
+          "tool": "repo_overview",
+          "query": "offline sale flow from POS/caja to API persistence, tenant and store isolation",
+          "expected_paths": [
+            "apps/store/src/stores/salesStore.ts",
+            "apps/store/src/services/db/outbox.ts",
+            "apps/store/src/services/sync/syncService.ts",
+            "apps/api/src/routes/sync.ts",
+            "apps/api/src/services/sync/processor.ts",
+            "apps/api/src/services/sync/projector.ts"
+          ]
+        },
+        {
+          "tool": "get_symbol",
+          "query": "FixtureReceiver",
+          "expected_paths": [
+            "tools/yape-notification-fixture/src/com/bcp/innovacxion/yapeapp/FixtureReceiver.java"
+          ]
+        }
+      ]
+    }
+  ]
+}

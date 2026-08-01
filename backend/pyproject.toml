@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "atenex-nova"
 version = "0.1.0"
-description = "Plataforma local de memoria documental y RAG de nueva generación"
+description = "Motor local de contexto de repositorios y memoria documental"
 readme = "../README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
@@ -36,7 +36,15 @@ dependencies = [
     "qdrant-client>=1.10.0",
 ]
 
+[project.scripts]
+atenex-context = "atenex_nova.repo_context.presentation.cli:main"
+
 [project.optional-dependencies]
+repo-context = [
+    "mcp>=2.0,<3.0",
+    "tree-sitter>=0.25,<0.27",
+    "tree-sitter-language-pack>=1.13,<2.0",
+]
 ml = [
     "sentence-transformers>=3.0.0",
     "docling>=2.0.0",
@@ -57,7 +65,7 @@ accel = [
     "turbovec==0.7.0",
 ]
 all = [
-    "atenex-nova[ml,dev,accel]",
+    "atenex-nova[ml,dev,accel,repo-context]",
 ]
 
 [tool.hatch.build.targets.wheel]

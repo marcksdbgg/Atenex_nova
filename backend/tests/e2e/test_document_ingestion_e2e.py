@@ -71,6 +71,11 @@ async def e2e_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         embeddings_required=False,
         qdrant_required=False,
         visual_required=False,
+        visual_index_text_documents=False,
+        embedding_model="embeddinggemma",
+        candidate_backend="purepy",
+        embedding_profile="standard",
+        strict_mode_enabled=False,
     )
 
     async def override_get_session():
@@ -84,6 +89,10 @@ async def e2e_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(
         "atenex_nova.infrastructure.visual.colpali_adapter.get_settings",
+        lambda: test_settings,
+    )
+    monkeypatch.setattr(
+        "atenex_nova.workers.jobs.memory_enrichment_job.get_settings",
         lambda: test_settings,
     )
     monkeypatch.setattr(
@@ -469,6 +478,8 @@ async def test_delete_collection_cleans_indexes_without_deleting_source_files(e2
         document_id = register_response.json()["id"]
 
         await _run_jobs_to_completion(session_factory)
+        visual_root.mkdir(parents=True, exist_ok=True)
+        (visual_root / f"{collection_id}.json").write_text("[]", encoding="utf-8")
         assert (visual_root / f"{collection_id}.json").exists()
 
         query_result = await _search(client, collection_id, "¿Qué se debe preservar?")

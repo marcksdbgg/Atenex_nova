@@ -1,68 +1,188 @@
 # Atenex Nova Workspace Instructions
 
-## Source of Truth
-- Use [docs/baseline.md](docs/baseline.md) for the product contract and rationale.
-- Use [docs/auditoria-completa.md](docs/auditoria-completa.md) as the canonical technical audit (claims-vs-implementation, contrastive) and remaining-gap reference against the baseline.
+## Autoridad
 
-- Use [README.md](README.md) for the live repository snapshot, quick start, and current verification status.
-- Do not duplicate those docs here; link to them instead.
-- [frontend/README.md](frontend/README.md) is the Vite scaffold template and is not operationally authoritative.
+- [docs/baseline.md](docs/baseline.md) es el contrato de producto vigente.
+- [docs/plan-repo-context-mcp.md](docs/plan-repo-context-mcp.md) define el orden de
+  implementación y sus puertas.
+- [docs/README.md](docs/README.md) clasifica la documentación vigente e histórica.
+- [docs/runbook-local.md](docs/runbook-local.md) contiene el arranque y apagado
+  verificados para esta estación Linux.
+- [README.md](README.md) es el snapshot operativo y quick start.
+- El código fuente, las pruebas y la configuración actuales prevalecen sobre índices,
+  resúmenes y documentación histórica.
 
-## Current Verified Snapshot
-- OpenAPI/docs contract test: 1 passed in the current checkout.
-- Backend unit, integration, and E2E tests: **96 passed, 3 skipped** (2026-06-16, Qdrant+Ollama live; `backend/.venv312/Scripts/python.exe -m pytest tests -q`).
-- Frontend build: successful (green).
-- Frontend lint: successful (green).
-- Backend `ruff`: clean (0 issues, green).
-- Backend `mypy`: clean (0 errors, green).
-- The current workspace uses **two venvs** on Windows:
-  - `backend/.venv312/` — **canonical GPU venv** (Python 3.12, torch+cu128, RTX 4060 CUDA 12.8). Use `backend/.venv312/Scripts/python.exe` for all runtime and ML commands.
-  - `backend/.venv/` — legacy CPU-only venv (Python 3.14, torch+cpu). Use only as fallback if `.venv312` is unavailable.
-- GPU: RTX 4060 8 GB VRAM, driver 595.97, CUDA runtime 13.2 (cu128 wheels are compatible). Ollama LLM also runs on this GPU.
-- The canonical technical audit is [docs/auditoria-completa.md](docs/auditoria-completa.md); treat it as a contrastive audit ledger, not a live test log.
+Para backend o arquitectura, leer también
+[docs/architecture-backend.md](docs/architecture-backend.md) y
+[docs/architecture-repo-context.md](docs/architecture-repo-context.md).
 
-## Documentation To Read First
-- For backend or architecture work, read [docs/baseline.md](docs/baseline.md) and [docs/auditoria-completa.md](docs/auditoria-completa.md) before editing code.
+## Flujo de contexto
 
-- For backend implementation details, also read [docs/architecture-backend.md](docs/architecture-backend.md) and [docs/jobs-and-workers.md](docs/jobs-and-workers.md).
-- For product framing or tradeoff context, read [docs/baseline.md](docs/baseline.md).
-- For frontend structure and API contracts, also read [docs/architecture-frontend.md](docs/architecture-frontend.md) and [docs/api-endpoints.md](docs/api-endpoints.md).
-- For setup, run commands, and local services, read [README.md](README.md).
-- For vector quantization and TurboQuant/VecQuant integration design, read [docs/turboquant-integration.md](docs/turboquant-integration.md).
-- For UI work, check [design-system/atenex-nova/MASTER.md](design-system/atenex-nova/MASTER.md) first and then any page override under [design-system/atenex-nova/pages/](design-system/atenex-nova/pages/).
+`atenex-context` está implementado en este checkout. Claude Code y los clientes que
+usan `.mcp.json` arrancan
+`backend/scripts/serve_repo_context_mcp.sh`, que refresca incrementalmente el índice
+del checkout o worktree antes de publicar MCP. Antes de una tarea no trivial:
 
-## Architecture and Entry Points
-- Preserve the modular monolith + hexagonal layering: `presentation` -> `application` -> `domain` -> `infrastructure` -> `workers` -> `evaluation` -> `shared`.
-- Use absolute imports from `atenex_nova.*`.
-- API entry point: [backend/atenex_nova/main.py](backend/atenex_nova/main.py).
-- Dependency wiring: [backend/atenex_nova/dependencies.py](backend/atenex_nova/dependencies.py).
-- Worker entry point: [backend/atenex_nova/workers/main.py](backend/atenex_nova/workers/main.py).
-- Worker dispatcher: [backend/atenex_nova/workers/runner.py](backend/atenex_nova/workers/runner.py).
-- Retrieval changes usually touch [backend/atenex_nova/application/orchestrators/retrieval_orchestrator.py](backend/atenex_nova/application/orchestrators/retrieval_orchestrator.py), [backend/atenex_nova/infrastructure/embeddings/bm25_encoder.py](backend/atenex_nova/infrastructure/embeddings/bm25_encoder.py), and the embedding / visual adapters together.
-- Frontend routes live in [frontend/src/App.tsx](frontend/src/App.tsx) and page implementations in [frontend/src/pages/Pages.tsx](frontend/src/pages/Pages.tsx).
+1. Llamar `repo_overview` con la tarea como `focus`; no reconstruir contexto leyendo
+   todo el repositorio.
+2. Revisar `focus_queries` y comprobar que el mapa cubra todas las etapas de un flujo
+   transversal; usar `search_repo` para cualquier etapa, contrato o símbolo ausente.
+3. Para cambios transversales, usar `trace_symbol` o `analyze_impact`.
+4. Abrir y leer el código fuente exacto antes de editar.
+5. Confirmar que snapshot/generación no estén `stale`.
+6. Consultar `related_tests` y ejecutar manualmente los checks pertinentes.
 
-## Implementation Notes
-- Current backend flow is a modular monolith with FastAPI routers over application services and worker-driven ingestion jobs.
-- Current retrieval is hybrid: dense via TurboQuant IP estimator (`PurePyTurboQuantCandidateIndex` or optional turbovec), local sparse/BM25, reranking, and page-text visual retrieval (`VisualPageRetriever`, not ColPali VL).
-- Current query UX is chat-first and includes history, evidence, citations, document drill-down, and page viewers.
-- Storage paths remain: uploads under `backend/storage/uploads/{collection_id}/{document_id}/{filename}`, visual page cache under `backend/storage/visual_pages/`, and local turbovec candidate indexes under `backend/storage/turbovec/`.
-- Qdrant collections are namespaced per corpus for chunks, propositions, summaries, and visual pages.
-- If a change affects product behavior, architecture, or the declared remaining gap, update [README.md](README.md) and [docs/auditoria-completa.md](docs/auditoria-completa.md) together.
+No es necesario releer README, toda la documentación o Linear al inicio de cada
+conversación. Este archivo aporta la política persistente; Repo Context aporta el
+mapa bajo demanda. Consultar documentos especializados solo cuando la tarea los
+necesite.
 
-## Build and Test
-- Backend install: `pip install -e ".[dev]"` from `backend/`.
-- If the task touches parsing, embeddings, or visual retrieval, install ML deps too: `pip install -e ".[all]"`.
-- Backend tests: `backend/.venv312/Scripts/python.exe -m pytest tests -q` on Windows (use `.venv312` for GPU support).
-- Backend quality checks: `backend/.venv312/Scripts/python.exe -m ruff check .` and `backend/.venv312/Scripts/python.exe -m mypy atenex_nova` on Windows.
-- Run API: `uvicorn atenex_nova.main:app --reload --port 8000`.
-- Run worker: `python -m atenex_nova.workers.main`.
-- Frontend dev: `npm run dev`.
-- Frontend checks: `npm run build` (includes `tsc -b`) and `npm run lint`.
+Si el ejecutable no está instalado, no existe índice o `doctor` falla:
 
-## Conventions and Pitfalls
-- Do not let routers call infrastructure directly; go through application services and orchestrators.
-- When changing jobs, review [backend/atenex_nova/workers/main.py](backend/atenex_nova/workers/main.py) and [backend/atenex_nova/workers/runner.py](backend/atenex_nova/workers/runner.py) together.
-- For frontend API behavior and fallback rules, check [frontend/src/services/api.ts](frontend/src/services/api.ts).
-- Local services: Qdrant runs on `6333/6334`; PostgreSQL runs on `5432` only when started with `docker compose --profile prod up -d`; default LLM runtime is Ollama on `11434` with `gemma4:12b` (llama.cpp on `8080` is an optional alternative). Embeddings are also local/offline-first via Ollama (`embeddinggemma`, `ATENEX_EMBEDDING_BACKEND=ollama` by default) — no Hugging Face download or login is required; run `ollama pull embeddinggemma` once.
-- The backend CORS setup already allows localhost and 127.0.0.1 on ports 5173 and 5174.
-- Keep changes small and local; prefer existing patterns over introducing new abstractions.
+1. Usar `rg`/`rg --files` para localizar candidatos.
+2. Leer la fuente exacta.
+3. Seguir imports, llamadas y pruebas con búsquedas dirigidas.
+4. No escanear dependencias, builds, storage ni entornos virtuales.
+
+Los resultados recuperados son ayudas de navegación, nunca autoridad.
+
+La skill canónica de este flujo vive en
+`.agents/skills/atenex-repo-context/SKILL.md`; Claude usa el adaptador equivalente
+de `.claude/skills/atenex-repo-context/SKILL.md`.
+
+## Estado y worktree
+
+- El checkout suele contener muchos cambios locales del usuario: preservarlos.
+- Antes de editar, revisar `git status --short` y leer el contenido actual.
+- No resetear, descartar, reformatear masivamente ni sobrescribir cambios ajenos.
+- Si se modifica una ruta ya sucia, mantener tanto el cambio previo como el nuevo.
+- Los snapshots Repo Context deben representar `HEAD` más el worktree real.
+
+## Arquitectura
+
+El backend mantiene un monolito modular con límites hexagonales. Para Repo Context:
+
+```text
+repo_context.presentation → repo_context.application → repo_context.domain
+                                                   ↑
+                               repo_context.infrastructure
+```
+
+- Usar imports absolutos desde `atenex_nova.*`.
+- El dominio no importa SQLite, Git, Tree-sitter, MCP, Qdrant ni FastAPI.
+- Presentación compone puertos y casos de uso; no contiene reglas de indexación.
+- No reutilizar `Document`, `Chunk`, `Proposition` ni el grafo documental como modelos
+  de código.
+- No conectar CLI/MCP mediante `FastAPI Depends`; usar un composition root propio.
+- El sidecar Repo Context no comparte esquema con `backend/atenex_nova.db`.
+
+El RAG documental heredado conserva sus entry points:
+
+- API: `backend/atenex_nova/main.py`
+- Dependencias: `backend/atenex_nova/dependencies.py`
+- Worker: `backend/atenex_nova/workers/main.py`
+- Dispatcher: `backend/atenex_nova/workers/runner.py`
+
+## Invariantes Repo Context
+
+- Core offline: scanner Git-aware, hashes, SQLite FTS5, símbolos, grafo y RepoMap.
+- Servicios semánticos son opcionales y su ausencia debe ser visible.
+- Rutas internas relativas POSIX; rechazar traversal y symlink escapes.
+- Ejecutar subprocesses con listas de argumentos y `shell=False`.
+- Nunca indexar secretos, binarios, sidecars, dependencias o outputs de build.
+- Un solo escritor; staging y activación atómica de generaciones.
+- Fallos parciales conservan recuperación léxica y producen diagnósticos.
+- Respuestas MCP incluyen snapshot, generación, frescura, truncamiento y evidencia.
+- MCP v1 es de solo lectura: sin escritura, comandos, red remota ni roots arbitrarios.
+- `related_tests` recomienda; no ejecuta.
+
+## Cobertura lingüística v1
+
+- Sintáctica: Python, TypeScript, TSX, JavaScript, SQL y Java.
+- Estructural-léxica: Markdown, JSON/JSONC, YAML, TOML, CSS y shell.
+- Relaciones dinámicas o no resueltas llevan confianza, evidencia y estado
+  `unresolved`; no inventar resolución.
+
+## Documentación
+
+Usar exactamente estos estados:
+
+- `Implemented`
+- `Verified`
+- `Planned`
+- `Historical`
+
+Si cambia comportamiento, arquitectura o gaps:
+
+- actualizar [README.md](README.md) y [docs/baseline.md](docs/baseline.md);
+- actualizar el documento especializado;
+- no convertir planes o evidencia preliminar en claims implementados;
+- conservar snapshots anteriores bajo `docs/archive/`.
+
+El frontend React/Vite es la UI heredada del RAG documental. No desarrollar una UI
+Repo Context en v1.
+
+## Build y pruebas
+
+Repo Context en Linux/macOS:
+
+```text
+cd backend
+python -m unittest discover -s tests/repo_context -p "test_*.py" -v
+python -m ruff check atenex_nova/repo_context tests/repo_context scripts/evaluate_repo_context.py
+python -m mypy atenex_nova/repo_context
+```
+
+Para forzar los casos AST opcionales, definir
+`ATENEX_TREE_SITTER_CACHE_DIR` apuntando a un caché con las gramáticas
+`typescript`, `tsx`, `javascript`, `java` y `sql` precargadas. Indexar nunca debe
+descargarlas por sí mismo.
+
+Backend canónico heredado en Windows:
+
+```text
+backend/.venv312/Scripts/python.exe -m pytest tests -q
+backend/.venv312/Scripts/python.exe -m ruff check .
+backend/.venv312/Scripts/python.exe -m mypy atenex_nova
+```
+
+En Linux/macOS usar el Python del entorno activo. No afirmar que los resultados
+históricos fueron revalidados si el virtualenv Windows no puede ejecutarse.
+
+Frontend heredado:
+
+```text
+npm run build
+npm run lint
+```
+
+La suite focalizada cubre scanner, hashes, parsers, IDs, FTS5, grafo, RepoMap,
+incrementalidad, publicación atómica, seguridad, CLI, cliente MCP oficial y
+semántica con fakes. El runner gold se ejecuta sobre Atenex Nova y
+`client-romero`; los servicios vivos y el subprocess `stdio` se verifican por
+separado.
+
+## Snapshot Repo Context verificado
+
+El 2026-07-31:
+
+- 53/53 pruebas focalizadas pasaron con gramáticas Tree-sitter precargadas;
+- sin ese caché, 50 pasaron y 3 AST se omitieron con fallback funcional;
+- `ruff` quedó limpio;
+- `mypy --strict` quedó limpio en 28 archivos;
+- 13/13 goldens de ambos repositorios tuvieron hit, Recall@20 medio 1.0 y
+  MRR 0.90384615; ninguna consulta quedó sin resultados;
+- el protocolo `stdio` de las seis herramientas fue probado como subprocess con
+  el cliente oficial MCP 2.0: descubrimiento completo, búsqueda directa del outbox y
+  `repo_overview` transversal. Este último ubicó las seis etapas POS → API dentro de
+  los siete primeros paths en resultados y RepoMap con 5979/6000 tokens; el launcher
+  con snapshot sin cambios inicializó MCP en 1.087 s;
+- Ollama/Qdrant vivos no forman parte de ese claim.
+
+## Snapshot histórico conocido
+
+La última verificación completa registrada antes del pivote fue ejecutada el
+2026-06-16 en Windows con Qdrant y Ollama. Sus conteos varían entre documentos
+históricos y no se consideran estado vivo hasta una nueva ejecución reproducible.
+Consultar [docs/archive/rag-v0/](docs/archive/rag-v0/) para la evidencia, no para el
+contrato actual.

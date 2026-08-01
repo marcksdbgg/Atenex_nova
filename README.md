@@ -1,493 +1,230 @@
 # Atenex Nova
 
-**Next-Generation Local-First Document Memory & RAG Platform**
+**Motor local de contexto verificable para repositorios grandes.**
 
-<p align="center">
-  <em>A document memory system with multiple retrieval engines — not another chatbot with vectors.</em>
-</p>
+La primera versión usable es `atenex-context`: cataloga el worktree actual,
+construye un índice incremental local y expone seis consultas de solo lectura por
+CLI y MCP. Combina búsqueda literal/FTS5, símbolos, relaciones estáticas y un
+RepoMap acotado. Ollama, Qdrant y la recuperación semántica son opcionales.
 
-<p align="center">
-  <a href="#architecture">Architecture</a> ·
-  <a href="#quick-start">Quick Start</a> ·
-  <a href="#api-surface">API</a> ·
-  <a href="#evaluation-framework">Evaluation</a> ·
-  <a href="#why-open-source">Why Open Source</a>
-</p>
+El RAG documental anterior se conserva como subsistema histórico; su API FastAPI y
+su frontend no son requisitos del nuevo core.
 
----
+## Estado verificado
 
-## Overview
-
-Atenex Nova is an **open-source, local-first platform** for loading documents, building structured document memory, and answering questions with real grounding. It represents a second-generation approach to Retrieval-Augmented Generation that moves beyond the "single vector index + LLM" paradigm.
-
-Instead of relying on one retrieval mechanism, Atenex Nova coordinates **multiple specialized retrieval engines** — dense, sparse, propositional, summary-based, and visual — with intelligent query routing that selects the optimal strategy based on question type. Every answer is verified before delivery, with full citation traceability back to source document spans.
-
-### What Makes This Different
-
-| Traditional RAG | Atenex Nova |
-|---|---|
-| Single vector index | 5-index architecture: dense + sparse + proposition + summary + visual |
-| One-size-fits-all retrieval | Query routing: 6 specialized modes (exact, factual, multi-hop, global, argumentative, visual) |
-| Text-only chunking | Structural document parsing with Docling — headings, tables, captions, reading order |
-| No verification | Two-step verification + grounding score + regeneration before answering |
-| Approximate citations | Span-level citation binding to real document positions |
-| Cloud-dependent | Local-first: everything runs on-prem with optional cloud decoupling |
-
-### Core Capabilities
-
-- **Hybrid retrieval** — EmbeddingGemma dense vectors + local BM25 sparse + reranking fusion
-- **Multi-layer memory** — Chunks, propositions, summaries, and visual pages stored independently
-- **Query routing** — Automatic classification selects optimal retrieval mode per question type
-- **Propositional graph** — Claims, definitions, and relationships for multi-hop reasoning
-- **Visual retrieval** — ColPali-style page-level retrieval for scanned documents and complex layouts
-- **Answer verification** — Deterministic check + LLM second pass + grounding score before delivery
-- **Evidence traceability** — Every citation resolves to a real document span with page, bbox, and heading path
-- **Evaluation framework** — Dataset management, golden sets, and per-mode benchmarking
-- **Full observability** — Pipeline audit trails, job state tracking, dependency health checks
-
----
-
-## Architecture
-
-Atenex Nova follows a **Modular Monolith + Hexagonal Architecture** pattern, designed for maintainability, testability, and clear separation of concerns.
-
-```
-presentation  →  application  →  domain  →  infrastructure  →  workers  →  evaluation
-   (APIs)         (services)    (entities)    (adapters)       (jobs)      (metrics)
-```
-
-| Layer | Responsibility | Key Components |
+| Capacidad | Estado | Evidencia del 2026-07-31 |
 |---|---|---|
-| `presentation` | FastAPI routers, DTOs, HTTP responses | 10 routers, OpenAPI-contracted |
-| `application` | Services, orchestrators, policies, use cases | Retrieval & answer orchestration, query routing, context packing |
-| `domain` | Entities, value objects, domain contracts, rules | 15+ entity types, typed identifiers, metadata schemas |
-| `infrastructure` | DB, parsing, embeddings, vector store, LLM, visual | PostgreSQL/SQLite, Qdrant, Docling, EmbeddingGemma, Gemma 4, ColPali |
-| `workers` | Async job processing | Ingestion, memory enrichment, visual indexing |
-| `evaluation` | Datasets, runs, scoring, regression | Answer & retrieval scorers, dataset manager |
-| `shared` | Configuration, logging, exceptions, observability | Settings, structured logging, pipeline audit |
+| Scanner Git/worktree y políticas de seguridad | **Implemented / Verified** | pruebas de tracked/untracked, secretos, binarios, tamaño, traversal y symlinks |
+| SQLite FTS5 incremental y generaciones atómicas | **Implemented / Verified** | no-op para snapshot idéntico, activación transaccional, recuperación natural estricta/relajada y rechazo de snapshot cambiante |
+| Parsers, símbolos, grafo y RepoMap | **Implemented / Verified** | Python AST; Tree-sitter opcional para TS/TSX/JS/Java/SQL; fallback diagnosticado |
+| CLI `atenex-context` | **Implemented / Verified** | indexación, estado, doctor y seis consultas |
+| MCP de seis herramientas | **Implemented / Verified** | descubrimiento y llamada con cliente oficial MCP 2.0 |
+| Transporte MCP `stdio` | **Implemented / Verified** | subprocess real: inicialización, seis schemas y `repo_overview` sin error |
+| Ollama + Qdrant + RRF | **Implemented / Optional** | contratos, namespace, sentinel de completitud, degradación y fusión verificados con fakes; proveedores vivos no revalidados |
+| Reranker concreto | **Planned / Optional** | existe el puerto y la coordinación, no un adapter configurado |
+| RAG documental heredado | **Historical / Maintained** | evidencia anterior archivada; no fue revalidado en esta entrega |
 
-### Technology Stack
+Verificación focalizada:
 
-| Component | Technology |
-|---|---|
-| **Backend** | Python 3.11+, FastAPI, SQLAlchemy async, SQLModel, Pydantic v2 |
-| **Relational DB** | PostgreSQL (production) / SQLite (development) |
-| **Vector Store** | Qdrant (dense + sparse + multi-vector) |
-| **Document Parser** | Docling (structural parsing: headings, tables, captions, OCR, reading order) |
-| **LLM Generation** | Gemma 4 via Ollama or llama.cpp (E2B / 12B / 26B profiles) |
-| **Embeddings** | EmbeddingGemma via Ollama, local/offline-first (256d / 384d / 768d via Matryoshka Representation Learning) |
-| **Visual Retrieval** | ColPali-style visual page retrieval |
-| **Frontend** | React 18, TypeScript, Vite |
+- 53 pruebas Repo Context: 53 pasaron con gramáticas precargadas.
+- Sin caché Tree-sitter: 50 pasaron y 3 se omitieron; el fallback conservador siguió
+  funcionando.
+- `ruff`: 0 incidencias en el bounded context, su runner y pruebas.
+- `mypy --strict`: 0 errores en 28 archivos del bounded context.
+- Aceptación core sobre Atenex Nova y `client-romero`: 13/13 consultas con hit,
+  Recall@20 medio 1.0 y MRR 0.90384615; cero consultas sin resultados.
+- Índices de aceptación: Atenex 362 archivos/3508 símbolos/14532 relaciones;
+  `client-romero` 816/11997/37049. Los conteos dependen del snapshot.
+- Claude Code 2.1.220: `repo-context` figura `✔ Connected`; el cliente MCP 2.0
+  ejecutó `repo_overview` y `search_repo` por el launcher persistente. La búsqueda
+  léxica recuperó las tres etapas locales del outbox en 20 resultados y 3874 tokens.
+  El overview transversal recuperó las seis etapas POS → API entre sus primeros siete
+  paths tanto en `focus_results` como en RepoMap, con 5979/6000 tokens; con el índice
+  vigente, MCP inicializó en 1.087 s.
 
-### Hardware Profiles
+Estas cifras no revalidan las suites completas del RAG o del frontend.
 
-| Profile | RAM | Generator | Embeddings | Capabilities |
-|---|---|---|---|---|
-| **Lite** | 8 GB | Gemma 4 E2B | EmbeddingGemma 256d | Core retrieval, no persistent visual index |
-| **Standard** | 16 GB | Gemma 4 12B | EmbeddingGemma 384d | Full propositional graph, optional visual |
-| **Advanced** | 32 GB+ | Gemma 4 26B/31B | EmbeddingGemma 768d | All indices active, full DRIFT/global mode |
+Verificación focalizada del RAG documental heredado (2026-07-31):
 
----
+- 38 pruebas unitarias de routing, planificación, presupuesto de contexto, pasajes,
+  BM25, citas y grounding pasaron; `ruff` quedó limpio en las rutas tocadas.
+- La colección viva `Jesus G` (1757 documentos, perfil `es`) respondió en español a
+  las dos consultas reportadas. `el dinero es enemigo del amor?` siguió
+  `factual_local → direct_answer`, usó 8 evidencias y resolvió 3/3 marcadores; la
+  respuesta quedó `verified` con grounding conservador 0.707.
+- `Como se diferencia un enamorado de un imbecil?` siguió
+  `multi_hop → hierarchical_synthesis`, usó 10 evidencias y resolvió 5/5
+  marcadores; quedó `verified` con grounding 0.731. Esta es evidencia puntual, no
+  una revalidación completa del RAG histórico.
 
-## Document Ingestion Pipeline
+## Instalación y primer índice
 
-Atenex Nova prioritizes **document understanding over fast vectorization**. The ingestion pipeline transforms raw documents into a rich, multi-layered memory structure:
+Para arrancar o detener rápidamente esta estación, usar primero el
+[runbook local](docs/runbook-local.md). Distingue el MCP mínimo del stack documental
+completo y contiene las rutas, puertos, verificaciones y apagado seguro de esta PC.
 
-```
-Document → Structural Parsing → Normalization → Multi-Layer Segmentation
-         → Embeddings → Memory Enrichment → Visual Indexing → Ready
-```
-
-### Pipeline Stages
-
-1. **Reception** — Upload, local import, or folder watch. Metadata, checksum, version, and process traces generated.
-2. **Structural Parsing** — Docling extracts headings, paragraphs, lists, tables, captions, figures, footnotes, and reading order.
-3. **Semantic Normalization** — Language detection, whitespace cleanup, numeral/date/code preservation, caption↔figure linking, cell↔table↔header linking.
-4. **Multi-Layer Segmentation** — Four views of each document:
-   - **Structural spans** — Paragraphs, sections, table cells, captions
-   - **Retrieval chunks** — Structure-aware chunks with context (400-800 token budget)
-   - **Propositions/claims** — Atomic assertions extracted from spans
-   - **Hierarchical summaries** — Section, document, and collection-level summaries
-5. **Embedding & Indexing** — EmbeddingGemma encodes chunks, propositions, and summaries into Qdrant. Local BM25 complements for keywords, proper names, dates, and codes.
-6. **Memory Enrichment** — Worker extracts propositions, generates summaries, builds heuristic relationships for multi-hop reasoning.
-7. **Visual Indexing** — Complex/scanned documents get visual page representations for layout-aware retrieval.
-
-### Document State Machine
-
-```
-registered → parsed → normalized → segmented → embedded → indexed → ready
-                                                    ↓
-                                                  failed (with recovery)
-```
-
----
-
-## Query Pipeline
-
-Questions flow through a multi-stage routing and synthesis pipeline:
-
-```
-Question → Normalization → Classification → Routing → Multi-Engine Retrieval
-         → Fusion + Rerank → Evidence Pack → Synthesis → Verification → Answer
-```
-
-### Query Modes
-
-| Mode | Use Case | Retrieval Strategy |
-|---|---|---|
-| `exact` | Codes, proper names, dates, IDs | Sparse-dominant + dense auxiliary |
-| `factual_local` | Point questions about few passages | Dense+sparse hybrid + reranking |
-| `multi_hop` | Connecting dispersed pieces | Hybrid seeds + propositional graph traversal |
-| `global` | Corpus-wide overview questions | Summary index + thematic communities + DRIFT |
-| `argumentative` | Conflicting positions across sources | Hybrid retrieval + evidence clustering + support/attack structure |
-| `visual` | Tables, complex layouts, scans | ColPali visual index + parser text spans |
-
-### What Happens Under the Hood
-
-- Detects query language and intent
-- Resolves permitted document scope (tenant-aware)
-- Combines sparse, dense, summary, and visual retrieval
-- Reranks and deduplicates evidence
-- Builds evidence pack with token budget management
-- Selects synthesis plan (direct, hierarchical, global, argument, visual-grounded)
-- Generates response with Gemma 4
-- Verifies grounding and citations before persisting output
-
-### Answer Output
-
-Every persisted answer includes:
-
-- Response text
-- Verification verdict
-- Grounding score
-- Citations with span-level binding
-- Associated evidence
-- Routing mode and reason
-- Verification metadata
-- Markdown and PDF export support
-
----
-
-## Frontend Workspace
-
-The frontend is an **operational workspace**, not a demo UI. It provides full visibility into the document memory system.
-
-### Routes
-
-| Route | Purpose |
-|---|---|
-| `/` | Dashboard |
-| `/collections` | Collection management, document upload, rebuild |
-| `/query` | Query workspace with conversation thread, answer panel, citation sidebar |
-| `/observability` | Pipeline audit trails, evidence inspection |
-| `/evaluation` | Dataset management, evaluation runs, metrics |
-| `/jobs` | Job state monitoring |
-
-### Query Workspace Features
-
-- Conversation thread with history
-- Answer panel with synthesis output
-- Citation sidebar with span-level navigation
-- Evidence cards with source document context
-- Document tree inspector
-- Page viewer for visual evidence
-- Query history and memory rail
-
----
-
-## API Surface
-
-Full documentation at [docs/api-endpoints.md](docs/api-endpoints.md). Contract-validated against FastAPI OpenAPI via `test_openapi_documentation_contract.py`.
-
-| Method | Route | Purpose |
-|---|---|---|
-| GET | `/health` | Service health status |
-| GET | `/health/dependencies` | Runtime dependency health (LLM, Qdrant, embeddings, Docling, visual) |
-| POST | `/collections` | Create collection |
-| GET | `/collections` | List collections |
-| GET | `/collections/{id}/documents` | Document inventory with pagination |
-| POST | `/collections/{id}/documents` | Upload document |
-| POST | `/collections/{id}/documents/import` | Register local path |
-| POST | `/collections/{id}/documents/import-folder` | Import local folder |
-| POST | `/collections/{id}/rebuild` | Queue collection rebuild |
-| GET | `/documents/{id}/structure` | Document tree |
-| GET | `/documents/{id}/nodes` | Structural nodes |
-| GET | `/documents/{id}/chunks` | Persisted chunks |
-| GET | `/documents/{id}/propositions` | Persisted propositions |
-| GET | `/documents/{id}/pages/{page}` | Visual page asset |
-| GET | `/queries/history` | Query history |
-| POST | `/queries/search` | Retrieval without answer synthesis |
-| POST | `/queries/answer` | Retrieval + synthesis + verification |
-| GET | `/answers/{id}` | Persisted answer |
-| GET | `/answers/{id}/export/markdown` | Export answer as Markdown |
-| GET | `/answers/{id}/export/pdf` | Export answer as PDF |
-| GET | `/jobs` | List jobs |
-| GET | `/observability/audit` | Pipeline audit trail |
-| GET | `/observability/documents/{id}/evidence` | Document evidence inspection |
-| GET | `/evaluation/datasets` | Evaluation datasets |
-| POST | `/evaluation/runs` | Launch evaluation run |
-
----
-
-## Evaluation Framework
-
-Atenex Nova includes a built-in evaluation system for measuring retrieval and answer quality:
-
-- **Dataset management** — JSON-based golden sets with questions, expected answers, and evaluation criteria
-- **Per-mode benchmarking** — Separate evaluation for each query routing mode
-- **Retrieval scoring** — Precision, recall, and MRR for retrieval quality
-- **Answer scoring** — Groundedness, faithfulness, and answer relevance metrics
-- **Regression comparison** — Track quality changes across pipeline iterations
-
----
-
-## Quick Start
-
-### Quick Command Reference (Windows / PowerShell)
-
-To spin up all services (databases, LLM, backend API, workers, and frontend) in separate terminal tabs from the root directory `Atenex_nova`:
-
-1. **Databases (Qdrant + PostgreSQL)**:
-   ```powershell
-   docker compose --profile prod up -d
-   ```
-   *(Qdrant will run on `http://localhost:6333` and PostgreSQL on port `5432`)*
-
-2. **LLM + Embeddings Runtime (Ollama, fully local)**:
-   ```powershell
-   ollama serve
-   ollama pull gemma4:12b        # LLM generator
-   ollama pull embeddinggemma    # EmbeddingGemma dense embeddings (offline-first, no Hugging Face)
-   ```
-   *Both the generator and the embeddings run locally on the GPU via Ollama — no Hugging Face download or login is required.*
-
-3. **Backend API Server**:
-   ```powershell
-   cd backend
-   # On Windows (GPU venv):
-   .venv312\Scripts\python.exe -m uvicorn atenex_nova.main:app --reload --port 8000
-   # Fallback/Other:
-   .venv\Scripts\python.exe -m uvicorn atenex_nova.main:app --reload --port 8000
-   ```
-
-4. **Background Ingestion & Memory Worker**:
-   ```powershell
-   cd backend
-   # On Windows (GPU venv):
-   .venv312\Scripts\python.exe -m atenex_nova.workers.main
-   # Fallback/Other:
-   .venv\Scripts\python.exe -m atenex_nova.workers.main
-   ```
-
-5. **Frontend Application**:
-   ```powershell
-   cd frontend
-   npm run dev
-   ```
-
-### Prerequisites
-
-- Python >= 3.11
-- Node.js >= 20 LTS
-- Docker Desktop (for Qdrant and PostgreSQL)
-- Git
-
-### 1. Clone
-
-```bash
-git clone <repository-url>
-cd Atenex_nova
-```
-
-### 2. Backend
+Python 3.12 es el runtime canónico:
 
 ```bash
 cd backend
-
-# On Windows: Create the canonical GPU-enabled environment (.venv312)
-python -m venv .venv312
-.venv312\Scripts\activate
-
-# On Linux/macOS or CPU-only Fallback:
 python -m venv .venv
-# Windows CPU activate:
-.venv\Scripts\activate
-# Linux/macOS CPU activate:
 source .venv/bin/activate
+pip install -e ".[dev,repo-context]"
 
-# Install development dependencies
-pip install -e ".[dev]"
+atenex-context index --repo ..
+atenex-context doctor --repo .. --json
+atenex-context overview --repo .. --focus "arquitectura de recuperación"
 ```
 
-### 3. Frontend
+En Windows, activar el entorno correspondiente y usar
+`backend/.venv312/Scripts/python.exe`.
+
+El core no necesita red ni servicios. Si `tree-sitter-language-pack` no tiene una
+gramática ya precargada, el archivo se procesa con el extractor conservador y deja
+un diagnóstico; la indexación nunca descarga gramáticas silenciosamente. Para usar
+un caché preparado:
 
 ```bash
-cd frontend
-npm install
-npm run dev
+export ATENEX_TREE_SITTER_CACHE_DIR=/ruta/al/cache
 ```
 
-### 4. Local Services
+La ubicación predeterminada del sidecar es
+`.atenex/context/index.sqlite3`. Use `--data-dir PATH` para mantenerlo fuera del
+repositorio.
+
+## Consultas
 
 ```bash
-# Qdrant
-docker run -d --name qdrant -p 6333:6333 -p 6334:6334 \
-  -v qdrant_storage:/qdrant/storage qdrant/qdrant
-
-# LLM + Embeddings runtime: Ollama (fully local, no Hugging Face)
-ollama serve
-ollama pull gemma4:12b        # generator
-ollama pull embeddinggemma    # EmbeddingGemma dense embeddings
-
-# Alternative: llama.cpp
-llama-server -m models/gemma-4-12b.gguf --port 8080 --ctx-size 8192
+atenex-context status --repo .. --json
+atenex-context search --repo .. "RetrievalOrchestrator" --json
+atenex-context symbol --repo .. "RetrievalOrchestrator" --json
+atenex-context trace --repo .. "RetrievalOrchestrator" \
+  --direction dependents --depth 2 --json
+atenex-context impact --repo .. "backend/atenex_nova/main.py" --json
+atenex-context tests --repo .. "TokenBudgetPolicy" --json
 ```
 
-### 5. Verify Dependencies
+El servidor:
 
 ```bash
-curl http://127.0.0.1:8000/health/dependencies
-# Response should show llm.available=true when Ollama + gemma4:12b are ready
+atenex-context serve --repo .. --transport stdio
 ```
 
-### 6. Run
+Herramientas MCP públicas:
+
+```text
+repo_overview
+search_repo
+get_symbol
+trace_symbol
+analyze_impact
+related_tests
+```
+
+Cada respuesta contiene la generación, `HEAD`, fingerprint, frescura,
+truncamiento, diagnósticos y evidencia con rutas relativas y líneas. La fuente viva
+se revalida antes de incluir extractos.
+
+Las consultas naturales no dependen de embeddings: el core intenta coincidencia
+estricta y luego relajada, usa prefijos y un vocabulario bilingüe acotado, y
+diversifica archivos/módulos. Los warnings persistentes del índice se consultan con
+`status`/`doctor`; una búsqueda solo transporta diagnósticos pertinentes a esa
+respuesta.
+
+La skill canónica `.agents/skills/atenex-repo-context/SKILL.md` formaliza este
+flujo y sus controles de calidad para Codex. Claude dispone del adaptador equivalente
+en `.claude/skills/atenex-repo-context/SKILL.md`.
+
+## Configuración de clientes
+
+El repositorio incluye `.mcp.json` y `.cursor/mcp.json`. En esta estación ambos
+usan `backend/scripts/serve_repo_context_mcp.sh`: actualiza incrementalmente el
+índice del checkout/worktree y arranca el servidor con rutas absolutas, sin depender
+del `PATH` limitado de una aplicación gráfica.
+
+Configuración conceptual equivalente:
+
+```toml
+[mcp_servers.repo_context]
+command = "/usr/bin/bash"
+args = ["/ruta/Atenex_nova/backend/scripts/serve_repo_context_mcp.sh", "."]
+```
+
+Para Claude Code, `.mcp.json` es suficiente. La aprobación del servidor de proyecto
+es una decisión local de seguridad del cliente y no se guarda en Git:
 
 ```bash
-# API server
+claude mcp list
+```
+
+Claude Desktop en la pestaña **Code** comparte `.mcp.json`, `CLAUDE.md` y la
+configuración de Claude Code. Seleccione ambiente **Local** y esta carpeta como
+proyecto. La pestaña **Chat** usa una configuración MCP separada.
+
+## Semántica opcional
+
+```bash
+export ATENEX_REPO_CONTEXT_SEMANTIC=1
+export ATENEX_REPO_CONTEXT_OLLAMA_URL=http://127.0.0.1:11434
+export ATENEX_REPO_CONTEXT_EMBEDDING_MODEL=embeddinggemma
+export ATENEX_REPO_CONTEXT_QDRANT_URL=http://127.0.0.1:6333
+
+atenex-context index --repo ..
+atenex-context search --repo .. "validación de acceso" \
+  --mode lexical --mode symbol --mode semantic --json
+```
+
+SQLite sigue siendo la autoridad. Una generación semántica se consulta únicamente
+si su sentinel de completitud coincide con repositorio, generación y modelo; de lo
+contrario la búsqueda degrada explícitamente al core.
+
+## Evaluación reproducible
+
+```bash
 cd backend
-uvicorn atenex_nova.main:app --reload --port 8000
+python -m unittest discover -s tests/repo_context -p "test_*.py" -v
+python -m ruff check atenex_nova/repo_context tests/repo_context \
+  scripts/evaluate_repo_context.py
+python -m mypy atenex_nova/repo_context
 
-# Worker (async job processing)
-cd backend
-python -m atenex_nova.workers.main
-
-# Frontend
-cd frontend
-npm run dev
+python scripts/evaluate_repo_context.py \
+  --manifest tests/repo_context/goldens/acceptance.json \
+  --repo atenex-nova=.. \
+  --repo client-romero=/ruta/local/client-romero \
+  --data-dir atenex-nova=/tmp/atenex-context/atenex \
+  --data-dir client-romero=/tmp/atenex-context/client \
+  --reindex --full --top-k 20
 ```
 
----
+El reporte no incluye roots absolutos ni copia fuente privada.
 
-## Project Structure
+## Documentación
 
-```
-Atenex_nova/
-├── AGENTS.md                          # Development conventions
-├── README.md                          # This file
-├── backend/
-│   ├── pyproject.toml                 # Package definition, dev dependencies
-│   ├── ruff.toml                      # Linting configuration
-│   ├── atenex_nova/
-│   │   ├── main.py                    # FastAPI application entry point
-│   │   ├── dependencies.py            # Dependency injection wiring
-│   │   ├── presentation/              # API routers, DTOs, schemas
-│   │   ├── application/               # Services, orchestrators, policies
-│   │   ├── domain/                    # Entities, value objects, contracts
-│   │   ├── infrastructure/            # DB, embeddings, LLM, Qdrant, parsing, visual
-│   │   ├── workers/                   # Async job definitions and runner
-│   │   ├── evaluation/                # Datasets, scorers, regression
-│   │   └── shared/                    # Config, logging, exceptions, observability
-│   └── tests/
-│       ├── unit/                      # Unit tests (43+ passing)
-│       ├── integration/               # Integration tests (pipeline validation)
-│       └── e2e/                       # End-to-end tests (API surface, ingestion, chat)
-├── design-system/                     # UI design tokens and page specs
-├── docs/                              # Architecture, API, gap inventory
-├── frontend/                          # React/TypeScript/Vite workspace
-├── prompts/                           # Versioned prompt suite per synthesis mode
-└── storage/                           # Local blob storage (uploads, visual pages)
-```
+- [Contrato de producto](docs/baseline.md)
+- [Arquitectura](docs/architecture-repo-context.md)
+- [Indexación y almacenamiento](docs/indexing-and-storage.md)
+- [Contrato MCP](docs/mcp-tools.md)
+- [Operación](docs/operations.md)
+- [Runbook local de esta PC](docs/runbook-local.md)
+- [Evaluación](docs/evaluation-repo-context.md)
+- [Plan y ledger de ejecución](docs/plan-repo-context-mcp.md)
+- [Auditoría contrastiva vigente](docs/auditoria-completa.md)
+- [Mapa documental](docs/README.md)
 
----
+El código, las pruebas y la configuración actuales son la autoridad final. El
+histórico del RAG documental está en `docs/archive/rag-v0/`.
 
-## Why Open Source
-
-Atenex Nova is being developed as open source because we believe that **document memory and retrieval infrastructure should be transparent, auditable, and under user control**. The current RAG landscape is dominated by opaque cloud services that lock organizations into vendor-specific retrieval patterns.
-
-This project demonstrates that a **local-first, multi-engine retrieval architecture** can outperform single-index approaches while maintaining complete data sovereignty. By open-sourcing Atenex Nova, we aim to:
-
-1. **Advance open RAG research** — Provide a reference implementation of hybrid retrieval, query routing, proposition graphs, and verification pipelines that others can study, extend, and benchmark against.
-2. **Enable privacy-preserving AI** — Give organizations a path to powerful document understanding without sending sensitive data to external APIs.
-3. **Lower the barrier to production RAG** — Show that sophisticated retrieval doesn't require massive infrastructure; the same architecture scales from 8 GB laptops to 32 GB+ workstations.
-4. **Build a community around document understanding** — Contribute to the open-source ecosystem with structural parsing pipelines, multi-layer memory patterns, and evaluation frameworks that benefit all RAG practitioners.
-
-### Active Maintenance
-
-This project is under **active development** with a clear roadmap and rigorous quality standards:
-
-- **27 commits** across the project lifecycle
-- **10 FastAPI routers** with OpenAPI contract validation
-- **19 test files** spanning unit, integration, and e2e coverage
-- **15+ domain entities** with typed identifiers and value objects
-- **Modular hexagonal architecture** with clear layer boundaries
-- **Comprehensive documentation** — architecture specs, API contracts, gap inventory, design system
-
-### How API Credits Will Be Used
-
-API credits from the Codex for Open Source program would directly accelerate essential open-source maintenance and development:
-
-- **Automated evaluation pipelines** — Run golden set benchmarks across all 6 query modes to validate retrieval and answer quality improvements
-- **Code quality automation** — Power automated linting, type checking, and refactoring suggestions across the 223-file codebase
-- **Documentation generation** — Auto-generate API documentation, architecture diagrams, and contributor guides from the codebase
-- **Pull request review assistance** — Use Codex to review incoming PRs against the hexagonal architecture contract and domain boundaries
-- **Test generation and maintenance** — Expand unit and integration test coverage, particularly for edge cases in retrieval routing and citation binding
-- **Release workflow automation** — Automate changelog generation, version bumping, and release notes for consistent project releases
-
----
-
-## Verified Workspace Status
-
-This README reflects the current repository checkout, not just the product vision.
-
-| Check | Status | Command |
-|---|---|---|
-| OpenAPI/docs contract | 1 passed | `pytest tests/unit/test_openapi_documentation_contract.py -q` |
-| Backend unit, integration, and e2e tests | 96 passed, 3 skipped (2026-06-16, Qdrant+Ollama live) | `backend/.venv312/Scripts/python.exe -m pytest tests -q` |
-| Frontend build | success | `npm run build` |
-| Frontend lint | success | `npm run lint` |
-| Backend `ruff` | 0 issues | `ruff check .` |
-| Backend `mypy` | 0 errors | `mypy atenex_nova` |
-| Integration / e2e | passing with local runtimes | 3 skipped when Qdrant/HF unavailable; see pytest output |
-
-The canonical technical audit is [docs/auditoria-completa.md](docs/auditoria-completa.md).
-
----
-
-## Known Gaps
-
-The repository is substantially complete but not yet 100% closed against the baseline. The canonical technical audit is [docs/auditoria-completa.md](docs/auditoria-completa.md). Current open items include:
-
-- Hardened sparse persisted index
-- Stronger measurable reranking
-- Strict mode visual policy
-- Formal evaluation with golden sets per mode
-- Complete e2e validation with active local runtimes
-
----
-
-## Related Documentation
-
-- [Auditoría Técnica Completa](docs/auditoria-completa.md)
-- [Product Baseline](docs/baseline.md)
-- [Backend Architecture](docs/architecture-backend.md)
-- [Frontend Architecture](docs/architecture-frontend.md)
-- [API Endpoints](docs/api-endpoints.md)
-- [Jobs and Workers](docs/jobs-and-workers.md)
-- [TurboQuant Integration](docs/turboquant-integration.md)
-- [Design System](design-system/atenex-nova/MASTER.md)
-- [AGENTS.md](AGENTS.md)
-
----
-
-## License
-
-Pending definition.
-
----
-
-<p align="center">
-  <strong>Atenex Nova</strong> — Next-generation local-first document memory platform
-</p>
-<p align="center">
-  <em>Open source. Local-first. Multi-engine retrieval. Verified answers.</em>
-</p>
+Nota operativa del RAG heredado: el adapter de respuestas Ollama usa
+`think=false` para que Gemma 4 entregue texto visible dentro del presupuesto de
+generación; Atenex sigue realizando recuperación y verificación por separado. Los
+marcadores heurísticos de ruta se comparan como palabras o frases completas para
+evitar falsos modos visuales por subcadenas como `table` dentro de `establece`. La
+vista de consulta reconcilia el chat después de una interrupción HTTP: mantiene el
+turno pendiente y recupera la respuesta persistida en vez de ocultarla.
+El idioma explícito de la colección prevalece sobre la detección heurística; para
+`Jesus G`, prompts, reparaciones y respuestas son exclusivamente en español. La
+recuperación léxica tolera vocales sin tilde, selecciona pasajes centrados en la
+consulta y no cuenta el texto fuente completo contra el presupuesto si no entra al
+prompt. El verificador no puede inflar el score determinista: audita marcadores
+simples o agrupados, rechaza relaciones de grafo como citas documentales y registra
+en la traza índices inválidos, no citables o sin enlace.

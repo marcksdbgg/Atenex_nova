@@ -6,10 +6,14 @@ import pytest
 
 from atenex_nova.application.orchestrators.answer_orchestrator import AnswerOrchestrator
 from atenex_nova.application.orchestrators.retrieval_orchestrator import SearchResult
-from atenex_nova.application.policies.context_packing_policy import ContextPackingPolicy
+from atenex_nova.application.policies.context_packing_policy import (
+    ContextPackingPolicy,
+    EvidencePack,
+)
+from atenex_nova.domain.entities.citation import Citation
 from atenex_nova.domain.entities.evidence_item import EvidenceItem
 from atenex_nova.domain.entities.query import Query
-from atenex_nova.domain.value_objects.identifiers import new_id
+from atenex_nova.domain.value_objects.identifiers import AnswerVerdict, new_id
 from atenex_nova.shared.exceptions.base import ServiceUnavailableError
 
 
@@ -136,8 +140,9 @@ async def test_compose_includes_all_selected_evidence_in_prompt() -> None:
     assert "Evidence snippet 1" in bundle.prompt
     assert "Evidence snippet 2" in bundle.prompt
     assert bundle.citations
-    assert len(generator.prompts) == 2
-    assert "VERDICT:" in generator.prompts[1]
+    assert len(generator.prompts) == 4
+    assert bundle.answer.evidence_trace["generation_attempts"] == 2
+    assert "VERDICT:" in generator.prompts[-1]
 
 
 @pytest.mark.asyncio
@@ -178,3 +183,127 @@ async def test_compose_retries_once_when_verification_is_weak() -> None:
     assert bundle.answer.text.startswith("EmbeddingGemma supports")
     assert bundle.answer.evidence_trace["generation_attempts"] == 2
     assert "regenerated_after_failed_verification" in bundle.answer.verification_issues
+
+
+def test_spanish_prompt_uses_corpus_language_without_translation_step() -> None:
+    orchestrator = AnswerOrchestrator(generator=_EchoGateway())
+    query = Query(
+        id="query-es",
+        collection_id="collection-es",
+        text="el dinero es enemigo del amor?",
+        normalized_text="el dinero es enemigo del amor?",
+        language="es",
+        route_mode="factual_local",
+    )
+    result = SearchResult(
+        query=query,
+        hits=[],
+        evidence_pack=EvidencePack(query_id=query.id, route_mode=query.route_mode),
+        route_reason="factual_local: default factual local retrieval path",
+    )
+
+    prompt = orchestrator._build_prompt(result, "direct_answer", "standard")
+
+    assert "Language: español" in prompt
+    assert "Escribe toda la respuesta exclusivamente en español" in prompt
+    assert "no redactes primero en inglés ni entregues traducciones" in prompt
+
+
+@pytest.mark.asyncio
+async def test_llm_verifier_cannot_inflate_deterministic_grounding() -> None:
+    orchestrator = AnswerOrchestrator(generator=_EchoGateway())
+    query = Query(
+        id="query-1",
+        collection_id="collection-1",
+        text="What does EmbeddingGemma support?",
+        normalized_text="what does embeddinggemma support?",
+        language="en",
+        route_mode="factual_local",
+    )
+    evidence = EvidenceItem(
+        id="evidence-1",
+        query_id=query.id,
+        source_type="chunk",
+        source_id="chunk-1",
+        document_id="document-1",
+        score=1.0,
+        rank=1,
+        snippet="EmbeddingGemma supports 384d embeddings.",
+        metadata={"source_text": "EmbeddingGemma supports 384d embeddings."},
+    )
+    result = SearchResult(
+        query=query,
+        hits=[],
+        evidence_pack=EvidencePack(
+            query_id=query.id,
+            route_mode=query.route_mode,
+            items=[evidence],
+        ),
+        route_reason="test",
+    )
+    citation = Citation(
+        id="citation-1",
+        answer_id="answer-1",
+        document_id="document-1",
+        char_start=0,
+        char_end=40,
+        snippet=evidence.snippet,
+    )
+
+    verification = await orchestrator._verify(
+        result,
+        "EmbeddingGemma supports 384d embeddings [1]",
+        "direct_answer",
+        [citation],
+    )
+
+    assert verification.grounding_score < 0.88
+    assert verification.verdict == AnswerVerdict.PARTIALLY_VERIFIED
+
+
+@pytest.mark.asyncio
+async def test_spanish_query_rejects_english_answer_language() -> None:
+    orchestrator = AnswerOrchestrator(generator=_EchoGateway())
+    query = Query(
+        id="query-es",
+        collection_id="collection-es",
+        text="el dinero es enemigo del amor?",
+        normalized_text="el dinero es enemigo del amor?",
+        language="es",
+        route_mode="factual_local",
+    )
+    evidence = EvidenceItem(
+        id="evidence-1",
+        query_id=query.id,
+        source_type="chunk",
+        source_id="chunk-1",
+        document_id="document-1",
+        score=1.0,
+        rank=1,
+        snippet="El dinero no aparece descrito como enemigo del amor.",
+        metadata={"source_text": "El dinero no aparece descrito como enemigo del amor."},
+    )
+    result = SearchResult(
+        query=query,
+        hits=[],
+        evidence_pack=EvidencePack(query_id=query.id, route_mode=query.route_mode, items=[evidence]),
+        route_reason="test",
+    )
+    citation = Citation(
+        id="citation-1",
+        answer_id="answer-1",
+        document_id="document-1",
+        char_start=0,
+        char_end=55,
+        snippet=evidence.snippet,
+    )
+
+    verification = await orchestrator._verify(
+        result,
+        "Based on the provided evidence, money is not described as an enemy of love [1].",
+        "direct_answer",
+        [citation],
+    )
+
+    assert verification.verdict == AnswerVerdict.UNVERIFIED
+    assert "wrong_output_language" in verification.issues

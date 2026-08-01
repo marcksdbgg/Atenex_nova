@@ -9,6 +9,7 @@ from atenex_nova.application.orchestrators.answer_orchestrator import (
     VerificationResult,
 )
 from atenex_nova.domain.entities.citation import Citation
+from atenex_nova.domain.entities.evidence_item import EvidenceItem
 from atenex_nova.domain.value_objects.identifiers import AnswerVerdict
 from atenex_nova.shared.config.settings import Settings
 from atenex_nova.shared.exceptions.base import StrictModeViolationError
@@ -55,6 +56,52 @@ def test_citation_is_resolved() -> None:
         char_end=20,
     )
     assert AnswerOrchestrator._citation_is_resolved(c4) is False
+
+
+def test_graph_edge_marker_is_traced_but_not_bound_as_document_citation() -> None:
+    orchestrator = AnswerOrchestrator()
+    evidence = EvidenceItem(
+        id="edge-1",
+        query_id="query-1",
+        source_type="graph_edge",
+        source_id="edge-1",
+        document_id="document-1",
+        score=1.0,
+        rank=1,
+        snippet="Relación: una afirmación aparece en el documento.",
+    )
+
+    citations = orchestrator._bind_citations([evidence], "La relación aparece en el documento [1].")
+    audit = orchestrator._build_citation_audit([evidence], "La relación aparece [1].", citations)
+
+    assert citations == []
+    assert audit["uncitable_evidence_indices"] == [1]
+
+
+def test_grouped_citation_markers_are_audited_individually() -> None:
+    assert AnswerOrchestrator._extract_citation_indices("Afirmación [1, 4] y otra [9].") == [1, 4, 9]
+
+
+def test_finalize_never_invents_markers_after_binding() -> None:
+    orchestrator = AnswerOrchestrator()
+    citation = Citation(
+        id="citation-1",
+        answer_id="answer-1",
+        document_id="document-1",
+        char_start=0,
+        char_end=10,
+        snippet="evidencia",
+    )
+
+    text = orchestrator._finalize_text(
+        "Respuesta sin marcador.",
+        [citation],
+        "factual_local",
+        "direct_answer",
+        "es",
+    )
+
+    assert text == "Respuesta sin marcador."
 
 
 def test_enforce_strict_answer_rules() -> None:

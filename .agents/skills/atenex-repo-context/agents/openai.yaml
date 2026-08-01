@@ -1,0 +1,4 @@
+interface:
+  display_name: "Atenex Repo Context"
+  short_description: "Navigate large repositories through local MCP"
+  default_prompt: "Use $atenex-repo-context to map this repository task, retrieve exact source, and inspect impact and tests."

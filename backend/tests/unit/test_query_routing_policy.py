@@ -23,6 +23,14 @@ class TestQueryRoutingPolicy:
         assert self.policy.choose_mode(features) == QueryMode.VISUAL
         assert self.policy.classify_intent(features) == QueryIntent.VISUAL
 
+    def test_visual_marker_does_not_match_inside_spanish_word(self) -> None:
+        features = self.policy.extract_features(
+            "¿Qué relación establece Jesús G. Maestro entre literatura y libertad?"
+        )
+
+        assert features.has_visual_terms is False
+        assert self.policy.choose_mode(features) == QueryMode.MULTI_HOP
+
     def test_argumentative_query_routes_to_argumentative_mode(self) -> None:
         features = self.policy.extract_features("Why does this document contradict the earlier claim?")
         assert self.policy.choose_mode(features) == QueryMode.ARGUMENTATIVE
@@ -39,6 +47,17 @@ class TestQueryRoutingPolicy:
             "Explain literary neoteny in three concise points and cite the source documents."
         )
         assert features.language == "en"
+
+    def test_detect_language_defaults_ambiguous_spanish_question_to_spanish(self) -> None:
+        features = self.policy.extract_features("el dinero es enemigo del amor?")
+
+        assert features.language == "es"
+        assert features.multi_clause is False
+        assert self.policy.choose_mode(features) == QueryMode.FACTUAL_LOCAL
+
+    def test_collection_language_profile_overrides_detection(self) -> None:
+        assert self.policy.resolve_language("en", "es") == "es"
+        assert self.policy.resolve_language("en", "auto") == "en"
 
     def test_explain_route_mentions_selected_mode_and_reason(self) -> None:
         features = self.policy.extract_features("Compare the claims and contradictions in these documents")

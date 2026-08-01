@@ -41,6 +41,9 @@ env/
 backend/storage/turbovec/
 storage/turbovec/
 
+# Repo Context derived sidecar
+.atenex/context/
+
 # ---------------------------------------------------------------------------
 # Node / React Frontend
 # ---------------------------------------------------------------------------
@@ -103,6 +106,7 @@ storage/observability/
 backend/storage/uploads/
 backend/storage/visual_pages/
 backend/storage/observability/
+backend/storage/worker.lock
 
 # ---------------------------------------------------------------------------
 # Database files
