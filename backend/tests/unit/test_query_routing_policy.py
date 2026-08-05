@@ -34,6 +34,10 @@ class TestQueryRoutingPolicy:
         )
         assert features.language == "es"
 
+    def test_detect_language_spanish_without_diacritics(self) -> None:
+        features = self.policy.extract_features("prueba de disponibilidad del corpus")
+        assert features.language == "es"
+
     def test_detect_language_english_question(self) -> None:
         features = self.policy.extract_features(
             "Explain literary neoteny in three concise points and cite the source documents."

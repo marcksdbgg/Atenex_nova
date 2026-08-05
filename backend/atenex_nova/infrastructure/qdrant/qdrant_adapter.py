@@ -193,6 +193,9 @@ class QdrantAdapter(HybridIndex):
             points.append(
                 models.PointStruct(id=doc.id, vector=vector_dict, payload=doc.payload)
             )
+        if not points:
+            logger.debug("Skipping Qdrant upsert for %s: no indexable points", collection_name)
+            return
         try:
             await self.client.upsert(collection_name=collection_name, points=points)
             self._register_success()
@@ -220,16 +223,21 @@ class QdrantAdapter(HybridIndex):
 
         try:
             if hasattr(self.client, "search"):
-                q_vector: models.NamedSparseVector | models.NamedVector
+                # qdrant-client >=1.17 removed these legacy wrapper classes along
+                # with ``search``. Resolve them lazily so the compatibility path
+                # remains importable and type-checkable on current clients.
+                q_vector: Any
                 if query_sparse_indices is not None and query_sparse_values is not None:
-                    q_vector = models.NamedSparseVector(
+                    named_sparse_vector = vars(models)["NamedSparseVector"]
+                    q_vector = named_sparse_vector(
                         name="sparse",
                         vector=models.SparseVector(
                             indices=query_sparse_indices, values=query_sparse_values
                         ),
                     )
                 else:
-                    q_vector = models.NamedVector(name="dense", vector=query_vector or [])
+                    named_vector = vars(models)["NamedVector"]
+                    q_vector = named_vector(name="dense", vector=query_vector or [])
 
                 try:
                     results = await self.client.search(

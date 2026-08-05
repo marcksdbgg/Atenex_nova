@@ -35,6 +35,7 @@ from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGem
 from atenex_nova.infrastructure.files.blob_store import BlobStore
 from atenex_nova.infrastructure.parsing.docling_adapter import DoclingParserAdapter
 from atenex_nova.main import app
+from atenex_nova.shared.config.settings import Settings
 from atenex_nova.workers.jobs.ingestion_job import (
     NormalizeDocumentJobHandler,
     ParseDocumentJobHandler,
@@ -440,9 +441,22 @@ async def test_end_to_end_local_folder_import_registers_all_files(e2e_env, tmp_p
 
 
 @pytest.mark.asyncio
-async def test_delete_collection_cleans_indexes_without_deleting_source_files(e2e_env, tmp_path: Path) -> None:
+async def test_delete_collection_cleans_indexes_without_deleting_source_files(
+    e2e_env,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     session_factory = e2e_env["session_factory"]
     visual_root = e2e_env["visual_root"]
+
+    # This case verifies cleanup of visual artifacts specifically. Enable visual
+    # indexing for its text fixture without changing the product default, which
+    # intentionally skips plain-text documents.
+    visual_settings = Settings(visual_index_text_documents=True)
+    monkeypatch.setattr(
+        "atenex_nova.workers.jobs.memory_enrichment_job.get_settings",
+        lambda: visual_settings,
+    )
 
     source_file = tmp_path / "delete-source.txt"
     source_file.write_text(

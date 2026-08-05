@@ -32,9 +32,12 @@ logger = logging.getLogger(__name__)
 async def main() -> None:
     settings = get_settings()
     setup_logging(settings.log_level)
-    from atenex_nova.workers.sqlite_lock import acquire_sqlite_worker_lock
+    from atenex_nova.workers.sqlite_lock import (
+        acquire_sqlite_worker_lock,
+        release_sqlite_worker_lock,
+    )
 
-    acquire_sqlite_worker_lock()
+    lock_fd = acquire_sqlite_worker_lock()
     logger.info("Starting worker process...")
 
     session_factory = get_session_factory()
@@ -98,6 +101,8 @@ async def main() -> None:
     except KeyboardInterrupt:
         logger.info("Stopping worker process...")
         runner.stop()
+    finally:
+        release_sqlite_worker_lock(lock_fd)
 
 if __name__ == "__main__":
     asyncio.run(main())
