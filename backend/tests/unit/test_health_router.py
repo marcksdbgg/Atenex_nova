@@ -44,6 +44,15 @@ async def test_runtime_dependencies_health_is_degraded_when_llm_unavailable(
             detail=None,
         )
 
+    async def fake_reranker(_settings):
+        return DependencyHealthResponse(
+            name="reranker",
+            endpoint="local-reranker",
+            available=True,
+            detail=None,
+            fallback=False,
+        )
+
     async def fake_visual(_settings):
         return DependencyHealthResponse(
             name="visual",
@@ -63,6 +72,7 @@ async def test_runtime_dependencies_health_is_degraded_when_llm_unavailable(
     monkeypatch.setattr(health, "_probe_ollama", fake_ollama)
     monkeypatch.setattr(health, "_probe_qdrant", fake_qdrant)
     monkeypatch.setattr(health, "_probe_embeddings", fake_embeddings)
+    monkeypatch.setattr(health, "_probe_reranker", fake_reranker)
     monkeypatch.setattr(health, "_probe_docling", fake_docling)
     monkeypatch.setattr(health, "_probe_visual_runtime", fake_visual)
     monkeypatch.setattr(health, "_probe_turbovec", fake_turbovec)
@@ -70,6 +80,6 @@ async def test_runtime_dependencies_health_is_degraded_when_llm_unavailable(
     response = await health.runtime_dependencies_health()
 
     assert response.status == "degraded"
-    assert len(response.dependencies) == 7
+    assert len(response.dependencies) == 8
     llm = next(item for item in response.dependencies if item.name == "llm")
     assert llm.available is False

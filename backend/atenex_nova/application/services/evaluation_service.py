@@ -55,15 +55,32 @@ class EvaluationService:
         for case in dataset.cases:
             search_result = await self._query_service.search_only(collection_id=collection_id, query=case.question, mode=case.mode)
             retrieval_metrics = self._retrieval_scorer.score(
-                [{"title": hit.title, "snippet": hit.snippet} for hit in search_result.hits],
+                [
+                    {
+                        "title": hit.title,
+                        "snippet": hit.snippet,
+                        "document_id": hit.document_id,
+                    }
+                    for hit in search_result.hits
+                ],
                 case.expected_keywords,
+                expected_source_patterns=case.expected_source_patterns,
+                min_distinct_documents=case.min_distinct_documents,
             )
-            answer_bundle = await self._answer_service.answer(collection_id=collection_id, query=case.question, mode=case.mode)
+            answer_bundle = await self._answer_service.answer(
+                collection_id=collection_id,
+                query=case.question,
+                mode=case.mode,
+                search_result=search_result,
+            )
             answer_metrics = self._answer_scorer.score(
                 answer_bundle.answer.text,
                 case.expected_answer,
                 len(answer_bundle.citations),
                 evidence_texts=[item.snippet for item in search_result.evidence_pack.items],
+                required_claims=case.required_claims,
+                forbidden_phrases=case.forbidden_phrases,
+                min_citations=case.min_citations,
             )
             cases.append(
                 EvaluationCaseResult(
@@ -81,6 +98,7 @@ class EvaluationService:
                             "title": hit.title,
                             "snippet": hit.snippet,
                             "score": hit.score,
+                            "document_id": hit.document_id or "",
                         }
                         for hit in search_result.hits
                     ],
@@ -140,8 +158,12 @@ class EvaluationService:
                 "retrieval_ndcg": 0.0,
                 "answer_grounding_score": 0.0,
                 "answer_relevance_score": 0.0,
+                "answer_claim_coverage": 0.0,
                 "answer_support_coverage": 0.0,
                 "answer_citation_coverage": 0.0,
+                "answer_unsupported_claim_rate": 0.0,
+                "retrieval_source_recall": 0.0,
+                "retrieval_document_diversity": 0.0,
                 "answer_overall_score": 0.0,
                 "benchmark_pass_rate": 0.0,
             }
@@ -156,10 +178,26 @@ class EvaluationService:
             "retrieval_recall_at_k": round(sum(case.retrieval_metrics["recall_at_k"] for case in cases) / count, 3),
             "retrieval_mrr": round(sum(case.retrieval_metrics["mrr"] for case in cases) / count, 3),
             "retrieval_ndcg": round(sum(case.retrieval_metrics["ndcg"] for case in cases) / count, 3),
+            "retrieval_source_recall": round(
+                sum(case.retrieval_metrics.get("source_recall", 0.0) for case in cases) / count,
+                3,
+            ),
+            "retrieval_document_diversity": round(
+                sum(case.retrieval_metrics.get("document_diversity", 0.0) for case in cases) / count,
+                3,
+            ),
             "answer_grounding_score": round(sum(case.answer_metrics["grounding"] for case in cases) / count, 3),
             "answer_relevance_score": round(sum(case.answer_metrics["relevance"] for case in cases) / count, 3),
+            "answer_claim_coverage": round(
+                sum(case.answer_metrics.get("claim_coverage", 0.0) for case in cases) / count,
+                3,
+            ),
             "answer_support_coverage": round(sum(case.answer_metrics["support_coverage"] for case in cases) / count, 3),
             "answer_citation_coverage": round(sum(case.answer_metrics["citation_coverage"] for case in cases) / count, 3),
+            "answer_unsupported_claim_rate": round(
+                sum(case.answer_metrics.get("unsupported_claim_rate", 0.0) for case in cases) / count,
+                3,
+            ),
             "answer_overall_score": round(sum(case.answer_metrics["overall"] for case in cases) / count, 3),
             "benchmark_pass_rate": round(benchmark_passes / count, 3),
         }

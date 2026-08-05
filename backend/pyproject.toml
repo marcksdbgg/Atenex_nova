@@ -85,7 +85,14 @@ disallow_untyped_defs = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["docling.*", "docling_core.*", "sentence_transformers.*"]
+module = [
+    "docling.*",
+    "docling_core.*",
+    "sentence_transformers.*",
+    "torch.*",
+    "transformers.*",
+    "turbovec.*",
+]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

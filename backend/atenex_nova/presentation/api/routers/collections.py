@@ -7,7 +7,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from atenex_nova.application.services.collection_cleanup_service import CollectionCleanupService
+from atenex_nova.application.services.collection_memory_service import CollectionMemoryService
 from atenex_nova.application.services.collection_service import CollectionService
+from atenex_nova.application.services.document_readiness_service import (
+    DocumentReadinessService,
+)
 from atenex_nova.application.services.document_service import DocumentService
 from atenex_nova.application.services.import_session_service import ImportSessionService
 from atenex_nova.application.services.rebuild_service import RebuildService
@@ -274,6 +278,30 @@ async def rebuild_collection(
     return {"job_id": job_id, "status": "queued"}
 
 
+@router.post("/{collection_id}/rebuild-memory")
+async def rebuild_collection_memory(
+    collection_id: str,
+    batch_size: int = 32,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, str | bool | int]:
+    """Queue one bounded collection-memory rebuild without reprocessing documents."""
+    try:
+        job_id, created = await CollectionMemoryService(session).enqueue(
+            collection_id,
+            batch_size=batch_size,
+        )
+        await session.commit()
+    except ValueError as exc:
+        status_code = 404 if str(exc) == "Collection not found" else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    return {
+        "job_id": job_id,
+        "status": "queued" if created else "already_queued",
+        "created": created,
+        "batch_size": batch_size,
+    }
+
+
 @router.post("/{collection_id}/documents", response_model=DocumentResponse, status_code=201)
 async def upload_document(
     collection_id: str,
@@ -477,30 +505,12 @@ async def resume_collection_ingestion(
 
     documents = await doc_service.list_by_collection(collection_id, limit=100000)
 
-    from atenex_nova.domain.entities.job import Job
-    from atenex_nova.domain.value_objects.identifiers import (
-        DocumentStatus,
-        JobStatus,
-        JobType,
-        new_id,
-    )
-
-    job_repo = SqlJobRepository(session)
-
     requeued_count = 0
+    readiness = DocumentReadinessService(session, get_settings())
     for doc in documents:
-        if doc.status != DocumentStatus.READY:
-            # Check if there is an active job
-            jobs = await job_repo.list_by_target(doc.id, limit=10)
-            active_job = any(j.status in {JobStatus.PENDING, JobStatus.RUNNING} for j in jobs)
-            if not active_job:
-                # Re-queue
-                doc.status = DocumentStatus.REGISTERED
-                doc.error_message = None
-                await doc_service._doc_repo.update(doc)
-                await job_repo.delete_pending_by_targets([doc.id])
-                await job_repo.create(Job(id=new_id(), job_type=JobType.PARSE_DOCUMENT, target_id=doc.id))
-                requeued_count += 1
+        repair = await readiness.enqueue_repairs(doc)
+        if repair.jobs_created or repair.status_changed:
+            requeued_count += 1
 
     await session.commit()
     return {"requeued_count": requeued_count}

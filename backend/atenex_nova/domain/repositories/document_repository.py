@@ -1,5 +1,6 @@
 """Atenex Nova — Domain repository interface: DocumentRepository."""
 
+from collections.abc import AsyncIterator
 from typing import Protocol
 
 from atenex_nova.domain.entities.document import Document
@@ -29,6 +30,15 @@ class DocumentRepository(Protocol):
         status: DocumentStatus | None = None,
     ) -> list[Document]:
         """List documents in a collection with optional status filter."""
+        ...
+
+    def iter_by_collection_pages(
+        self,
+        collection_id: str,
+        page_size: int = 250,
+        status: DocumentStatus | None = None,
+    ) -> AsyncIterator[list[Document]]:
+        """Iterate over all documents using bounded pages."""
         ...
 
     async def update(self, document: Document) -> Document:

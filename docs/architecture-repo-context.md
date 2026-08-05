@@ -2,8 +2,9 @@
 
 > **Runtime status:** **Implemented**  
 > **Verification status:** deterministic core, CLI, an official-client MCP
-> `stdio` subprocess and two-repository smoke acceptance are **Verified**. Live
-> semantic providers are recorded separately.
+> `stdio` subprocess and two-repository core smoke acceptance are **Verified**.
+> Required semantic composition is **Implemented / Verified** con servicios vivos
+> sobre Atenex Nova y `client-romero`.
 
 ## 1. Purpose
 
@@ -19,10 +20,10 @@ Version 1 exposes the same read-only application services through:
 - a local CLI for indexing, inspection, diagnostics, and the same context
   queries.
 
-The core works without network access or external services. Optional semantic
-retrieval can use local Ollama embeddings, Qdrant, reciprocal-rank fusion (RRF),
-and a reranker, but failure or absence of that tier must leave lexical and symbol
-context fully usable.
+SQLite indexing remains local and authoritative, while the published MCP runtime
+requires local Ollama embeddings, Qdrant and reciprocal-rank fusion (RRF). A missing
+or incompatible semantic projection prevents serving tools instead of silently
+changing retrieval quality.
 
 ## 2. State Boundary
 
@@ -34,7 +35,7 @@ context fully usable.
 | AST extraction, symbol graph, and RepoMap | **Implemented / Verified** |
 | Read-only MCP `stdio` server | **Implemented / Verified** with an official-client subprocess |
 | Local CLI | **Implemented / Verified** |
-| Optional Ollama/Qdrant semantic tier | **Implemented**; fake contracts **Verified**, live checks **Planned** |
+| Required Ollama/Qdrant semantic tier | **Implemented / Verified** with fake contracts and live two-repository MCP checks |
 | Atenex Nova acceptance | **Verified** by the smoke manifest |
 | Independent repository acceptance | **Verified** by the same smoke runner and release code |
 
@@ -67,7 +68,7 @@ shortcut.
 - Source modification, command execution, Git mutation, or test execution
   through MCP.
 - Cloud-hosted indexing or a remote network transport.
-- Mandatory embeddings, Qdrant, Ollama, or reranking.
+- A mandatory concrete reranker; the port remains available but unconfigured.
 - Whole-program semantic guarantees. Cross-language reference edges remain
   evidence with confidence and provenance, not compiler proofs.
 - Indexing binary assets, dependency caches, generated build trees, virtual
@@ -82,8 +83,8 @@ shortcut.
    mutation is generated sidecar state under `.atenex/context/`.
 3. **Deterministic core first.** Git discovery, FTS5, AST symbols, reference
    edges, and RepoMap are the minimum product, not a fallback demo.
-4. **Semantic tier is optional.** It may improve ranking but cannot define tool
-   availability or correctness.
+4. **Semantic projection is required.** The MCP server starts only when the active
+   SQLite generation has a compatible completed projection in Qdrant.
 5. **Snapshot consistency.** Every result identifies the active index
    generation and worktree fingerprint from which it was produced.
 6. **Atomic visibility.** Partially built generations are never served.
@@ -112,8 +113,8 @@ flowchart LR
   Catalog --> FS[Confined filesystem reader]
   Symbols --> Parsers[Language adapters]
   Search --> SQLite[(SQLite FTS5 sidecar)]
-  Search -. optional .-> Ollama[Ollama embeddings]
-  Search -. optional .-> Qdrant[(Qdrant vectors)]
+  Search --> Ollama[Ollama embeddings]
+  Search --> Qdrant[(Qdrant vectors)]
   Search -. optional .-> Reranker[Local reranker]
 ```
 
@@ -162,7 +163,7 @@ presentation -> application -> domain <- infrastructure
 
 The bounded context may use absolute imports from
 `atenex_nova.repo_context.*`, but it must not import document-RAG domain or
-application models. Optional integrations implement ports owned by Repo Context.
+application models. Semantic integrations implement ports owned by Repo Context.
 
 ## 7. Repository Identity and Snapshot Model
 
@@ -304,9 +305,12 @@ the language supplies one. Edges carry:
 - unresolved target text when exact resolution is impossible.
 
 `trace_symbol` traverses only allowed edge types and depths, prevents cycles,
-and returns paths rather than a context-free node dump. `analyze_impact` is a
-conservative evidence report over reverse edges, module/config relationships,
-and related tests. It says “likely affected” instead of claiming compiler-level
+and returns paths rather than a context-free node dump. Its `both` direction unions
+bounded incoming and outgoing evidence for orientation. `analyze_impact` resolves an
+exact indexed path through a dedicated path lookup, includes the target file itself,
+and remains useful for structural files that expose no AST symbols. It is a
+conservative evidence report over reverse edges, module/config relationships, and
+related tests. It says “likely affected” instead of claiming compiler-level
 completeness.
 
 ## 11. Search and Ranking
@@ -331,9 +335,9 @@ strict pass with an any-term candidate plan for cross-file flows. Ranking combin
 Results are deduplicated into evidence records and ordered deterministically
 with repository-relative path and line span as stable tie-breakers.
 
-### Optional semantic ranking
+### Required semantic ranking
 
-When configured and healthy:
+For every composed runtime:
 
 1. bounded chunks are embedded through local Ollama;
 2. vectors are stored in Qdrant under repository and generation namespaces;
@@ -341,9 +345,11 @@ When configured and healthy:
 4. a local reranker may reorder the fused shortlist.
 
 The active SQLite generation remains the authority. Semantic points from a
-different generation are never queried. If embedding, Qdrant, or reranking is
-unavailable, the response reports `lexical` mode and remains successful.
-Semantic configuration never changes symbol resolution or path-security rules.
+different generation are never queried. `search_repo` and focused `repo_overview`
+use the fused ranking by default. Missing embeddings, Qdrant, or a compatible
+completion sentinel produce `SEMANTIC_UNAVAILABLE`; the server does not publish a
+lexical-only MCP under the same contract. Semantic configuration never changes
+symbol resolution or path-security rules.
 
 ## 12. Public Tool Contract
 
@@ -358,6 +364,10 @@ through corresponding CLI queries.
 | `trace_symbol` | Resolved symbol plus direction, edge types, and bounded depth | Cycle-safe graph paths with per-edge provenance and confidence |
 | `analyze_impact` | One path/symbol plus bounds | Likely affected symbols/files and linked tests, grouped by evidence and confidence |
 | `related_tests` | Path or resolved symbol | Ranked tests with explicit import/reference/naming/config evidence and coverage caveats |
+
+Focused overviews use bounded language, directory, landmark and hit lists and omit
+duplicate source bodies from focus hits. The nested RepoMap and the common envelope
+still expose truncation rather than implying exhaustive coverage.
 
 Common response metadata contains:
 
@@ -377,7 +387,7 @@ contains its score components.
 
 Ambiguous symbols return candidates instead of silently selecting one.
 Stale-index, invalid-path, unsupported-mode, limit, and unavailable-semantic-tier
-conditions use typed errors or explicit degradation metadata.
+conditions use typed errors.
 
 ## 13. CLI and MCP Runtime
 
@@ -420,29 +430,36 @@ memory.
 - Redact or skip configured secret patterns before persistence.
 - Parameterize SQLite queries and validate FTS query syntax.
 - Never place secrets, source excerpts, or JSON-RPC payloads in routine logs.
-- Keep semantic services loopback/local by default and make their activation
-  explicit.
+- Keep required semantic services loopback/local by default and expose their
+  readiness explicitly.
 
 ## 15. Observability and Failure Semantics
 
 Each generation records file counts, reused hashes, parse results, exclusions,
-unresolved edges, elapsed build measurements, and optional-tier health. This is
+unresolved edges, elapsed build measurements, and semantic health. This is
 operational metadata, not user telemetry.
 
 Failures are isolated where safe:
 
 - parse error -> lexical fallback for that file;
 - unsupported language -> lexical indexing;
-- semantic dependency failure -> lexical mode;
+- semantic dependency failure -> `SEMANTIC_UNAVAILABLE` and no MCP publication;
 - changed worktree during build -> staging generation rejected;
 - corrupt or incompatible sidecar -> explicit rebuild required;
 - no valid active generation -> query tools fail with an actionable stale/index
   error, never an empty success.
 
+Index publication is a single-writer operation per sidecar. A process-owned advisory
+lock covers both SQLite generation publication and its required semantic projection;
+simultaneous client startups wait for the current writer instead of racing schema or
+generation writes. The lock file may remain after a crash, but kernel ownership is
+released with the process.
+
 ## 16. Acceptance Boundary
 
-The deterministic core is **Implemented** and the same release code passed the
-Atenex Nova and independent-repository smoke manifests without Ollama or Qdrant.
+The deterministic core is **Implemented** and the same release code historically
+passed the Atenex Nova and independent-repository smoke manifests without Ollama or
+Qdrant. That remains component evidence, not the current MCP serving contract.
 The official MCP 2.0 client initialized a real `stdio` subprocess, discovered the
 six tools and invoked `repo_overview` successfully with the isolated local runtime.
 A broader cross-platform subprocess matrix remains planned for the canonical

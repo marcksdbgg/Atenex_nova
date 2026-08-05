@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal
 
 from atenex_nova.repo_context.application.services import (
     DEFAULT_MAX_TOKENS,
@@ -25,6 +25,9 @@ TOOL_NAMES = (
     "analyze_impact",
     "related_tests",
 )
+TraceDirection = Literal[
+    "callers", "callees", "dependencies", "dependents", "both"
+]
 
 
 class McpUnavailableError(RuntimeError):
@@ -103,7 +106,7 @@ class RepoContextToolHandler:
     def trace_symbol(
         self,
         symbol: str,
-        direction: str,
+        direction: TraceDirection,
         depth: int = 1,
         relations: list[str] | None = None,
         max_nodes: int = 50,
@@ -219,12 +222,12 @@ def _create_mcp_server(handler: RepoContextToolHandler) -> Any:
     @server.tool()
     async def trace_symbol(
         symbol: str,
-        direction: str,
+        direction: TraceDirection,
         depth: int = 1,
         relations: list[str] | None = None,
         max_nodes: int = 50,
     ) -> dict[str, Any]:
-        """Traverse bounded static callers, callees, dependencies, or dependents."""
+        """Traverse bounded static relations in one or both orientations."""
         return _mcp_call(
             handler,
             "trace_symbol",

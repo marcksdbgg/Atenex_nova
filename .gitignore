@@ -90,6 +90,9 @@ qdrant_storage/
 # Model files (large binaries)
 # ---------------------------------------------------------------------------
 models/
+!backend/atenex_nova/infrastructure/db/models/
+!backend/atenex_nova/infrastructure/db/models/__init__.py
+!backend/atenex_nova/infrastructure/db/models/tables.py
 *.gguf
 *.bin
 *.safetensors

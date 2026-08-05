@@ -59,7 +59,9 @@ def _patch_settings(monkeypatch: pytest.MonkeyPatch, **overrides: object) -> Set
         "atenex_nova.shared.config.settings.get_settings",
         "atenex_nova.workers.jobs.mem_builder_job.get_settings",
         "atenex_nova.application.orchestrators.ingestion_orchestrator.get_settings",
+        "atenex_nova.application.services.quantization_policy_service.get_settings",
         "atenex_nova.infrastructure.indexes.candidate_index_factory.get_settings",
+        "atenex_nova.infrastructure.indexes.purepy_candidate_index.get_settings",
     ):
         monkeypatch.setattr(target, _getter)
     return settings
@@ -143,10 +145,11 @@ async def _seed_embeddable_document(factory) -> tuple[str, str, str]:
         return collection.id, document.id, chunk.id
 
 
-def test_dense_goes_to_qdrant_only_for_max() -> None:
+def test_dense_goes_to_qdrant_for_every_profile_when_enabled() -> None:
     assert dense_goes_to_qdrant(Settings(embedding_profile=EmbeddingProfile.MAX)) is True
-    assert dense_goes_to_qdrant(Settings(embedding_profile=EmbeddingProfile.STANDARD)) is False
-    assert dense_goes_to_qdrant(Settings(embedding_profile=EmbeddingProfile.LITE)) is False
+    assert dense_goes_to_qdrant(Settings(embedding_profile=EmbeddingProfile.STANDARD)) is True
+    assert dense_goes_to_qdrant(Settings(embedding_profile=EmbeddingProfile.LITE)) is True
+    assert dense_goes_to_qdrant(Settings(qdrant_dense_enabled=False)) is False
 
 
 @pytest.mark.asyncio
@@ -176,11 +179,11 @@ async def test_index_nodes_writes_quantized_codes(session_factory, monkeypatch: 
 
 
 @pytest.mark.asyncio
-async def test_standard_embed_job_sparse_only_qdrant(
+async def test_standard_embed_job_stores_dense_and_sparse_in_qdrant(
     session_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _patch_standard_settings(monkeypatch)
+    settings = _patch_standard_settings(monkeypatch)
     recording_qdrant = _RecordingQdrant()
 
     monkeypatch.setattr(
@@ -198,14 +201,16 @@ async def test_standard_embed_job_sparse_only_qdrant(
     init_name, init_dim, dense_enabled = recording_qdrant.init_calls[0]
     assert init_name == f"collection_{collection_id}"
     assert init_dim == 384
-    assert dense_enabled is False
+    assert dense_enabled is True
 
     assert len(recording_qdrant.upserted) == 1
     doc = recording_qdrant.upserted[0]
     assert doc.id == chunk_id
-    assert doc.vector is None
+    assert doc.vector is not None
+    assert len(doc.vector) == 384
     assert doc.sparse_indices is not None
     assert doc.sparse_values is not None
+    assert doc.payload["embedding_contract"] == settings.embedding_contract_fingerprint
 
     async with session_factory() as session:
         count_stmt = select(func.count()).select_from(QuantizedVectorModel).where(

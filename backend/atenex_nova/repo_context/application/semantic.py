@@ -1,7 +1,7 @@
-"""Optional semantic generation and hybrid retrieval.
+"""Required semantic generation and hybrid retrieval.
 
-The deterministic SQLite index remains authoritative. This coordinator is only
-constructed when explicitly enabled.
+SQLite remains the authoritative source snapshot, while every composed runtime
+also requires a compatible semantic projection for the active generation.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from atenex_nova.repo_context.infrastructure.semantic.fusion import (
 )
 
 
-class OptionalSemanticCoordinator:
+class SemanticCoordinator:
     def __init__(
         self,
         *,
@@ -61,7 +61,7 @@ class OptionalSemanticCoordinator:
 
     def build(self, generation: GenerationInfo, index: ContextIndex) -> int:
         if not self.available():
-            raise RuntimeError("optional semantic services are unavailable")
+            raise RuntimeError("required semantic services are unavailable")
         chunks = index.all_chunks()
         inserted = 0
         for offset in range(0, len(chunks), self._batch_size):
@@ -124,7 +124,7 @@ class OptionalSemanticCoordinator:
     ) -> list[SearchHit]:
         if not self.available() or not self.ready_for(generation):
             raise RuntimeError(
-                "optional semantic generation is unavailable or incomplete"
+                "required semantic generation is unavailable or incomplete"
             )
         query_vectors = self._embedder.embed([query])
         if len(query_vectors) != 1:

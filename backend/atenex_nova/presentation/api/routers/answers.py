@@ -10,6 +10,7 @@ from atenex_nova.presentation.api.dto.schemas import (
     AnswerResponse,
     CitationResponse,
     QueryHitResponse,
+    compact_evidence_metadata,
 )
 
 router = APIRouter(prefix="/answers", tags=["answers"])
@@ -69,7 +70,7 @@ async def get_answer(answer_id: str, service: AnswerService = Depends(get_answer
                 score=item.score,
                 rank=item.rank,
                 page_number=item.page_number,
-                metadata=item.metadata,
+                metadata=compact_evidence_metadata(item.metadata),
             )
             for item in detail.evidence_items
         ],

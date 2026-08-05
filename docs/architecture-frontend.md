@@ -1,6 +1,8 @@
 # Frontend Architecture
 
-Estado: **Implemented / Historical scope**.
+Estado: **Implemented / Verified** para el contrato de confianza y navegación de
+fuentes mediante pruebas y checks focalizados del checkout. La validación contra un
+rebuild vivo del corpus permanece **Planned**.
 
 This guide documents the current frontend implementation in Atenex Nova. It belongs
 to the document RAG bounded context. Repo Context v1 is CLI/MCP-only and does not add
@@ -89,6 +91,12 @@ behind `Ajustes`; citations, evidence, export, and RAG audit stay behind `Ver
 fuentes`. The layout is driven by the query-specific design override in
 [design-system/atenex-nova/pages/query.md](../design-system/atenex-nova/pages/query.md).
 
+Cada respuesta muestra una presentación localizada del `verdict`, su grounding y
+las incidencias de verificación. Los estados `unverified`, `conflicting`,
+`partially_verified` o desconocidos producen una alerta visible que no depende del
+número de citas. La alerta también cubre respuestas sin citas, grounding bajo y
+fallos al hidratar el detalle persistido.
+
 ### Observability
 
 The observability page surfaces audit trails and document evidence so ingestion and processing steps can be traced after the fact.
@@ -149,6 +157,21 @@ Practical rules for frontend work:
 - Query metadata is secondary and available on demand so the main conversation is
   not fragmented into nested cards and chips.
 - The frontend does not currently rely on a global state library; most state is local to pages and components.
+- The primary trust warning derives from `verdict` first and remains visible for an
+  unverified or conflicting answer even when it has citations or a nonzero grounding
+  score. Verification issues are translated into actionable review text.
+- The evidence rail shows up to 20 selected items, reports visible/total counts and
+  labels relevance separately from verification. Citations prefer document title,
+  section, page and character span; both citations and evidence navigate to the
+  document inspector.
+- The HTTP contract no longer requires full source transcripts inside evidence
+  metadata. The UI renders compact snippets and identifiers and remains compatible
+  with the persisted answer hydration flow.
+- The hidden 50-document discovery limit was removed in the backend. Corpus-wide
+  quality is nevertheless **Planned** until a clean rebuild and the Jesús G benchmark
+  verify index completeness.
+- Structured claim→span display, explicit/derived claim labels and live capability
+  health for reranker/global/visual remain **Planned**.
 
 ## Related Docs
 
@@ -156,3 +179,5 @@ Practical rules for frontend work:
 - [design-system/atenex-nova/MASTER.md](../design-system/atenex-nova/MASTER.md)
 - [design-system/atenex-nova/pages/query.md](../design-system/atenex-nova/pages/query.md)
 - [design-system/atenex-nova/pages/collections.md](../design-system/atenex-nova/pages/collections.md)
+- [docs/auditoria-rag-respuestas-sota-2026-08-02.md](auditoria-rag-respuestas-sota-2026-08-02.md)
+- [docs/plan-rag-sintesis-corpus.md](plan-rag-sintesis-corpus.md)

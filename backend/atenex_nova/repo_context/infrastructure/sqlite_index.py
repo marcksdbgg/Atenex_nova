@@ -504,6 +504,26 @@ class SQLiteContextIndex:
             ).fetchall()
         return [_symbol_from_row(row) for row in rows]
 
+    def symbols_for_path(
+        self, path: str, *, limit: int = 200
+    ) -> list[CodeSymbol]:
+        """Return definitions owned by one exact repository-relative path."""
+
+        generation_id = self._active_id()
+        if generation_id is None or limit <= 0:
+            return []
+        with self._read_connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM symbols
+                WHERE generation_id = ? AND path = ? COLLATE BINARY
+                ORDER BY line_start, line_end, id
+                LIMIT ?
+                """,
+                (generation_id, path, limit),
+            ).fetchall()
+        return [_symbol_from_row(row) for row in rows]
+
     def symbol_by_id(self, symbol_id: str) -> CodeSymbol | None:
         generation_id = self._active_id()
         if generation_id is None:

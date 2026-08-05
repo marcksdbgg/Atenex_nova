@@ -28,7 +28,7 @@ engine with:
   tools;
 - explicit generation, `HEAD`, worktree-fingerprint, staleness, truncation, and
   confidence metadata;
-- optional semantic retrieval.
+- semantic retrieval (made a required MCP-runtime projection by ADR-0007).
 
 The existing document-RAG application is retained as a legacy/future bounded
 context. Its code is not removed by this decision, but it is no longer the

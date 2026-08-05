@@ -10,8 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlmodel import SQLModel
 
 from atenex_nova.application.services.document_service import DocumentService
+from atenex_nova.domain.entities.collection import Collection
+from atenex_nova.domain.entities.document import Document
 from atenex_nova.domain.value_objects.identifiers import new_id
 from atenex_nova.infrastructure.db.models import tables as _tables  # noqa: F401
+from atenex_nova.infrastructure.db.repositories.sql_collection_repo import SqlCollectionRepository
 from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocumentRepository
 from atenex_nova.infrastructure.db.repositories.sql_job_repo import SqlJobRepository
 
@@ -115,3 +118,44 @@ async def test_register_local_folder_registers_nested_files(session_factory, tmp
 
         jobs = await SqlJobRepository(session).list_all()
         assert len(jobs) == 2
+
+
+@pytest.mark.asyncio
+async def test_document_repository_iterates_collection_beyond_default_limit(
+    session_factory,
+) -> None:
+    collection = Collection(id=new_id(), name="Large collection")
+
+    async with session_factory() as session:
+        await SqlCollectionRepository(session).create(collection)
+        repository = SqlDocumentRepository(session)
+        for index in range(65):
+            await repository.create(
+                Document(
+                    id=new_id(),
+                    collection_id=collection.id,
+                    title=f"Document {index:02d}",
+                    source_path=f"/tmp/document-{index:02d}.txt",
+                    mime_type="text/plain",
+                    checksum=f"{index:064x}",
+                )
+            )
+        await session.commit()
+
+        pages = [
+            page
+            async for page in repository.iter_by_collection_pages(
+                collection.id,
+                page_size=17,
+            )
+        ]
+
+        assert [len(page) for page in pages] == [17, 17, 17, 14]
+        assert len({document.id for page in pages for document in page}) == 65
+
+        with pytest.raises(ValueError, match="page_size"):
+            async for _page in repository.iter_by_collection_pages(
+                collection.id,
+                page_size=0,
+            ):
+                pass

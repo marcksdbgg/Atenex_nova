@@ -21,8 +21,8 @@ The v1 server contract is:
 - a SQLite core index at `.atenex/context/index.sqlite3` by default;
 - source-relative paths and explicit line spans in every source reference;
 - snapshot metadata on every response;
-- optional semantic retrieval, with lexical and structural operation available
-  without Ollama or Qdrant.
+- required hybrid retrieval backed by a compatible Ollama/Qdrant projection for
+  the active SQLite generation.
 
 HTTP, remote multi-repository serving, and write-capable tools are outside the
 v1 contract.
@@ -50,9 +50,10 @@ atenex-context index --repo PATH [--data-dir PATH] [--full]
 See [operations.md](operations.md) for indexing, staleness, and recovery.
 The checked-in Claude/Cursor configuration calls the local launcher documented
 there; it verifies the resolved Git checkout/worktree identity, refreshes
-incrementally, and only then starts the read-only server. Relative roots require an
-expected main checkout so a user-scoped `.` endpoint cannot silently serve a
-different repository. Indexing is still outside the MCP tool surface.
+incrementally, and only then starts the read-only server. Relative roots bind to the
+MCP process working directory and must resolve to a Git checkout; project-scoped
+configurations may additionally restrict them to an expected main checkout and its
+worktrees. Indexing is still outside the MCP tool surface.
 
 ## Common response envelope
 
@@ -191,12 +192,13 @@ Stable v1 error codes are:
 - `NOT_FOUND`
 - `AMBIGUOUS`
 - `OUTSIDE_REPOSITORY`
+- `SEMANTIC_UNAVAILABLE`
 - `INTERNAL_ERROR`
 
 A stale index is normally a successful, explicitly stale response, not a tool
-error. A semantic request whose compatible generation is unavailable continues
-with core results, removes `semantic` from the effective modes and emits
-`SEMANTIC_UNAVAILABLE`.
+error. A semantic request whose compatible generation is unavailable fails with
+`SEMANTIC_UNAVAILABLE`. The server also refuses to start without a compatible
+completed projection.
 
 ## Search modes and relation vocabulary
 
@@ -204,10 +206,10 @@ with core results, removes `semantic` from the effective modes and emits
 
 - `lexical`: exact and token-based matches over indexed source and metadata;
 - `symbol`: names, qualified names, definitions, and structural references;
-- `semantic`: optional embedding-based retrieval.
+- `semantic`: embedding-based retrieval fused with lexical candidates.
 
-When `modes` is omitted, v1 uses `lexical` and `symbol`. Semantic search is never
-silently required for the default behavior.
+When `modes` is omitted, the runtime uses `lexical`, `symbol`, and `semantic`.
+Individual modes remain selectable for diagnostics and paired evaluation.
 
 Relationship-oriented tools use this normalized vocabulary when the relevant
 language adapter can establish the relation:
@@ -249,7 +251,7 @@ repo_overview(
   to a task. It is a ranking hint and does not change the repository boundary.
 - `max_tokens` limits output detail.
 
-`search_repo` ranks direct lexical, symbol, path and optional semantic evidence for
+`search_repo` ranks direct lexical, symbol, path and semantic evidence for
 the supplied terms. It does not claim to reconstruct every stage of an architectural
 flow from a broad phrase. Use `repo_overview(focus=...)` for cross-layer orientation,
 then use narrower searches for stages that are absent or need exact evidence.
@@ -266,6 +268,11 @@ then use narrower searches for stages that are absent or need exact evidence.
 - `focus_queries`, the bounded deterministic intent decomposition used for the task;
 - `focus_results`, fused by repository-relative path with RRF evidence;
 - the focused RepoMap, ranked with shallower decay and subsystem-level diversity.
+
+To keep the orientation call useful inside the default budget, focused results omit
+source bodies (their hashes, spans, snippets and evidence remain), and languages,
+directories, landmarks and focus hits use fixed top-k bounds. `repo_map.truncated`
+continues to state explicitly when lower-ranked candidates were omitted.
 
 Cross-layer focus terms such as offline operation, flow, persistence and isolation
 activate small auditable query facets. A path found by several facets exposes
@@ -321,14 +328,14 @@ Each result includes:
 Excerpts are navigation aids and intentionally short. Clients must open the exact
 current source before making a code claim or edit. `match_reason` and score components
 expose whether a candidate came from strict FTS, relaxed FTS, literal, symbol, or
-optional semantic evidence.
+semantic evidence.
 
 Scores are meaningful only for ordering within one response. They are not
 required to be comparable across queries, modes, or generations.
 
-If semantic mode is requested together with core modes but is unavailable or
-belongs to a different generation, the server returns core results and a
-diagnostic. It must not use hash vectors or label lexical fallback as semantic.
+If semantic mode is requested but unavailable or belongs to a different generation,
+the server returns `SEMANTIC_UNAVAILABLE`. It must not use hash vectors or label
+lexical fallback as semantic.
 
 ## `get_symbol`
 
@@ -376,7 +383,7 @@ Traverses known static relations from or to a symbol.
 ```text
 trace_symbol(
   symbol: string,
-  direction: "callers" | "callees" | "dependencies" | "dependents",
+  direction: "callers" | "callees" | "dependencies" | "dependents" | "both",
   depth: integer = 1,
   relations?: string[],
   max_nodes: integer = 50
@@ -385,6 +392,8 @@ trace_symbol(
 
 - `symbol` must resolve uniquely.
 - `direction` is required and controls graph orientation.
+- `both` unions incoming and outgoing evidence at every traversed node; it is useful
+  for orientation and remains subject to the same depth and node limits.
 - `depth` is the maximum traversal depth, with `1` meaning direct neighbors.
 - `relations` optionally restricts traversal to the normalized relation
   vocabulary.
@@ -432,6 +441,11 @@ analyze_impact(
 - confidence and evidence for every impact path;
 - unknowns or language-adapter gaps that limit the analysis.
 
+An exact indexed path is a valid target even for structural/lexical languages with
+no extracted symbols. Exact paths are resolved by their indexed `path`, not by a
+symbol-name search, and the target file itself is always included in
+`affected_files`.
+
 This tool reports static impact candidates. It does not claim that a test will
 fail, execute a test suite, inspect runtime telemetry, or modify files.
 
@@ -478,7 +492,7 @@ to:
 - start HTTP listeners.
 
 Index construction is an operator or startup-launcher action through the CLI,
-outside the MCP tool surface. Optional Ollama and Qdrant integrations may perform the protocol calls
+outside the MCP tool surface. Required Ollama and Qdrant adapters perform the protocol calls
 needed for semantic indexing/search, but they do not expand source authority or
 grant agents write/execute capabilities.
 
@@ -495,4 +509,5 @@ Related decisions:
 - [ADR-0003: Atomic index generations](decisions/0003-atomic-index-generations.md)
 - [ADR-0004: Read-only MCP surface](decisions/0004-read-only-mcp-surface.md)
 - [ADR-0005: Source and worktree authority](decisions/0005-source-worktree-authority.md)
-- [ADR-0006: Optional semantic retrieval](decisions/0006-optional-semantic-retrieval.md)
+- [ADR-0006: Previous optional semantic contract](decisions/0006-optional-semantic-retrieval.md)
+- [ADR-0007: Required semantic retrieval](decisions/0007-required-semantic-retrieval.md)

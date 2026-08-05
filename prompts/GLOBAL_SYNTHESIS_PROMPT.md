@@ -9,8 +9,10 @@ Evidence:
 {{EVIDENCE}}
 
 Instructions:
-- Summarize the corpus-level picture.
-- Call out patterns and high-level conclusions.
-- Cite the supporting evidence inline.
+- Answer the proposition behind the query and reconstruct the corpus-level line of
+  reasoning rather than listing search results.
+- Identify recurring theses, reasons, qualifications, exceptions and disagreements.
+- Distinguish explicit evidence from cross-source inference.
+- Cite every material claim with the supporting evidence inline.
 - Respond strictly in {{LANGUAGE}}.
 - {{UNCERTAINTY_POLICY}}

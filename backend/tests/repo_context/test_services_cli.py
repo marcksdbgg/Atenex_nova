@@ -197,6 +197,16 @@ class FakeIndex:
             ]
         return []
 
+    def symbols_for_path(
+        self, path: str, *, limit: int = 200
+    ) -> list[CodeSymbol]:
+        del limit
+        if path == "src/app.py":
+            return [self.target, self.caller]
+        if path == "tests/test_app.py":
+            return [self.test]
+        return []
+
     def symbol_by_id(self, symbol_id: str) -> CodeSymbol | None:
         return {"target": self.target, "caller": self.caller, "test": self.test}.get(
             symbol_id
@@ -244,6 +254,14 @@ class FakeIndex:
                 "size": len(self._texts["tests/test_app.py"][0]),
                 "line_count": 4,
                 "parse_state": "parsed",
+            },
+            {
+                "path": "README.md",
+                "language": "markdown",
+                "content_hash": _hash("# Fixture\n"),
+                "size": 10,
+                "line_count": 1,
+                "parse_state": "lexical",
             },
         ]
 
@@ -320,21 +338,13 @@ class RepoContextServicesCliTests(unittest.TestCase):
             self.assertIn("truncated", response)
             self.assertIn("diagnostics", response)
 
-    def test_search_degrades_semantic_and_verifies_live_source(self) -> None:
-        response = self.services.search_repo(
-            "target", modes=["lexical", "semantic"], max_tokens=1_000
-        )
-        self.assertTrue(
-            response["data"]["results"][0]["excerpt"].startswith("def target")
-        )
-        self.assertEqual(
-            response["data"]["results"][0]["match_reason"], "symbol"
-        )
-        self.assertNotIn("semantic", response["data"]["modes"])
-        self.assertIn(
-            "SEMANTIC_UNAVAILABLE",
-            {item["code"] for item in response["diagnostics"]},
-        )
+    def test_explicit_semantic_search_fails_when_not_configured(self) -> None:
+        with self.assertRaises(RepoContextError) as captured:
+            self.services.search_repo(
+                "target", modes=["lexical", "semantic"], max_tokens=1_000
+            )
+
+        self.assertEqual(captured.exception.code, "SEMANTIC_UNAVAILABLE")
 
     def test_query_envelopes_do_not_repeat_persistent_index_diagnostics(self) -> None:
         with patch.object(
@@ -479,7 +489,32 @@ class RepoContextServicesCliTests(unittest.TestCase):
         )
 
         impact = self.services.analyze_impact("target")
+        self.assertIn("src/app.py", impact["data"]["affected_files"])
         self.assertIn("tests/test_app.py", impact["data"]["affected_files"])
+
+        path_impact = self.services.analyze_impact("src/app.py")
+        self.assertEqual(path_impact["data"]["target"]["path"], "src/app.py")
+        self.assertEqual(
+            {item["id"] for item in path_impact["data"]["target"]["symbols"]},
+            {"target", "caller"},
+        )
+        self.assertIn("src/app.py", path_impact["data"]["affected_files"])
+
+        structural_impact = self.services.analyze_impact("README.md")
+        self.assertEqual(structural_impact["data"]["target"]["symbols"], [])
+        self.assertEqual(
+            structural_impact["data"]["affected_files"], ["README.md"]
+        )
+
+        compact_impact = self.services.analyze_impact(
+            "src/app.py", max_tokens=128
+        )
+        self.assertEqual(compact_impact["data"]["affected_files"], ["src/app.py"])
+
+        both = self.services.trace_symbol("target", direction="both", depth=1)
+        self.assertEqual(
+            {item["id"] for item in both["data"]["nodes"]}, {"caller", "test"}
+        )
 
         tests = self.services.related_tests("target")
         self.assertEqual(

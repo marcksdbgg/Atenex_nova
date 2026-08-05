@@ -2,9 +2,13 @@
 
 > **Delivery status:** deterministic core **Implemented / Verified** by smoke
 > acceptance.  
-> **Remaining release status:** live semantic providers, concrete reranking and
-> the extended held-out/performance matrix are **Planned**.  
+> **Remaining release status:** concrete reranking and the extended
+> held-out/performance matrix are **Planned**; required live semantic providers are
+> **Verified** on both acceptance repositories.
 > **Architecture contract:** [architecture-repo-context.md](architecture-repo-context.md)
+> **Contract update (2026-08-03):** ADR-0007 makes the semantic projection required
+> for MCP. Earlier gates below that exercise “semantic disabled” are **Historical**
+> evidence for the SQLite core, not the current serving contract.
 
 ## 1. Outcome
 
@@ -20,8 +24,8 @@ The service-free core must work with:
 - a symbol/reference graph;
 - RepoMap ranking.
 
-Local Ollama embeddings, Qdrant, RRF, and reranking are an optional enhancement,
-not a prerequisite. Atenex Nova is the first acceptance repository. A separate
+Local Ollama embeddings, Qdrant, and RRF are runtime prerequisites; the concrete
+reranker remains **Planned**. Atenex Nova is the first acceptance repository. A separate
 repository at `/mnt/ssd/Nyro/panaderia_romero/client-romero` is the generality
 gate.
 
@@ -39,7 +43,7 @@ gate.
 | AST/symbol graph/RepoMap | **Implemented / Verified** | Language, graph, fallback and budget tests |
 | CLI | **Implemented / Verified** | Lifecycle and six query commands share services |
 | MCP `stdio` server | **Implemented / Verified** | Official MCP 2.0 subprocess discovers six tools and executes `repo_overview` |
-| Optional semantic tier | **Implemented / Optional** | Fake Ollama/Qdrant/RRF/readiness tests; live providers pending |
+| Required semantic tier | **Implemented / Verified** | Fake contracts plus live Ollama/Qdrant MCP checks on both acceptance repositories |
 | Atenex acceptance | **Verified** as smoke | 4/4 goldens hit |
 | Independent repository acceptance | **Verified** as smoke | 6/6 `client-romero` goldens hit with unchanged product code |
 
@@ -57,8 +61,8 @@ These decisions are closed for version 1:
 3. MCP uses `stdio` and exposes read-only context tools.
 4. The CLI and MCP call the same application services.
 5. There is no new UI and no writable agent memory.
-6. Core operation requires no Ollama, Qdrant, network service, or application
-   database.
+6. The SQLite component requires no application database; ADR-0007 requires local
+   Ollama and Qdrant for the published MCP runtime.
 7. SQLite FTS5 is the core lexical store.
 8. Generated state lives under `.atenex/context/index.sqlite3`.
 9. Index generations are built in staging and made visible with an atomic
@@ -66,7 +70,7 @@ These decisions are closed for version 1:
 10. Freshness is represented by content hashes and a Git/worktree fingerprint.
 11. AST-aware languages are Python, TypeScript, TSX, JavaScript, SQL, and Java.
 12. Markdown, configuration, and shell files use structural/lexical extraction.
-13. Optional semantic retrieval uses local Ollama embeddings and Qdrant, fuses
+13. Required semantic retrieval uses local Ollama embeddings and Qdrant, fuses
     results with RRF, and may rerank the fused shortlist.
 14. Public tools are exactly:
     `repo_overview`, `search_repo`, `get_symbol`, `trace_symbol`,
@@ -168,7 +172,8 @@ vocabulary, and make no implementation claim.
 - Wire configuration without importing Atenex application modules.
 
 **Gate:** domain/application imports do not depend on infrastructure,
-presentation, `atenex_nova`, or optional semantic packages.
+presentation, document-RAG `atenex_nova` modules, or semantic infrastructure
+packages.
 
 ### C2 — Git-aware scanner and snapshot fingerprint
 
@@ -286,23 +291,24 @@ Subprocess `stdio` revalidation on Python 3.12 remains **Planned**.
 ambiguity, stale-index, truncation, degradation, and invalid-path behavior over
 `stdio`.
 
-### S1 — Optional embeddings adapter
+### S1 — Required embeddings adapter
 
-**State:** **Implemented / Optional**; fake contract **Verified**, live Ollama
+**State:** **Implemented**; fake contract **Verified**, live Ollama
 **Planned**.
 
 - Add an Ollama adapter behind the embedding port.
 - Version embedding identity and dimensions in semantic generation metadata.
-- Batch bounded chunks without making network calls in core-only mode.
-- Treat availability, model, and dimension mismatch as explicit lexical
-  degradation.
+- Batch bounded chunks and reuse a compatible completed generation.
+- Treat availability, model, and dimension mismatch as
+  `SEMANTIC_UNAVAILABLE`.
 
-**Gate:** core and MCP start with Ollama absent; adapter contract tests pass
-with a fake; live checks are separately marked **Verified** only when run.
+**Gate:** SQLite component tests remain isolated; MCP refuses to start with Ollama
+absent. Adapter contract tests pass with a fake; live checks are separately marked
+**Verified** only when run.
 
-### S2 — Optional Qdrant generation store
+### S2 — Required Qdrant generation store
 
-**State:** **Implemented / Optional**; namespace and persistent completion sentinel
+**State:** **Implemented**; namespace and persistent completion sentinel
 **Verified** with fakes, live Qdrant **Planned**.
 
 - Namespace points by repository and generation.
@@ -312,8 +318,8 @@ with a fake; live checks are separately marked **Verified** only when run.
   compatible persistent completion sentinel.
 - Keep SQLite as the authority for generation and source provenance.
 
-**Gate:** stale/mixed semantic generations cannot leak into results; Qdrant
-failure leaves the active lexical generation available.
+**Gate:** stale/mixed semantic generations cannot leak into results; Qdrant failure
+blocks indexing/serving with a typed error.
 
 ### S3 — RRF and optional reranking
 
@@ -363,7 +369,8 @@ code and verify:
   paths;
 - changed files appear with correct Git state;
 - related tests and impact reports cite their evidence;
-- all six tools work through CLI and MCP with semantic services disabled.
+- **Historical:** all six tools worked through CLI and MCP with semantic services
+  disabled under ADR-0006; ADR-0007 now requires a compatible semantic projection.
 
 **Gate:** the sidecar is the only repository-local mutation and deleting it
 returns the source tree to the exact pre-acceptance state.
@@ -395,7 +402,7 @@ claim.
 gates.
 
 - Document installation, indexing, CLI, MCP client setup, exclusions,
-  diagnostics, rebuild, optional semantics, and safe uninstall.
+  diagnostics, rebuild, required semantics, and safe uninstall.
 - Add reproducible validation commands and exact results to the live snapshot.
 - Update the canonical audit with contrast between this plan and delivered
   source.
@@ -521,8 +528,8 @@ Coordination rules:
 | CLI | JSON/human parity, exit codes, stdout/stderr separation, lifecycle/query behavior |
 | MCP | Discovery, schemas, `stdio` framing, errors, truncation, concurrent reads, clean shutdown |
 | Security | Traversal, absolute escape, symlinks, secrets, binary/large files, FTS injection, prompt-like source |
-| Optional semantic | No-service startup, adapter fakes, namespace isolation, RRF, reranker fallback |
-| Acceptance | Atenex core, Atenex optional hybrid if claimed, then unchanged candidate on `client-romero` |
+| Required semantic | Fail-closed startup, adapter fakes, namespace isolation, sentinel reuse, RRF, reranker fallback |
+| Acceptance | Atenex hybrid, then unchanged candidate on `client-romero` |
 
 ### Quality gates
 
@@ -571,7 +578,7 @@ whether reranking was active.
 | Partial or corrupt index is served | Active-generation pointer, schema versioning, integrity check, explicit rebuild |
 | AST dependency is missing or parse fails | File-local structural/lexical fallback with diagnostics |
 | Cross-language edges overstate certainty | Typed evidence, confidence, unresolved targets, conservative impact language |
-| Optional service outage breaks tools | Lazy optional adapters and successful lexical degradation |
+| Required semantic service outage blocks MCP | Typed startup/query failure, explicit doctor checks and a reusable completed projection per generation |
 | Qdrant and SQLite generations diverge | SQLite generation authority and generation-scoped semantic queries |
 | Secrets or repository-external data are indexed | exclusions, binary/secret detection, canonical path confinement, adversarial tests |
 | MCP protocol is corrupted by logs | stdout reserved for JSON-RPC; stderr for diagnostics |
@@ -607,13 +614,14 @@ still requires:
   extended held-out/security/performance matrix;
 - all six tools behave equivalently through CLI and MCP;
 - both acceptance repositories use the same release candidate;
-- no Ollama or Qdrant service is required for the core acceptance;
+- historical core-only acceptance remains recorded separately from the current
+  Ollama/Qdrant-backed MCP gate;
 - generated state is confined to the documented sidecar;
 - the worktree remains unchanged apart from explicitly approved documentation,
   package, configuration, and ignore-rule changes;
 - the root snapshot and canonical audit contain reproducible results.
 
-The semantic adapters and RRF are **Implemented / Optional**, but the tier is not
+The semantic adapters and RRF are **Implemented / Required**, but the tier is not
 **Verified** end-to-end until live local-service checks pass. A component becomes
 **Verified** only when the exact command, environment, and result are recorded.
 Superseded planning claims become **Historical** rather than current behavior.

@@ -9,6 +9,8 @@ export interface ConversationThreadTurn {
   routeMode: string;
   intent: string;
   language: string;
+  verdict?: string;
+  verificationIssues?: string[];
   groundingScore?: number;
   citationsCount?: number;
   totalHits?: number;
@@ -49,6 +51,8 @@ export function ConversationThread({ turns, activeTurnId, hydratingTurnId, pendi
           routeMode={turn.routeMode}
           intent={turn.intent}
           language={turn.language}
+          verdict={turn.verdict}
+          verificationIssues={turn.verificationIssues}
           groundingScore={turn.groundingScore}
           citationsCount={turn.citationsCount}
           totalHits={turn.totalHits}

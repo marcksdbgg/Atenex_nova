@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any
 
 
 @dataclass
@@ -12,5 +13,6 @@ class SummaryNode:
     scope_type: str
     scope_id: str
     text: str
+    provenance: dict[str, Any] = field(default_factory=dict)
     embedding_ref: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))

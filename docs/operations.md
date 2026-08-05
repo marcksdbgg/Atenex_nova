@@ -9,10 +9,11 @@ el contrato operativo portable; el runbook es el procedimiento específico de la
 
 ## Modelo operativo
 
-Un proceso se liga a un root canónico y un sidecar. El core requiere Python y SQLite
-FTS5; no requiere FastAPI, PostgreSQL, Qdrant, Ollama, GPU ni frontend. Indexar es una
-acción explícita del operador o del launcher local antes de iniciar MCP. Ninguna
-herramienta MCP reconstruye el índice durante una conversación.
+Un proceso se liga a un root canónico y un sidecar. El componente SQLite requiere
+Python y FTS5; no requiere FastAPI, PostgreSQL, GPU ni frontend. El runtime MCP añade
+como requisitos Ollama con el modelo configurado y Qdrant locales. Indexar es una
+acción explícita del operador o del launcher antes de iniciar MCP. Ninguna herramienta
+MCP reconstruye el índice durante una conversación.
 
 ## Instalar
 
@@ -113,8 +114,9 @@ reemplaza el proceso con el servidor `stdio`. No imprime la indexación por stdo
 Cuando Claude crea un worktree, el argumento `.` liga el proceso a ese worktree y el
 segundo argumento identifica el checkout principal esperado. El launcher compara los
 `git-common-dir`: permite worktrees del mismo repositorio y rechaza otro `cwd` antes de
-indexar. Por eso `.` no se admite sin `EXPECTED_CHECKOUT` y el launcher no debe
-registrarse globalmente con un root relativo. El sidecar derivado queda bajo
+indexar. Sin `EXPECTED_CHECKOUT`, `.` sigue el checkout Git del proceso; Codex usa
+esta forma en su registro global para enlazarse a la carpeta de cada sesión. El
+sidecar derivado queda bajo
 `INSTALL_ROOT/.atenex/context/repositories/HASH_DEL_ROOT/`; así no ensucia el
 worktree ni comparte una base ligada a otro root. El checkout principal conserva
 `INSTALL_ROOT/.atenex/context/index.sqlite3`. El runtime y las gramáticas son
@@ -143,10 +145,9 @@ La política reusable para agentes está en
 `.claude/skills/atenex-repo-context/SKILL.md`. La skill no reemplaza `AGENTS.md`:
 describe cómo comprobar calidad de recuperación y cuándo ampliar una consulta.
 
-## Semántica opcional
+## Semántica requerida
 
 ```bash
-export ATENEX_REPO_CONTEXT_SEMANTIC=1
 export ATENEX_REPO_CONTEXT_OLLAMA_URL=http://127.0.0.1:11434
 export ATENEX_REPO_CONTEXT_EMBEDDING_MODEL=embeddinggemma
 export ATENEX_REPO_CONTEXT_QDRANT_URL=http://127.0.0.1:6333
@@ -154,11 +155,12 @@ export ATENEX_REPO_CONTEXT_QDRANT_URL=http://127.0.0.1:6333
 atenex-context index --repo PATH
 ```
 
-La indexación publica primero el core SQLite. Después intenta embeddings y Qdrant.
-El JSON de `index` muestra `semantic.state=ready` o `degraded`. Solo una proyección
-finalizada y compatible se usa en consultas futuras. Un fallo de proveedor conserva
-la generación lexical/estructural y `search --mode semantic` devuelve esa
-degradación explícitamente.
+La indexación activa primero la generación SQLite y debe completar o reutilizar la
+proyección de embeddings en Qdrant. El JSON de `index` exige
+`semantic.state=ready`; un fallo de proveedor termina el comando con error y el
+launcher no publica MCP. `search_repo` y el foco de `repo_overview` usan la señal
+semántica por defecto y fallan con `SEMANTIC_UNAVAILABLE` si el sentinel deja de ser
+compatible.
 
 No existe adapter de reranker configurado en esta versión.
 

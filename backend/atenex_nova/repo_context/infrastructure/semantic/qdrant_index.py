@@ -1,4 +1,4 @@
-"""Optional Qdrant generation index with lazy dependency loading."""
+"""Qdrant generation index with lazy dependency loading."""
 
 from __future__ import annotations
 

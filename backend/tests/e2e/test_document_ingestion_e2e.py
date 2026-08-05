@@ -35,6 +35,7 @@ from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGem
 from atenex_nova.infrastructure.files.blob_store import BlobStore
 from atenex_nova.infrastructure.parsing.docling_adapter import DoclingParserAdapter
 from atenex_nova.main import app
+from atenex_nova.shared.config.settings import Settings
 from atenex_nova.workers.jobs.ingestion_job import (
     NormalizeDocumentJobHandler,
     ParseDocumentJobHandler,
@@ -44,7 +45,10 @@ from atenex_nova.workers.jobs.mem_builder_job import (
     SegmentDocumentJobHandler,
 )
 from atenex_nova.workers.jobs.memory_enrichment_job import (
+    BuildCollectionMemoryJobHandler,
     BuildGraphJobHandler,
+    CheckDocumentReadinessJobHandler,
+    EmbedCollectionMemoryJobHandler,
     EmbedPropositionsJobHandler,
     EmbedSummariesJobHandler,
     ExtractPropositionsJobHandler,
@@ -75,6 +79,7 @@ async def e2e_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         embedding_model="embeddinggemma",
         candidate_backend="purepy",
         embedding_profile="standard",
+        embedding_contract_fingerprint=Settings().embedding_contract_fingerprint,
         strict_mode_enabled=False,
     )
 
@@ -144,6 +149,15 @@ async def _run_jobs_to_completion(session_factory) -> None:
         JobType.EMBED_PROPOSITIONS.value: EmbedPropositionsJobHandler(session_factory),
         JobType.EMBED_SUMMARIES.value: EmbedSummariesJobHandler(session_factory),
         JobType.BUILD_GRAPH.value: BuildGraphJobHandler(session_factory),
+        JobType.CHECK_DOCUMENT_READINESS.value: CheckDocumentReadinessJobHandler(
+            session_factory
+        ),
+        JobType.BUILD_COLLECTION_MEMORY.value: BuildCollectionMemoryJobHandler(
+            session_factory
+        ),
+        JobType.EMBED_COLLECTION_MEMORY.value: EmbedCollectionMemoryJobHandler(
+            session_factory
+        ),
         JobType.INDEX_VISUAL_PAGES.value: IndexVisualPagesJobHandler(session_factory),
     }
 
@@ -229,6 +243,14 @@ async def test_end_to_end_upload_ingestion_reaches_queryable_state(e2e_env, tmp_
         assert blob_root.exists()
         assert any(blob_root.rglob(source_file.name))
 
+        await _run_jobs_to_completion(session_factory)
+
+        memory_response = await client.post(
+            f"/collections/{collection_id}/rebuild-memory",
+            params={"batch_size": 8},
+        )
+        assert memory_response.status_code == 200
+        assert memory_response.json()["created"] is True
         await _run_jobs_to_completion(session_factory)
 
         audit_response = await client.get(

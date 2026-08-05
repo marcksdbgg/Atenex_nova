@@ -1,11 +1,16 @@
 """SQL repository: Document."""
 
+from collections.abc import AsyncIterator
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from atenex_nova.domain.entities.document import Document
 from atenex_nova.domain.value_objects.identifiers import DocumentStatus
 from atenex_nova.infrastructure.db.models.tables import DocumentModel
+
+DEFAULT_DOCUMENT_PAGE_SIZE = 250
+MAX_DOCUMENT_PAGE_SIZE = 1_000
 
 
 class SqlDocumentRepository:
@@ -68,6 +73,33 @@ class SqlDocumentRepository:
         stmt = stmt.order_by(DocumentModel.updated_at.desc(), DocumentModel.id.desc()).offset(offset).limit(limit)
         r = await self._session.execute(stmt)
         return [self._to_entity(m) for m in r.scalars().all()]
+
+    async def iter_by_collection_pages(
+        self,
+        collection_id: str,
+        page_size: int = DEFAULT_DOCUMENT_PAGE_SIZE,
+        status: DocumentStatus | None = None,
+    ) -> AsyncIterator[list[Document]]:
+        """Yield every collection document in bounded, stable pages."""
+        if page_size < 1 or page_size > MAX_DOCUMENT_PAGE_SIZE:
+            raise ValueError(
+                f"page_size must be between 1 and {MAX_DOCUMENT_PAGE_SIZE}, got {page_size}"
+            )
+
+        offset = 0
+        while True:
+            page = await self.list_by_collection(
+                collection_id=collection_id,
+                offset=offset,
+                limit=page_size,
+                status=status,
+            )
+            if not page:
+                return
+            yield page
+            if len(page) < page_size:
+                return
+            offset += len(page)
 
     async def update(self, doc: Document) -> Document:
         r = await self._session.execute(select(DocumentModel).where(DocumentModel.id == doc.id))

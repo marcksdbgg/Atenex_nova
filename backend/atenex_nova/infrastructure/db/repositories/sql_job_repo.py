@@ -7,7 +7,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from atenex_nova.domain.entities.job import Job
-from atenex_nova.domain.value_objects.identifiers import JobStatus, JobType
+from atenex_nova.domain.value_objects.identifiers import JobStatus, JobType, new_id
 from atenex_nova.infrastructure.db.models.tables import JobModel
 
 
@@ -29,6 +29,120 @@ class SqlJobRepository:
         self._session.add(m)
         await self._session.flush()
         return job
+
+    async def ensure_pending(
+        self,
+        *,
+        job_type: JobType,
+        target_id: str,
+        payload: dict[str, object] | None = None,
+        merge_pending_payload: bool = False,
+    ) -> tuple[Job, bool]:
+        """Return the active job for a stage, or create exactly one pending job."""
+        result = await self._session.execute(
+            select(JobModel)
+            .where(
+                JobModel.target_id == target_id,
+                JobModel.job_type == job_type.value,
+                JobModel.status.in_(
+                    (JobStatus.PENDING.value, JobStatus.RUNNING.value)
+                ),
+            )
+            .order_by(JobModel.created_at.asc(), JobModel.id.asc())
+            .limit(1)
+        )
+        model = result.scalar_one_or_none()
+        if model is not None:
+            if (
+                merge_pending_payload
+                and model.status == JobStatus.PENDING.value
+                and payload is not None
+            ):
+                merged_payload = json.loads(model.payload_json or "{}")
+                for key, value in payload.items():
+                    previous = merged_payload.get(key)
+                    if isinstance(previous, list) and isinstance(value, list):
+                        merged_payload[key] = list(dict.fromkeys([*previous, *value]))
+                    else:
+                        merged_payload[key] = value
+                model.payload_json = json.dumps(merged_payload)
+                await self._session.flush()
+            return self._to_entity(model), False
+
+        job = Job(
+            id=new_id(),
+            job_type=job_type,
+            target_id=target_id,
+            payload=dict(payload or {}),
+        )
+        await self.create(job)
+        return job, True
+
+    async def has_succeeded(
+        self,
+        target_id: str,
+        job_type: JobType,
+        *,
+        not_before: datetime | None = None,
+    ) -> bool:
+        stmt = select(JobModel.id).where(
+            JobModel.target_id == target_id,
+            JobModel.job_type == job_type.value,
+            JobModel.status == JobStatus.SUCCEEDED.value,
+        )
+        if not_before is not None:
+            stmt = stmt.where(JobModel.created_at >= not_before)
+        result = await self._session.execute(stmt.limit(1))
+        return result.scalar_one_or_none() is not None
+
+    async def latest_succeeded_created_at(
+        self,
+        target_id: str,
+        job_types: set[JobType],
+    ) -> datetime | None:
+        if not job_types:
+            return None
+        result = await self._session.execute(
+            select(func.max(JobModel.created_at)).where(
+                JobModel.target_id == target_id,
+                JobModel.job_type.in_([item.value for item in job_types]),
+                JobModel.status == JobStatus.SUCCEEDED.value,
+            )
+        )
+        value = result.scalar_one_or_none()
+        return value if isinstance(value, datetime) else None
+
+    async def has_active(
+        self,
+        target_id: str,
+        job_types: set[JobType] | None = None,
+    ) -> bool:
+        stmt = select(JobModel.id).where(
+            JobModel.target_id == target_id,
+            JobModel.status.in_((JobStatus.PENDING.value, JobStatus.RUNNING.value)),
+        )
+        if job_types:
+            stmt = stmt.where(JobModel.job_type.in_([item.value for item in job_types]))
+        result = await self._session.execute(stmt.limit(1))
+        return result.scalar_one_or_none() is not None
+
+    async def has_running_by_targets(
+        self,
+        target_ids: list[str],
+        *,
+        exclude_job_id: str | None = None,
+    ) -> bool:
+        """Detect concurrent writers before a destructive rebuild starts."""
+        if not target_ids:
+            return False
+        stmt = select(JobModel.id).where(
+            JobModel.target_id.in_(target_ids),
+            JobModel.status == JobStatus.RUNNING.value,
+        )
+        if exclude_job_id is not None:
+            stmt = stmt.where(JobModel.id != exclude_job_id)
+        result = await self._session.execute(stmt.limit(1))
+        return result.scalar_one_or_none() is not None
 
     async def get_by_id(self, job_id: str) -> Job | None:
         r = await self._session.execute(select(JobModel).where(JobModel.id == job_id))

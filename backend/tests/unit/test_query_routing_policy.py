@@ -36,6 +36,23 @@ class TestQueryRoutingPolicy:
         assert self.policy.choose_mode(features) == QueryMode.ARGUMENTATIVE
         assert self.policy.classify_intent(features) == QueryIntent.ARGUMENTATIVE
 
+    def test_author_stance_question_routes_to_multi_document_argument_synthesis(self) -> None:
+        features = self.policy.extract_features("¿Qué decía Cervantes del amor?")
+
+        assert features.asks_author_stance is True
+        assert self.policy.choose_mode(features) == QueryMode.MULTI_HOP
+        assert self.policy.classify_intent(features) == QueryIntent.ARGUMENTATIVE
+
+    def test_argumentative_user_premise_does_not_fall_back_to_factual_lookup(self) -> None:
+        features = self.policy.extract_features(
+            "Dicen que la eutanasia hace libres porque uno es dueño de su vida; por eso la defienden."
+        )
+
+        assert features.has_argumentative_terms is True
+        assert features.asks_author_stance is True
+        assert self.policy.choose_mode(features) == QueryMode.ARGUMENTATIVE
+        assert self.policy.classify_intent(features) == QueryIntent.ARGUMENTATIVE
+
     def test_detect_language_spanish_question(self) -> None:
         features = self.policy.extract_features(
             "Explica la neotenia literaria en 3 ideas y agrega 3 citas con referencia."

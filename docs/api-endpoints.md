@@ -1,6 +1,7 @@
 # API Endpoints
 
-Estado: **Implemented / Historical scope**.
+Estado del contrato: **Implemented**. La evidencia anterior de release es
+**Historical** hasta una revalidación completa.
 
 This document catalogs the current public HTTP surface exposed by the document RAG
 backend. It is separate from the Repo Context MCP contract in
@@ -19,7 +20,7 @@ backend. It is separate from the Repo Context MCP contract in
 | Method | Route | Purpose |
 |---|---|---|
 | GET | `/health` | Return basic service status |
-| GET | `/health/dependencies` | Probe local runtime dependencies: LLM, Qdrant, embeddings, Docling, and visual runtime |
+| GET | `/health/dependencies` | Probe local runtime dependencies and expose fallbacks, including embeddings and neural reranker readiness |
 
 ## Collections
 
@@ -38,6 +39,7 @@ backend. It is separate from the Repo Context MCP contract in
 | POST | `/collections/{collection_id}/documents/import` | Register a local file path as a document |
 | POST | `/collections/{collection_id}/documents/import-folder` | Import a local folder into the collection |
 | POST | `/collections/{collection_id}/rebuild` | Requeue the collection rebuild pipeline |
+| POST | `/collections/{collection_id}/rebuild-memory` | Rebuild the bounded collection-level summary from current `READY` document summaries without reparsing files |
 | POST | `/collections/{collection_id}/resume-ingestion` | Resume interrupted/failed document ingestion for a collection |
 
 ## Import Sessions
@@ -86,6 +88,10 @@ The search endpoint returns:
 - total hits
 - ranked evidence items
 
+Evidence metadata is compact by default: full `source_text`/`raw_text` is not copied
+into each HTTP item; the response keeps navigation/provenance fields and the original
+character count.
+
 ### Answer Response
 
 The answer endpoint returns:
@@ -93,6 +99,7 @@ The answer endpoint returns:
 - answer text
 - verdict
 - grounding score
+- verification issues and claim/citation audit trace
 - citations
 - supporting evidence items
 
@@ -145,6 +152,15 @@ Uploads use `multipart/form-data` with the file payload and optional `collection
 ### Query modes
 
 The request body accepts routing modes such as `auto`, `exact`, `factual_local`, `multi_hop`, `global`, `argumentative`, and `visual`.
+
+### Collection publication safety
+
+Search and answer fail with HTTP `409` before persisting a query or calling an
+embedding model when the collection cannot expose a coherent ready subset. The
+typed codes are `COLLECTION_REBUILD_ACTIVE`, `COLLECTION_EMPTY`,
+`COLLECTION_INDEXING` and `COLLECTION_NO_READY_DOCUMENTS`. Terminal `FAILED`
+documents do not poison the ready subset, but are omitted and reported as a corpus
+gap in the retrieval audit.
 
 ## Related Docs
 

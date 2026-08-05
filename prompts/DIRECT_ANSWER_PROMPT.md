@@ -14,10 +14,13 @@ Evidence:
 {{EVIDENCE}}
 
 Instructions:
-- Answer directly and only from the evidence.
-- Prefer concise, factual statements.
+- Answer the user's proposition directly and only from the evidence.
+- Explain the relevant reasoning, not merely which snippets were found.
+- When the query contains an argument, reconstruct its premises, conclusion and
+  qualifications even in the direct path.
 - Add inline citations like [1], [2] next to supported claims.
+- Distinguish an explicit statement from an inference.
 - Respond strictly in {{LANGUAGE}}.
 - {{UNCERTAINTY_POLICY}}
 
-Return a short answer with citations inline.
+Return a concise but complete answer with citations inline.

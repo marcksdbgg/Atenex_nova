@@ -35,6 +35,10 @@ class EmbeddingGemmaAdapter(Embedder):
         self._dim = dim
         self._required = settings.embeddings_required if required is None else required
         self._backend = settings.embedding_backend
+        self._query_prefix = settings.embedding_query_prefix
+        self._document_prefix = settings.embedding_document_prefix
+        self._default_document_title = settings.embedding_default_document_title
+        self._batch_size = int(settings.embedding_batch_size)
         self.model: Any | None = None
         self._fallback_only = False
 
@@ -109,6 +113,53 @@ class EmbeddingGemmaAdapter(Embedder):
 
     # -- Embedding --------------------------------------------------------------
 
+    def format_query_input(self, text: str) -> str:
+        """Format a retrieval query with EmbeddingGemma's configurable task prompt."""
+        prefix = getattr(self, "_query_prefix", None)
+        if prefix is None:
+            prefix = get_settings().embedding_query_prefix
+        return f"{prefix}{text!s}"
+
+    def format_document_input(self, text: str, *, title: str | None = None) -> str:
+        """Format a retrieval document with a title-aware prompt."""
+        prefix = getattr(self, "_document_prefix", None)
+        default_title = getattr(self, "_default_document_title", None)
+        if prefix is None or default_title is None:
+            settings = get_settings()
+            prefix = prefix or settings.embedding_document_prefix
+            default_title = default_title or settings.embedding_default_document_title
+
+        normalized_title = " ".join(str(title or default_title).split()) or str(default_title)
+        return f"{prefix.replace('{title}', normalized_title)}{text!s}"
+
+    async def embed_query(self, text: str) -> list[float]:
+        """Embed one retrieval query in the model's query space."""
+        vectors = await self.embed([self.format_query_input(text)])
+        if len(vectors) != 1:
+            raise ValueError(f"embedding backend returned {len(vectors)} vectors for one query")
+        return vectors[0]
+
+    async def embed_documents(
+        self,
+        texts: list[str],
+        *,
+        titles: list[str | None] | None = None,
+    ) -> list[list[float]]:
+        """Embed retrieval documents using the configured document prompt."""
+        resolved_titles = titles if titles is not None else [None] * len(texts)
+        if len(resolved_titles) != len(texts):
+            raise ValueError("titles and texts must have the same length")
+        formatted = [
+            self.format_document_input(text, title=title)
+            for text, title in zip(texts, resolved_titles, strict=True)
+        ]
+        vectors = await self.embed(formatted)
+        if len(vectors) != len(formatted):
+            raise ValueError(
+                f"embedding backend returned {len(vectors)} vectors for {len(formatted)} documents"
+            )
+        return vectors
+
     async def embed(self, texts: list[str]) -> list[list[float]]:
         """Generate vectors for a list of strings."""
         clean_texts = [str(t) for t in texts]
@@ -138,19 +189,39 @@ class EmbeddingGemmaAdapter(Embedder):
             return [self._fallback_embed(text) for text in clean_texts]
 
     async def _embed_ollama(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
         url = f"{self._ollama_url}/api/embed"
-        payload = {"model": self._model_name, "input": texts}
+        batch_size = max(1, self._batch_size)
+        vectors: list[list[float]] = []
         async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(url, json=payload)
-            response.raise_for_status()
-            data = response.json()
-        raw = data.get("embeddings") or []
-        if not raw or not raw[0]:
-            raise ValueError(
-                f"ollama returned empty embeddings for model '{self._model_name}' "
-                f"(run: ollama pull {self._model_name})"
-            )
-        return [self._truncate_normalize([float(x) for x in vec]) for vec in raw]
+            for offset in range(0, len(texts), batch_size):
+                batch = texts[offset : offset + batch_size]
+                batch_number = (offset // batch_size) + 1
+                try:
+                    response = await client.post(
+                        url,
+                        json={"model": self._model_name, "input": batch},
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                    raw = data.get("embeddings") if isinstance(data, dict) else None
+                    received = len(raw) if isinstance(raw, list) else 0
+                    if received != len(batch) or not raw or any(not vector for vector in raw):
+                        raise ValueError(
+                            "ollama returned invalid embedding cardinality for "
+                            f"batch {batch_number}: expected {len(batch)}, got {received}"
+                        )
+                    vectors.extend(
+                        self._truncate_normalize([float(value) for value in vector])
+                        for vector in raw
+                    )
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"ollama embedding batch {batch_number} failed "
+                        f"({offset}:{offset + len(batch)} of {len(texts)} inputs): {exc}"
+                    ) from exc
+        return vectors
 
     async def _embed_sentence_transformers(self, texts: list[str]) -> list[list[float]]:
         import asyncio

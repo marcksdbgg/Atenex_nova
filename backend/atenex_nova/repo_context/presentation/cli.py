@@ -100,7 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
     trace_parser.add_argument(
         "--direction",
         required=True,
-        choices=("callers", "callees", "dependencies", "dependents"),
+        choices=("callers", "callees", "dependencies", "dependents", "both"),
     )
     trace_parser.add_argument("--depth", type=int, default=1)
     trace_parser.add_argument("--relation", dest="relations", action="append")

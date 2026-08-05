@@ -58,20 +58,22 @@ class QdrantAdapter(HybridIndex):
 
     def _register_failure(self, operation: str, exc: Exception) -> None:
         exc_str = str(exc)
-        if "404" in exc_str or "Not found" in exc_str or "doesn't exist" in exc_str:
-            logger.warning("Qdrant collection not found during %s: %s", operation, exc)
-            return
-
-        if "400" in exc_str or "Not existing vector name" in exc_str or "Wrong input" in exc_str or "invalid" in exc_str.lower():
-            logger.warning("Qdrant schema or validation failure during %s: %s", operation, exc)
-            return
-
         self._available = False
         self._failure_count += 1
         backoff = min(self._retry_cooldown_seconds * (2 ** (self._failure_count - 1)), 30.0)
         self._next_retry_at = time.monotonic() + backoff
         if self._required:
             raise ServiceUnavailableError("qdrant", f"{operation} failed: {exc}") from exc
+        if "404" in exc_str or "not found" in exc_str.lower() or "doesn't exist" in exc_str:
+            logger.warning("Qdrant collection missing during %s: %s", operation, exc)
+        elif (
+            "400" in exc_str
+            or "not existing vector name" in exc_str.lower()
+            or "wrong input" in exc_str.lower()
+            or "invalid" in exc_str.lower()
+            or "schema" in exc_str.lower()
+        ):
+            logger.warning("Qdrant schema or validation failure during %s: %s", operation, exc)
         logger.warning(
             "Qdrant %s failed: %s (retry in %.1fs)",
             operation,
@@ -120,9 +122,59 @@ class QdrantAdapter(HybridIndex):
                     collection_name,
                     dense_enabled,
                 )
+            else:
+                info = await self.client.get_collection(collection_name)
+                self._validate_collection_schema(
+                    info,
+                    vector_size=vector_size,
+                    dense_enabled=dense_enabled,
+                )
             self._register_success()
         except Exception as exc:
             self._register_failure(f"init collection '{collection_name}'", exc)
+
+    @classmethod
+    def _validate_collection_schema(
+        cls,
+        info: object,
+        *,
+        vector_size: int,
+        dense_enabled: bool,
+    ) -> None:
+        """Reject incompatible existing collections instead of mixing generations."""
+
+        config = cls._field(info, "config")
+        params = cls._field(config, "params")
+        vectors = cls._field(params, "vectors")
+        sparse_vectors = cls._field(params, "sparse_vectors")
+
+        dense = cls._field(vectors, "dense") if vectors is not None else None
+        sparse = cls._field(sparse_vectors, "sparse") if sparse_vectors is not None else None
+        if dense_enabled:
+            if dense is None:
+                raise ValueError(
+                    "Qdrant schema mismatch: named dense vector 'dense' is missing; "
+                    "rebuild the collection before indexing"
+                )
+            size = cls._field(dense, "size")
+            if size is None or int(cast(Any, size)) != int(vector_size):
+                raise ValueError(
+                    "Qdrant schema mismatch: dense vector dimension is "
+                    f"{size!r}, expected {vector_size}"
+                )
+        if sparse is None:
+            raise ValueError(
+                "Qdrant schema mismatch: named sparse vector 'sparse' is missing; "
+                "rebuild the collection before indexing"
+            )
+
+    @staticmethod
+    def _field(value: object, name: str) -> object | None:
+        if value is None:
+            return None
+        if isinstance(value, Mapping):
+            return value.get(name)
+        return getattr(value, name, None)
 
     async def delete_collection(self, collection_name: str) -> None:
         if not self._guard("delete_collection"):
@@ -147,15 +199,70 @@ class QdrantAdapter(HybridIndex):
             self._register_failure("list collections", exc)
             return []
 
-    async def delete_by_filter(self, collection_name: str, filter_dict: dict[str, str]) -> None:
-        """Delete points in an existing collection using exact-match payload filters."""
+    async def delete_points(
+        self,
+        collection_name: str,
+        point_ids: Sequence[str | int],
+        *,
+        batch_size: int = 256,
+    ) -> None:
+        """Delete known point IDs without ever broadening an empty selection.
+
+        IDs are de-duplicated and sent in bounded batches. A missing collection is
+        already clean, so the operation remains idempotent. Required deployments
+        raise through ``_register_failure``; optional deployments expose the failed
+        cleanup through ``is_available`` and the retry backoff.
+        """
+        if not collection_name.strip():
+            raise ValueError("collection_name must not be empty")
+        if batch_size < 1:
+            raise ValueError("batch_size must be positive")
+        unique_ids = list(dict.fromkeys(point_ids))
+        if not unique_ids or not self._guard("delete_points"):
+            return
+        try:
+            exists = await self.client.collection_exists(collection_name)
+            if not exists:
+                self._register_success()
+                return
+            for offset in range(0, len(unique_ids), batch_size):
+                await self.client.delete(
+                    collection_name=collection_name,
+                    points_selector=models.PointIdsList(
+                        points=cast(
+                            list[Any],
+                            unique_ids[offset : offset + batch_size],
+                        )
+                    ),
+                    wait=True,
+                )
+            logger.info(
+                "Deleted %d explicit points in %s",
+                len(unique_ids),
+                collection_name,
+            )
+            self._register_success()
+        except Exception as exc:
+            self._register_failure(f"delete points in '{collection_name}'", exc)
+
+    async def delete_by_filter(
+        self,
+        collection_name: str,
+        filter_dict: Mapping[str, str | int | bool],
+    ) -> None:
+        """Delete points using a non-empty conjunction of exact payload matches."""
+        if not collection_name.strip():
+            raise ValueError("collection_name must not be empty")
         if not filter_dict:
             return
+        if any(not key.strip() for key in filter_dict):
+            raise ValueError("payload filter keys must not be empty")
         if not self._guard("delete_by_filter"):
             return
         try:
             exists = await self.client.collection_exists(collection_name)
             if not exists:
+                self._register_success()
                 return
 
             must = [
@@ -165,15 +272,31 @@ class QdrantAdapter(HybridIndex):
             await self.client.delete(
                 collection_name=collection_name,
                 points_selector=models.FilterSelector(
-                    filter=models.Filter(must=must),
+                    filter=models.Filter(must=cast(Any, must)),
                 ),
+                wait=True,
             )
             logger.info("Deleted filtered points in %s with %s", collection_name, filter_dict)
             self._register_success()
         except Exception as exc:
             self._register_failure(f"delete filtered points in '{collection_name}'", exc)
 
-    async def upsert(self, collection_name: str, documents: Sequence[VectorDocument]) -> None:
+    async def upsert(
+        self,
+        collection_name: str,
+        documents: Sequence[VectorDocument],
+        *,
+        batch_size: int = 256,
+    ) -> None:
+        """Upsert points in bounded, ordered, retry-safe batches.
+
+        Stable point IDs make a retry after a partial remote write idempotent. The
+        adapter is marked healthy only after every batch has completed.
+        """
+        if not collection_name.strip():
+            raise ValueError("collection_name must not be empty")
+        if batch_size < 1:
+            raise ValueError("batch_size must be positive")
         if not documents:
             return
         if not self._guard("upsert"):
@@ -191,13 +314,41 @@ class QdrantAdapter(HybridIndex):
                 logger.warning("Skipping Qdrant point %s: no dense or sparse vector", doc.id)
                 continue
             points.append(
-                models.PointStruct(id=doc.id, vector=vector_dict, payload=doc.payload)
+                models.PointStruct(
+                    id=doc.id,
+                    vector=vector_dict,
+                    payload=dict(doc.payload),
+                )
             )
+        if not points:
+            return
+        completed_batches = 0
         try:
-            await self.client.upsert(collection_name=collection_name, points=points)
+            for offset in range(0, len(points), batch_size):
+                await self.client.upsert(
+                    collection_name=collection_name,
+                    points=points[offset : offset + batch_size],
+                    wait=True,
+                )
+                completed_batches += 1
             self._register_success()
+            logger.info(
+                "Upserted %d points into %s in %d batch(es)",
+                len(points),
+                collection_name,
+                completed_batches,
+            )
         except Exception as exc:
-            self._register_failure(f"upsert points in '{collection_name}'", exc)
+            operation = f"upsert batch {completed_batches + 1} in '{collection_name}'"
+            self._register_failure(operation, exc)
+            if completed_batches:
+                # Optional mode may tolerate a completely unavailable Qdrant, but
+                # it must never publish a prefix of a logical upsert as complete.
+                raise ServiceUnavailableError(
+                    "qdrant",
+                    f"{operation} failed after {completed_batches} completed batch(es); "
+                    "retry the idempotent upsert",
+                ) from exc
 
     async def search(
         self,
@@ -216,23 +367,28 @@ class QdrantAdapter(HybridIndex):
             must = []
             for k, v in filter_dict.items():
                 must.append(models.FieldCondition(key=k, match=models.MatchValue(value=v)))
-            qdrant_filter = models.Filter(must=must)
+            qdrant_filter = models.Filter(must=cast(Any, must))
 
         try:
-            if hasattr(self.client, "search"):
-                q_vector: models.NamedSparseVector | models.NamedVector
+            legacy_search = getattr(self.client, "search", None)
+            if callable(legacy_search):
+                q_vector: Any
                 if query_sparse_indices is not None and query_sparse_values is not None:
-                    q_vector = models.NamedSparseVector(
+                    named_sparse_vector = vars(models)["NamedSparseVector"]
+                    q_vector = named_sparse_vector(
                         name="sparse",
                         vector=models.SparseVector(
                             indices=query_sparse_indices, values=query_sparse_values
                         ),
                     )
                 else:
-                    q_vector = models.NamedVector(name="dense", vector=query_vector or [])
+                    named_vector = vars(models)["NamedVector"]
+                    q_vector = named_vector(
+                        name="dense", vector=query_vector or []
+                    )
 
                 try:
-                    results = await self.client.search(
+                    results = await legacy_search(
                         collection_name=collection_name,
                         query_vector=q_vector,
                         limit=limit,
@@ -241,7 +397,7 @@ class QdrantAdapter(HybridIndex):
                     )
                 except Exception as exc:
                     if not (query_sparse_indices is not None and query_sparse_values is not None):
-                        results = await self.client.search(
+                        results = await legacy_search(
                             collection_name=collection_name,
                             query_vector=query_vector or [],
                             limit=limit,

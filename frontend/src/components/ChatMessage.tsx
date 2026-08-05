@@ -1,4 +1,9 @@
 import type { QueryHit } from '../types/api';
+import {
+  assessAnswerTrust,
+  formatVerificationIssues,
+  getAnswerVerificationPresentation,
+} from './answerTrust';
 import { normalizeAssistantText } from './chatMessageText';
 
 interface ChatMessageProps {
@@ -11,6 +16,8 @@ interface ChatMessageProps {
   routeMode: string;
   intent: string;
   language: string;
+  verdict?: string;
+  verificationIssues?: string[];
   groundingScore?: number;
   citationsCount?: number;
   totalHits?: number;
@@ -52,6 +59,8 @@ export function ChatMessage({
   answer,
   routeMode,
   language,
+  verdict,
+  verificationIssues,
   groundingScore,
   citationsCount,
   totalHits,
@@ -59,10 +68,11 @@ export function ChatMessage({
   createdAt,
   onSelect,
 }: ChatMessageProps) {
-  const isLowConfidenceAnswer = kind === 'answer'
-    && typeof groundingScore === 'number'
-    && groundingScore < 0.55
-    && (citationsCount ?? 0) < 2;
+  const verification = getAnswerVerificationPresentation(verdict);
+  const trustAlert = kind === 'answer'
+    ? assessAnswerTrust(verdict, groundingScore, citationsCount)
+    : null;
+  const readableIssues = formatVerificationIssues(verificationIssues);
 
   const rawAnswer = answer?.trim() ?? '';
   const assistantText = kind === 'answer'
@@ -108,6 +118,21 @@ export function ChatMessage({
               <span>Atenex</span>
               <span>{loading ? 'Escribiendo...' : kind === 'answer' ? 'Respuesta' : 'Búsqueda'}</span>
             </div>
+            {kind === 'answer' && !loading ? (
+              <div
+                className={`answer-trust-summary answer-trust-summary--${verification.tone}`}
+                role="status"
+                aria-label={`Estado de verificación: ${verification.label}`}
+              >
+                <span className={`badge badge--${verification.tone}`}>{verification.label}</span>
+                <span className="answer-trust-summary__description">{verification.description}</span>
+                {typeof groundingScore === 'number' ? (
+                  <span className="answer-trust-summary__score">
+                    Fundamento {(groundingScore * 100).toFixed(0)}%
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
             <div className="chat-bubble__text">
               {loading ? (
                 <div className="chat-message__loading-state">
@@ -116,24 +141,28 @@ export function ChatMessage({
                 </div>
               ) : (
                 <>
-                  {isLowConfidenceAnswer && (
-                    <div className="warning-banner" style={{
-                      background: 'rgba(239, 68, 68, 0.08)',
-                      border: '1px solid rgba(239, 68, 68, 0.25)',
-                      color: '#b91c1c',
-                      padding: '8px 12px',
-                      borderRadius: '4px',
-                      fontSize: '0.75rem',
-                      marginBottom: '8px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px'
-                    }}>
-                      <span>⚠️</span>
-                      <span><strong>Baja confianza:</strong> Esta respuesta carece de evidencia sólida. Valídala con las citas del panel lateral.</span>
+                  {trustAlert ? (
+                    <div
+                      className={`answer-trust-alert answer-trust-alert--${trustAlert.tone}`}
+                      role={trustAlert.tone === 'error' ? 'alert' : 'status'}
+                      aria-live={trustAlert.tone === 'error' ? 'assertive' : 'polite'}
+                    >
+                      <span className="answer-trust-alert__icon" aria-hidden="true">!</span>
+                      <span>
+                        <strong>{trustAlert.title}:</strong>{' '}
+                        {trustAlert.message}
+                      </span>
                     </div>
-                  )}
+                  ) : null}
                   <div style={{ whiteSpace: 'pre-wrap' }}>{assistantText}</div>
+                  {readableIssues.length > 0 ? (
+                    <div className="answer-trust-issues" aria-label="Aspectos de la respuesta que requieren revisión">
+                      <strong>Qué debes revisar</strong>
+                      <ul>
+                        {readableIssues.map(issue => <li key={issue}>{issue}</li>)}
+                      </ul>
+                    </div>
+                  ) : null}
                 </>
               )}
             </div>

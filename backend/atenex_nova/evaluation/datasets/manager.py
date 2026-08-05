@@ -35,6 +35,17 @@ class GoldenSetManager:
                         expected_keywords=list(item.get("expected_keywords", [])),
                         route_mode=item.get("route_mode", "auto"),
                         mode=item.get("mode", "auto"),
+                        required_claims=[
+                            [str(term) for term in claim]
+                            for claim in item.get("required_claims", [])
+                            if isinstance(claim, list)
+                        ],
+                        forbidden_phrases=[str(value) for value in item.get("forbidden_phrases", [])],
+                        expected_source_patterns=[
+                            str(value) for value in item.get("expected_source_patterns", [])
+                        ],
+                        min_distinct_documents=max(1, int(item.get("min_distinct_documents", 1))),
+                        min_citations=max(0, int(item.get("min_citations", 1))),
                     )
                     for item in data.get("cases", [])
                 ],

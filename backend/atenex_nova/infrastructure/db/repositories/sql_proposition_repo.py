@@ -41,12 +41,28 @@ class SqlPropositionRepository:
         )
         return [self._to_entity(model) for model in result.scalars().all()]
 
-    async def delete_by_document(self, document_id: str) -> bool:
+    async def mark_embedded(self, proposition_ids: list[str], embedding_ref: str) -> None:
+        if not proposition_ids:
+            return
         result = await self._session.execute(
-            delete(PropositionModel).where(PropositionModel.document_id == document_id)
+            select(PropositionModel).where(PropositionModel.id.in_(proposition_ids))
+        )
+        for model in result.scalars().all():
+            model.embedding_ref = embedding_ref
+        await self._session.flush()
+
+    async def delete_by_document(self, document_id: str) -> bool:
+        return bool(await self.delete_by_documents([document_id]))
+
+    async def delete_by_documents(self, document_ids: list[str]) -> int:
+        """Delete propositions in one transaction-scoped operation."""
+        if not document_ids:
+            return 0
+        result = await self._session.execute(
+            delete(PropositionModel).where(PropositionModel.document_id.in_(document_ids))
         )
         await self._session.flush()
-        return result.rowcount > 0
+        return int(result.rowcount or 0)
 
     @staticmethod
     def _to_entity(model: PropositionModel) -> Proposition:

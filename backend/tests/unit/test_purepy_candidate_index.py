@@ -7,7 +7,6 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
-from scipy.stats import spearmanr
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 
@@ -20,6 +19,16 @@ from atenex_nova.infrastructure.indexes.purepy_candidate_index import (
 from atenex_nova.infrastructure.indexes.quantized_code_store import QuantizedCodeStore
 from atenex_nova.infrastructure.indexes.turboquant_candidate_index import string_to_uint64
 from atenex_nova.infrastructure.vector_quantization.turboquant_adapter import TurboQuantAdapter
+from atenex_nova.shared.config.settings import Settings
+
+
+def _spearman_correlation(left: list[float] | np.ndarray, right: list[float] | np.ndarray) -> float:
+    """Spearman correlation for continuous test data without a SciPy dependency."""
+    left_values = np.asarray(left, dtype=np.float64)
+    right_values = np.asarray(right, dtype=np.float64)
+    left_ranks = np.argsort(np.argsort(left_values, kind="stable"), kind="stable")
+    right_ranks = np.argsort(np.argsort(right_values, kind="stable"), kind="stable")
+    return float(np.corrcoef(left_ranks, right_ranks)[0, 1])
 
 
 def _make_profile(profile_id: str = "test-profile") -> QuantizationProfileModel:
@@ -31,7 +40,7 @@ def _make_profile(profile_id: str = "test-profile") -> QuantizationProfileModel:
         bit_width=4,
         rotation_seed=42,
         qjl_seed=1337,
-        codebook_version="v1",
+        codebook_version=f"v1-b4|{Settings().embedding_contract_fingerprint}",
     )
 
 
@@ -128,7 +137,7 @@ async def test_search_recall_vs_exact_inner_product(session_factory) -> None:
     est_by_node = {r["node_id"]: r["score"] for r in all_results}
     paired_exact = [exact_ips[node_to_db_idx[nid]] for nid in node_ids]
     paired_est = [est_by_node[nid] for nid in node_ids]
-    spearman_corr = float(spearmanr(paired_exact, paired_est).correlation)
+    spearman_corr = _spearman_correlation(paired_exact, paired_est)
     assert spearman_corr >= 0.95
 
 

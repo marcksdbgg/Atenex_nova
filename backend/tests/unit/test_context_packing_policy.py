@@ -34,7 +34,7 @@ def test_context_packing_uses_token_budget_instead_of_fixed_cap() -> None:
 
     pack = policy.build("query-1", "factual_local", items, token_budget=500)
 
-    assert 1 <= len(pack.items) <= 8
+    assert 1 <= len(pack.items) <= 12
     assert pack.selected_count == len(pack.items)
     assert pack.estimated_tokens > 0
     assert 0 < pack.budget_utilization <= 1
@@ -71,8 +71,8 @@ def test_context_packing_limits_document_saturation_for_multi_hop() -> None:
     for item in pack.items:
         per_document[item.document_id] = per_document.get(item.document_id, 0) + 1
 
-    assert per_document["document-a"] <= 2
-    assert per_document["document-b"] <= 2
+    assert per_document["document-a"] <= 4
+    assert per_document["document-b"] <= 4
 
 
 def test_context_budget_does_not_count_unprompted_full_source_text() -> None:
@@ -122,3 +122,56 @@ def test_graph_edges_cannot_saturate_multi_hop_context() -> None:
 
     assert sum(item.source_type == "graph_edge" for item in pack.items) <= 2
     assert sum(item.source_type == "chunk" for item in pack.items) == 4
+
+
+def test_context_packing_prefers_document_coverage_before_repetition() -> None:
+    policy = ContextPackingPolicy()
+    dominant = [
+        _make_item(
+            index,
+            f"Evidencia dominante y citable {index}",
+            document_id="document-dominant",
+        )
+        for index in range(8)
+    ]
+    diverse = [
+        _make_item(
+            index + 20,
+            f"Evidencia complementaria del documento {index}",
+            document_id=f"document-{index}",
+        )
+        for index in range(5)
+    ]
+
+    pack = policy.build("query-1", "global", [*dominant, *diverse], token_budget=700)
+
+    assert {item.document_id for item in pack.items} >= {
+        "document-dominant",
+        "document-0",
+        "document-1",
+        "document-2",
+        "document-3",
+        "document-4",
+    }
+
+
+def test_relevance_beats_source_type_priority() -> None:
+    policy = ContextPackingPolicy()
+    weak_graph = _make_item(
+        1,
+        "Relación genérica de poco valor",
+        source_type="graph_edge",
+        document_id="document-a",
+    )
+    weak_graph.score = 0.2
+    strong_chunk = _make_item(
+        2,
+        "Fragmento documental directamente relevante y verificable",
+        source_type="chunk",
+        document_id="document-b",
+    )
+    strong_chunk.score = 0.95
+
+    pack = policy.build("query-1", "multi_hop", [weak_graph, strong_chunk], token_budget=120)
+
+    assert pack.items[0] is strong_chunk

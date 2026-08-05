@@ -44,7 +44,15 @@ class SqlDocumentNodeRepository:
         return [self._to_entity(m) for m in result.scalars().all()]
 
     async def delete_by_document(self, document_id: str) -> bool:
-        stmt = delete(DocumentNodeModel).where(DocumentNodeModel.document_id == document_id)
+        return bool(await self.delete_by_documents([document_id]))
+
+    async def delete_by_documents(self, document_ids: list[str]) -> int:
+        """Delete parsed nodes without committing the caller's cleanup transaction."""
+        if not document_ids:
+            return 0
+        stmt = delete(DocumentNodeModel).where(
+            DocumentNodeModel.document_id.in_(document_ids)
+        )
         result = await self.session.execute(stmt)
-        await self.session.commit()
-        return result.rowcount > 0
+        await self.session.flush()
+        return int(result.rowcount or 0)

@@ -1,7 +1,8 @@
 # Repository Context: Indexing and Storage
 
-Estado: **Implemented / Verified** para el core SQLite. La capa semántica es
-**Implemented / Optional** y sus proveedores vivos no están incluidos en el claim.
+Estado: **Implemented / Verified** para el core SQLite y para la capa semántica
+requerida, verificada con fakes y con proveedores vivos en ambos repositorios de
+aceptación.
 
 ## Invariantes
 
@@ -137,9 +138,9 @@ El diseño no mantiene leases de lectores. En su lugar cada servicio comprueba d
 nuevo el ID activo antes de cerrar la respuesta y falla con
 `GENERATION_CHANGED_DURING_QUERY` si hubo publicación concurrente.
 
-## Semántica opcional
+## Semántica requerida
 
-Al definir `ATENEX_REPO_CONTEXT_SEMANTIC=1`, el composition root añade:
+El composition root siempre añade:
 
 - embeddings HTTP locales de Ollama;
 - una colección Qdrant separada por repositorio y generación;
@@ -147,11 +148,12 @@ Al definir `ATENEX_REPO_CONTEXT_SEMANTIC=1`, el composition root añade:
 - fusión determinista Reciprocal Rank Fusion;
 - un puerto opcional para reranking.
 
-SQLite se activa primero como core válido. Luego se construye la proyección semántica.
+SQLite se activa primero como snapshot válido. Luego se construye la proyección semántica.
 Qdrant escribe un sentinel de completitud con repositorio, generación, identidad del
 embedding, dimensiones y conteo. Solo un sentinel compatible habilita la consulta,
-incluso después de reiniciar el proceso. Un build parcial o una caída degrada
-`search_repo` al core con `SEMANTIC_UNAVAILABLE`.
+incluso después de reiniciar el proceso. Un build parcial o una caída hacen fallar la
+indexación o consulta con `SEMANTIC_UNAVAILABLE`; el launcher no sirve MCP sin una
+proyección compatible.
 
 Los diagnósticos persistentes de construcción permanecen en `status` y `doctor`.
 Las consultas MCP solo incluyen diagnósticos que afecten esa respuesta concreta; no

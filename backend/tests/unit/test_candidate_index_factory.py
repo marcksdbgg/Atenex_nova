@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -142,3 +143,58 @@ def test_is_turbovec_available_reflects_import(monkeypatch: pytest.MonkeyPatch) 
     )
     # Smoke check: real environment may or may not have turbovec; just ensure bool return.
     assert isinstance(is_turbovec_available(), bool)
+
+
+@pytest.mark.asyncio
+async def test_purepy_refuses_an_unbounded_layer_scan(
+    session: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(purepy_max_vectors_per_layer=2)
+    monkeypatch.setattr(
+        "atenex_nova.infrastructure.indexes.purepy_candidate_index.get_settings",
+        lambda: settings,
+    )
+    index = PurePyTurboQuantCandidateIndex(session)
+    index._store.count_vectors_by_layer = AsyncMock(return_value=3)
+    index._store.get_vectors_by_layer = AsyncMock(return_value=[])
+
+    result = await index.search("collection", ["proposition"], [0.1] * 384, top_n=10)
+
+    assert result == []
+    index._store.get_vectors_by_layer.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_purepy_rejects_vectors_from_an_old_embedding_contract(
+    session: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(purepy_max_vectors_per_layer=10)
+    monkeypatch.setattr(
+        "atenex_nova.infrastructure.indexes.purepy_candidate_index.get_settings",
+        lambda: settings,
+    )
+    index = PurePyTurboQuantCandidateIndex(session)
+    index._store.count_vectors_by_layer = AsyncMock(return_value=1)
+    index._store.get_vectors_by_layer = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                profile_id="legacy-profile",
+                node_id="legacy-node",
+                idx_blob=b"idx",
+                qjl_blob=b"qjl",
+                residual_norm=0.0,
+                vector_norm=1.0,
+            )
+        ]
+    )
+    index._store.get_profile = AsyncMock(
+        return_value=SimpleNamespace(codebook_version="v1-b4")
+    )
+    index._quantizer.estimate_inner_products = MagicMock(return_value=[1.0])
+
+    result = await index.search("collection", ["chunk"], [0.1] * 384, top_n=10)
+
+    assert result == []
+    index._quantizer.estimate_inner_products.assert_not_called()

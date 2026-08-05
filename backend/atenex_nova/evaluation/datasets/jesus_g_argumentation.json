@@ -1,0 +1,92 @@
+{
+  "name": "jesus_g_argumentation",
+  "description": "Benchmark inicial de postura autoral y síntesis argumentativa sobre el corpus Jesus G. Los casos deben revisarse humanamente antes de usarlos como claim de release.",
+  "cases": [
+    {
+      "id": "euthanasia-freedom-contradiction",
+      "category": "argumentative",
+      "question": "Si la eutanasia se presenta como libertad individual, ¿qué contradicción identifica Jesús G. Maestro en ese argumento?",
+      "expected_answer": "La libertad presupone estar vivo; convertir la muerte en ejercicio de libertad anula la condición que permite ejercerla.",
+      "expected_keywords": ["eutanasia", "libertad", "vida", "muerte"],
+      "required_claims": [["libertad", "vida"], ["muerte", "anula"]],
+      "forbidden_phrases": ["no hay menciones directas", "información disponible es limitada"],
+      "expected_source_patterns": ["euthanasia"],
+      "min_citations": 2,
+      "route_mode": "argumentative",
+      "mode": "argumentative"
+    },
+    {
+      "id": "euthanasia-social-failure",
+      "category": "multi_hop",
+      "question": "¿Por qué aceptar la eutanasia como salida general puede interpretarse como un fracaso de la sociedad?",
+      "expected_answer": "Porque la sociedad deja de ofrecer compatibilidad, esperanza, apoyo y razones para vivir a quien se siente incompatible con el mundo, los demás y consigo mismo.",
+      "expected_keywords": ["sociedad", "fracaso", "esperanza", "incompatible"],
+      "route_mode": "multi_hop",
+      "mode": "multi_hop"
+    },
+    {
+      "id": "euthanasia-class-critique",
+      "category": "multi_hop",
+      "question": "Reconstruye la crítica social que contrapone la eutanasia ofrecida al pueblo con la búsqueda de longevidad de las élites.",
+      "expected_answer": "La crítica denuncia la paradoja de que las élites busquen prolongar o mejorar su vida mientras la muerte se ofrece como liberación a personas vulnerables.",
+      "expected_keywords": ["élites", "inmortalidad", "pueblo", "eutanasia"],
+      "route_mode": "multi_hop",
+      "mode": "multi_hop"
+    },
+    {
+      "id": "euthanasia-terminal-exception",
+      "category": "argumentative",
+      "question": "¿Qué excepción o matiz introduce el corpus respecto de la eutanasia en enfermedades terminales?",
+      "expected_answer": "Distingue el recurso límite ante una enfermedad terminal e irreversible y un sufrimiento atroz del supuesto derecho general a morir ante cualquier desánimo.",
+      "expected_keywords": ["terminal", "irreversible", "ELA", "Sampedro"],
+      "route_mode": "argumentative",
+      "mode": "argumentative"
+    },
+    {
+      "id": "quixote-melancholy-life",
+      "category": "cross_document",
+      "question": "¿Cómo se usa el consejo de Sancho Panza sobre la melancolía para cerrar el argumento a favor de la vida?",
+      "expected_answer": "Sancho presenta dejarse morir por melancolía como una locura, y la referencia sirve para defender que la sociedad debe dar apoyo y razones para vivir.",
+      "expected_keywords": ["Sancho", "morir", "melancolía", "vida"],
+      "route_mode": "multi_hop",
+      "mode": "multi_hop"
+    },
+    {
+      "id": "cervantes-love-fiction",
+      "category": "author_position",
+      "question": "¿Qué línea de pensamiento atribuye el corpus a Cervantes sobre el amor vivido y el amor fingido por la ficción?",
+      "expected_answer": "La lectura contrapone el artificio literario que finge el amor con la experiencia sincera del amor vivido y sitúa esa tensión entre tópicos renacentistas.",
+      "expected_keywords": ["Cervantes", "amor", "ficción", "vivido"],
+      "route_mode": "multi_hop",
+      "mode": "multi_hop"
+    },
+    {
+      "id": "literature-advocates-life",
+      "category": "global",
+      "question": "Sintetiza cómo funciona la literatura como defensa de la vida frente al discurso de la eutanasia.",
+      "expected_answer": "La literatura articula razones para permanecer compatible con la realidad, representa el sufrimiento sin convertir la muerte en libertad general y ofrece una defensa de la vida.",
+      "expected_keywords": ["literatura", "vida", "eutanasia", "libertad"],
+      "route_mode": "global",
+      "mode": "global"
+    },
+    {
+      "id": "euthanasia-complete-argument",
+      "category": "global",
+      "question": "Reconstruye el argumento completo del corpus sobre eutanasia, libertad, desigualdad social, enfermedad terminal y la defensa literaria de la vida.",
+      "expected_answer": "La síntesis debe conectar la contradicción libertad-muerte, el fracaso social y la desigualdad, conservar la excepción terminal y concluir con la defensa literaria de la vida.",
+      "expected_keywords": ["libertad", "desigualdad", "terminal", "literatura", "vida"],
+      "required_claims": [
+        ["libertad", "muerte"],
+        ["sociedad", "desigualdad"],
+        ["terminal", "excepción"],
+        ["literatura", "vida"]
+      ],
+      "forbidden_phrases": ["el corpus no aborda", "no hay evidencia"],
+      "expected_source_patterns": ["euthanasia"],
+      "min_distinct_documents": 3,
+      "min_citations": 4,
+      "route_mode": "global",
+      "mode": "global"
+    }
+  ]
+}

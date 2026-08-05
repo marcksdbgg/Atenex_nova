@@ -19,7 +19,7 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from atenex_nova.repo_context.application.repomap import RepoMapBuilder
-from atenex_nova.repo_context.application.semantic import OptionalSemanticCoordinator
+from atenex_nova.repo_context.application.semantic import SemanticCoordinator
 from atenex_nova.repo_context.domain.models import (
     CodeEdge,
     CodeSymbol,
@@ -39,7 +39,9 @@ DEFAULT_MAX_TOKENS = 4_000
 MIN_TOKEN_BUDGET = 128
 MAX_TOKEN_BUDGET = 32_000
 ALLOWED_SEARCH_MODES = frozenset({"lexical", "symbol", "semantic"})
-ALLOWED_DIRECTIONS = frozenset({"callers", "callees", "dependencies", "dependents"})
+ALLOWED_DIRECTIONS = frozenset(
+    {"callers", "callees", "dependencies", "dependents", "both"}
+)
 ALLOWED_RELATIONS = frozenset(
     {
         "defines",
@@ -121,7 +123,7 @@ class RepoContextServices:
         scanner: RepositoryScanner,
         index: ContextIndex,
         extractors: Sequence[LanguageExtractor] = (),
-        semantic: OptionalSemanticCoordinator | None = None,
+        semantic: SemanticCoordinator | None = None,
     ) -> None:
         self._scanner = scanner
         self._index = index
@@ -154,12 +156,19 @@ class RepoContextServices:
         if focus and focus.strip():
             focus_queries = _focus_queries(focus.strip())
             focus_search_hits = _fuse_focus_hits(
-                [self._index.search(query, top_k=30) for query in focus_queries],
-                limit=40,
+                [
+                    self._search_hits(
+                        query=query,
+                        generation=generation,
+                        top_k=20,
+                    )
+                    for query in focus_queries
+                ],
+                limit=24,
             )
             focus_hits = [
-                self._hit_payload(hit, include_source=True)[0]
-                for hit in focus_search_hits[:20]
+                self._hit_payload(hit, include_source=False)[0]
+                for hit in focus_search_hits[:12]
             ]
         focus_path_scores: dict[str, float] = {}
         for rank, hit in enumerate(focus_search_hits, start=1):
@@ -174,9 +183,9 @@ class RepoContextServices:
             files=inventory,
             focus=focus,
             focus_paths=focus_path_scores,
-            max_tokens=max(128, budget // 2),
+            max_tokens=max(128, (budget * 2) // 5),
         )
-        landmarks = _rank_landmark_files(inventory, limit=30)
+        landmarks = _rank_landmark_files(inventory, limit=16)
         data: dict[str, Any] = {
             "focus": focus.strip() if focus and focus.strip() else None,
             "focus_queries": list(focus_queries),
@@ -192,13 +201,13 @@ class RepoContextServices:
                 for language, count in sorted(
                     language_counts.items(), key=lambda item: (-item[1], item[0])
                 )
-            ],
+            ][:12],
             "principal_directories": [
                 {"path": path, "files": count}
                 for path, count in sorted(
                     directory_counts.items(), key=lambda item: (-item[1], item[0])
                 )
-            ][:20],
+            ][:12],
             "landmarks": landmarks,
             "repo_map": {
                 "entries": [
@@ -254,7 +263,12 @@ class RepoContextServices:
                 "INVALID_ARGUMENT", "top_k must be between 1 and 200"
             )
         budget = _token_budget(max_tokens)
-        selected_modes = tuple(dict.fromkeys(modes or ("lexical", "symbol")))
+        default_modes = (
+            ("lexical", "symbol", "semantic")
+            if self._semantic is not None
+            else ("lexical", "symbol")
+        )
+        selected_modes = tuple(dict.fromkeys(modes or default_modes))
         unknown_modes = sorted(set(selected_modes) - ALLOWED_SEARCH_MODES)
         if unknown_modes:
             raise RepoContextError(
@@ -277,29 +291,13 @@ class RepoContextServices:
             symbol_kinds=tuple(symbol_kinds or ()),
         )
         diagnostics: list[dict[str, Any]] = []
-        effective_modes = list(selected_modes)
         if "semantic" in selected_modes:
-            try:
-                if self._semantic is None:
-                    raise RuntimeError("semantic retrieval is not configured")
-                hits = self._semantic.hybrid_search(
-                    query=cleaned_query,
-                    generation=generation,
-                    index=self._index,
-                    lexical_hits=hits,
-                    top_k=top_k,
-                )
-            except Exception as exc:
-                effective_modes = [
-                    mode for mode in effective_modes if mode != "semantic"
-                ]
-                diagnostics.append(
-                    _diagnostic(
-                        "SEMANTIC_UNAVAILABLE",
-                        "Semantic search degraded to the deterministic core: "
-                        f"{type(exc).__name__}.",
-                    )
-                )
+            hits = self._require_semantic_search(
+                query=cleaned_query,
+                generation=generation,
+                lexical_hits=hits,
+                top_k=top_k,
+            )
         results: list[dict[str, Any]] = []
         for hit in hits:
             payload, hit_diagnostics = self._hit_payload(hit, include_source=True)
@@ -316,7 +314,7 @@ class RepoContextServices:
             )
         data = {
             "query": cleaned_query,
-            "modes": effective_modes,
+            "modes": list(selected_modes),
             "results": results,
         }
         return self._envelope(
@@ -458,8 +456,13 @@ class RepoContextServices:
                 "INVALID_ARGUMENT",
                 "depth must be 1..8 and max_nodes must be 1..500",
             )
-        target_symbols = self._symbols_for_target(symbol_or_path)
-        if not target_symbols:
+        cleaned_target = symbol_or_path.strip()
+        inventory_paths = {
+            str(item.get("path", "")) for item in self._index.file_inventory()
+        }
+        target_path = cleaned_target if cleaned_target in inventory_paths else None
+        target_symbols = self._symbols_for_target(cleaned_target)
+        if target_path is None and not target_symbols:
             raise RepoContextError(
                 "NOT_FOUND", f"symbol or path not found: {symbol_or_path}"
             )
@@ -483,14 +486,24 @@ class RepoContextServices:
             all_edges.update({item.id: item for item in edges})
             omitted += node_omitted
             reached = max(reached, node_depth)
-        tests = self._related_tests_payload(symbol_or_path, top_k=20)
-        affected_files = sorted(
+        tests = self._related_tests_payload(cleaned_target, top_k=20)
+        target_files = list(
+            dict.fromkeys(
+                [
+                    *([target_path] if target_path is not None else []),
+                    *(item.file_path for item in target_symbols),
+                ]
+            )
+        )
+        remaining_files = (
             {item.file_path for item in all_nodes.values()}
             | {str(item["path"]) for item in tests}
-        )
+        ) - set(target_files)
+        affected_files = [*target_files, *sorted(remaining_files)]
         data = {
             "target": {
                 "query": symbol_or_path,
+                "path": target_path,
                 "symbols": [
                     self._symbol_payload(item, include_source=False)[0]
                     for item in target_symbols
@@ -592,6 +605,7 @@ class RepoContextServices:
                 self._semantic is not None
                 and generation is not None
                 and binding_ok
+                and self._semantic.available()
                 and self._semantic.ready_for(generation)
             ),
             "counts": _generation_counts(generation),
@@ -680,17 +694,18 @@ class RepoContextServices:
         semantic_ready = (
             self._semantic is not None
             and semantic_generation is not None
+            and self._semantic.available()
             and self._semantic.ready_for(semantic_generation)
         )
         checks.append(
             {
                 "name": "semantic",
                 "ok": semantic_ready,
-                "required": False,
+                "required": True,
                 "message": (
                     f"ready ({self._semantic.identity})"
                     if semantic_ready and self._semantic is not None
-                    else "optional semantic generation not configured or not built"
+                    else "required semantic generation not configured or not built"
                 ),
             }
         )
@@ -728,10 +743,15 @@ class RepoContextServices:
                 ),
             }
         )
+        core_ok = all(
+            item["ok"]
+            for item in checks
+            if item["required"] and item["name"] != "semantic"
+        )
         required_ok = all(item["ok"] for item in checks if item["required"])
         return {
             "healthy": required_ok,
-            "core_healthy": required_ok,
+            "core_healthy": core_ok,
             "serve_available": required_ok
             and any(item["name"] == "mcp_sdk" and item["ok"] for item in checks),
             "checks": checks,
@@ -740,7 +760,63 @@ class RepoContextServices:
     def ensure_ready(self) -> GenerationInfo:
         """Validate that this repository owns a readable active generation."""
 
-        return self._require_generation()
+        generation = self._require_generation()
+        if (
+            self._semantic is None
+            or not self._semantic.available()
+            or not self._semantic.ready_for(generation)
+        ):
+            raise RepoContextError(
+                "SEMANTIC_UNAVAILABLE",
+                "the active generation has no compatible semantic projection; "
+                "run `atenex-context index` with Ollama and Qdrant available",
+            )
+        return generation
+
+    def _search_hits(
+        self,
+        *,
+        query: str,
+        generation: GenerationInfo,
+        top_k: int,
+    ) -> list[SearchHit]:
+        lexical_hits = self._index.search(query, top_k=top_k)
+        if self._semantic is None:
+            return lexical_hits
+        return self._require_semantic_search(
+            query=query,
+            generation=generation,
+            lexical_hits=lexical_hits,
+            top_k=top_k,
+        )
+
+    def _require_semantic_search(
+        self,
+        *,
+        query: str,
+        generation: GenerationInfo,
+        lexical_hits: Sequence[SearchHit],
+        top_k: int,
+    ) -> list[SearchHit]:
+        if self._semantic is None:
+            raise RepoContextError(
+                "SEMANTIC_UNAVAILABLE",
+                "semantic retrieval is not configured",
+            )
+        try:
+            return self._semantic.hybrid_search(
+                query=query,
+                generation=generation,
+                index=self._index,
+                lexical_hits=lexical_hits,
+                top_k=top_k,
+            )
+        except Exception as exc:
+            raise RepoContextError(
+                "SEMANTIC_UNAVAILABLE",
+                "required semantic search is unavailable for the active generation",
+                details={"cause": type(exc).__name__},
+            ) from exc
 
     def _require_generation(self) -> GenerationInfo:
         try:
@@ -816,8 +892,7 @@ class RepoContextServices:
             str(item.get("path", "")) for item in self._index.file_inventory()
         }
         if cleaned in inventory_paths:
-            found = self._index.symbols(cleaned, limit=200)
-            return [item for item in found if item.file_path == cleaned]
+            return self._index.symbols_for_path(cleaned, limit=200)
         matches = self._resolve_symbol_candidates(cleaned)
         exact = [
             item
@@ -845,13 +920,24 @@ class RepoContextServices:
             current, level = queue.popleft()
             if level >= depth:
                 continue
-            current_edges = self._index.edges(
-                current.id,
-                direction=direction,
-                relations=relations,
-                limit=max_nodes * 4,
+            graph_directions = (
+                ("dependencies", "dependents")
+                if direction == "both"
+                else (direction,)
             )
-            if direction in {"dependents", "callers"}:
+            current_edges = _unique_edges(
+                [
+                    edge
+                    for graph_direction in graph_directions
+                    for edge in self._index.edges(
+                        current.id,
+                        direction=graph_direction,
+                        relations=relations,
+                        limit=max_nodes * 4,
+                    )
+                ]
+            )
+            if direction in {"dependents", "callers", "both"}:
                 current_edges = _unique_edges(
                     [
                         *current_edges,
@@ -1168,8 +1254,8 @@ class RepoContextServices:
                 diagnostics.append(_file_changed_diagnostic(path))
         symbols = [
             item
-            for item in self._index.symbols(path, limit=200)
-            if item.file_path == path and item.parent_id is None
+            for item in self._index.symbols_for_path(path, limit=200)
+            if item.parent_id is None
         ]
         payload = {
             "path": path,
@@ -1625,16 +1711,28 @@ def _compact_envelope(
         repo_map["rendered"] = ""
         repo_map["estimated_tokens"] = 0
     bounded_lists = _bounded_output_lists(data, preferred=list_key)
+    minimum_lengths: dict[int, int] = {}
+    if isinstance(data, dict):
+        affected_files = data.get("affected_files")
+        if isinstance(affected_files, list) and affected_files:
+            # Impact responses retain the first target file even when lower
+            # priority affected candidates must be compacted.
+            minimum_lengths[id(affected_files)] = 1
+
+    def trimmable(items: list[Any]) -> bool:
+        return len(items) > minimum_lengths.get(id(items), 0)
+
     preferred_list = (
         data.get(list_key)
         if isinstance(data, dict) and list_key and isinstance(data.get(list_key), list)
         else None
     )
     lower_priority = [item for item in bounded_lists if item is not preferred_list]
-    while _estimate_tokens(envelope) > max_tokens and any(lower_priority):
-        largest = max(lower_priority, key=len)
-        if largest:
-            largest.pop()
+    while _estimate_tokens(envelope) > max_tokens:
+        candidates = [items for items in lower_priority if trimmable(items)]
+        if not candidates:
+            break
+        max(candidates, key=len).pop()
     while (
         _estimate_tokens(envelope) > max_tokens
         and isinstance(preferred_list, list)
@@ -1643,10 +1741,11 @@ def _compact_envelope(
         preferred_list.pop()
     if _estimate_tokens(envelope) > max_tokens:
         _strip_large_strings(data)
-    while _estimate_tokens(envelope) > max_tokens and any(bounded_lists):
-        largest = max(bounded_lists, key=len)
-        if largest:
-            largest.pop()
+    while _estimate_tokens(envelope) > max_tokens:
+        candidates = [items for items in bounded_lists if trimmable(items)]
+        if not candidates:
+            break
+        max(candidates, key=len).pop()
     diagnostics = envelope.get("diagnostics")
     while (
         _estimate_tokens(envelope) > max_tokens

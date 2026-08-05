@@ -6,6 +6,7 @@ import httpx
 from fastapi import APIRouter
 
 from atenex_nova.infrastructure.embeddings.embedding_adapter import EmbeddingGemmaAdapter
+from atenex_nova.infrastructure.embeddings.reranker_adapter import RerankerAdapter
 from atenex_nova.presentation.api.dto.schemas import (
     DependencyHealthResponse,
     HealthResponse,
@@ -101,6 +102,34 @@ async def _probe_embeddings(settings: Settings) -> DependencyHealthResponse:
         )
 
 
+async def _probe_reranker(settings: Settings) -> DependencyHealthResponse:
+    endpoint = settings.reranker_path or "BAAI/bge-reranker-v2-m3"
+    try:
+        adapter = RerankerAdapter(required=False)
+        if adapter.is_available:
+            return DependencyHealthResponse(
+                name="reranker",
+                endpoint=adapter.model_name,
+                available=True,
+                fallback=False,
+            )
+        return DependencyHealthResponse(
+            name="reranker",
+            endpoint=endpoint,
+            available=False,
+            detail=adapter.failure_detail or "Neural reranker unavailable; heuristic ordering active",
+            fallback=True,
+        )
+    except Exception as exc:
+        return DependencyHealthResponse(
+            name="reranker",
+            endpoint=endpoint,
+            available=False,
+            detail=str(exc),
+            fallback=True,
+        )
+
+
 async def _probe_docling() -> DependencyHealthResponse:
     endpoint = "python:docling"
     try:
@@ -143,11 +172,20 @@ async def runtime_dependencies_health() -> RuntimeHealthResponse:
     llm_probe = await (_probe_ollama(settings) if settings.llm_backend == "ollama" else _probe_llamacpp(settings))
     qdrant_probe = await _probe_qdrant(settings)
     embeddings_probe = await _probe_embeddings(settings)
+    reranker_probe = await _probe_reranker(settings)
     docling_probe = await _probe_docling()
     visual_probe = await _probe_visual_runtime(settings)
     turbovec_probe = await _probe_turbovec(settings)
     sqlite_probe = _probe_sqlite(settings)
-    dependencies = [llm_probe, qdrant_probe, embeddings_probe, docling_probe, visual_probe, turbovec_probe]
+    dependencies = [
+        llm_probe,
+        qdrant_probe,
+        embeddings_probe,
+        reranker_probe,
+        docling_probe,
+        visual_probe,
+        turbovec_probe,
+    ]
     if sqlite_probe is not None:
         dependencies.append(sqlite_probe)
     status = "ok" if all(item.available for item in dependencies if item.name != "database") else "degraded"

@@ -19,9 +19,9 @@ El motor es general:
 - Ningún extractor, ranking o herramienta puede depender de nombres propios de esos
   dos repositorios.
 
-El RAG documental existente se conserva como bounded context legado y como base de
-trabajo futura para la tesis y el corpus literario. No es la promesa principal de
-esta versión y no se eliminará durante el pivote. Su adapter de respuestas Ollama
+El RAG documental existente se conserva como bounded context mantenido y como base de
+trabajo para la tesis y el corpus literario. Repo Context continúa siendo el producto
+primario de esta versión. Su adapter de respuestas Ollama
 solicita texto visible (`think=false`); Atenex conserva en su propia capa de
 aplicación la planificación, evidencia y verificación. Los marcadores heurísticos
 de ruta se comparan como palabras o frases completas, no como subcadenas. La UI
@@ -36,6 +36,66 @@ determinista y la revisión LLM: esta última puede reducir, pero no inflar, sco
 veredicto. Cada marcador `[n]` —incluidos grupos como `[2, 4]`— debe corresponder a
 evidencia citable y a un enlace resuelto; el sistema no fabrica marcadores al final
 de una respuesta.
+
+### Contrato vigente del RAG documental
+
+Estado de implementación: **Implemented**. Estado de validación: **Verified** en
+pruebas focalizadas del checkout. Estado del corpus vivo reconstruido con este
+contrato: **Planned**. La calidad comparable a NotebookLM y el aprendizaje continuo
+no forman parte de los claims actuales.
+
+La implementación mantenida:
+
+- aplica una allowlist al importar corpus y excluye metadata administrativa,
+  sidecars, bases, archives, dependencias, builds y symlinks fuera del root;
+- reconoce transcripciones y conserva timestamps, offsets de fuente y metadata
+  estructural fuera del cuerpo dominante;
+- subdivide incluso un nodo individual sobredimensionado con hard cap de 800 tokens,
+  overlap de 80 y spans trazables;
+- separa inputs de embedding para query y documento, registra el fingerprint de
+  compatibilidad `emb-v2`, procesa Ollama en lotes ordenados y validados y omite
+  perfiles PurePy legados incompatibles;
+- usa dense Qdrant como camino primario cuando está disponible, valida schema/dimensión
+  publica upserts en lotes idempotentes y limita el fallback PurePy exhaustivo por
+  cardinalidad;
+- evita inicializar Docling para TXT y usa un lock advisory de proceso que permite
+  reiniciar el único worker SQLite después de un crash sin confundir archivo
+  persistente con dueño vivo;
+- pagina el inventario completo de documentos y summaries, contextualiza follow-ups
+  y ejecuta variantes deterministas acotadas para rutas complejas; la fusión RRF
+  conserva la procedencia de cada etapa;
+- crea exactamente un summary de sección por chunk y uno de documento con procedencia;
+  una operación explícita reduce esos summaries a una memoria extractiva de colección
+  única y embebible;
+- evalúa una barrera temporal de readiness para chunks, propositions, summaries,
+  embeddings, graph y visual cuando corresponda, y en reanudación degrada `READY` y
+  agenda la reparación mínima de artefactos incompletos;
+- bloquea consultas mientras haya rebuild, estados transitorios, una colección vacía
+  o ningún documento `READY`; los documentos `FAILED` quedan fuera y se informan como
+  corpus gap. Toda evidencia recuperada se valida y rehidrata desde SQL, y un payload
+  con fingerprint incompatible se descarta;
+- limpia de forma simétrica e idempotente chunks, propositions, summaries, visuales,
+  aristas y sus representaciones candidate/Qdrant antes de reparse o rebuild;
+- empaqueta evidencia por relevancia, cobertura y citabilidad; las rutas global,
+  jerárquica y argumentativa ejecutan maps acotados y una reducción final;
+- segmenta la salida en claims, audita citation binding y soporte léxico por claim y
+  permite que el verificador LLM reduzca, pero no eleve, el veredicto determinista;
+- devuelve metadata de evidencia compacta y hace visible en la UI un verdict
+  `unverified`, `conflicting`, sin citas o con grounding bajo.
+
+La memoria de colección entregada es extractiva y su procedencia es explícita; no es
+todavía una jerarquía temática aprendida. La barrera de readiness usa artefactos y
+timestamps de jobs, no un `generation_id` común con activación atómica en SQL,
+Qdrant, candidate indexes, summaries y graph. El grafo permanece heurístico e
+intra-documento. El reranker neural vivo y calibrado tampoco está **Verified**.
+
+Por tanto permanecen **Planned**: `generation_id` y activación atómica definitivos,
+reconciliación completa entre stores, rebuild limpio del corpus vivo, benchmark Jesús
+G de 150 preguntas con revisión humana, reranker vivo calibrado, grafo cross-document
+evaluado y comparación reproducible con NotebookLM/EOS. El estado por entrega y las
+puertas G0–G6 se registran en
+[plan-rag-sintesis-corpus.md](plan-rag-sintesis-corpus.md). La evidencia causal está
+en [auditoria-rag-respuestas-sota-2026-08-02.md](auditoria-rag-respuestas-sota-2026-08-02.md).
 
 ## Invariantes
 
@@ -88,18 +148,22 @@ de aceptación.
 - Skill de proyecto portable para imponer el flujo overview → búsqueda → fuente →
   impacto/pruebas en Codex y Claude.
 
-### Semántica opcional
+### Semántica requerida
 
-Estado: **Implemented / Optional** para Ollama, Qdrant, readiness y RRF. Los
-contratos están verificados con fakes; el reranker concreto y la revalidación con
-servicios vivos están **Planned**.
+Estado: **Implemented / Verified** para la composición obligatoria de Ollama, Qdrant,
+readiness y RRF, tanto con fakes como con servicios vivos sobre Atenex Nova y
+`client-romero`. El reranker concreto sigue **Planned**.
 
 - Embeddings locales con contexto de archivo, símbolo y rol.
 - Qdrant separado por repositorio y generación.
 - Fusión RRF de señales exactas, léxicas, estructurales y semánticas.
-- Puerto y coordinación opcional para reranking de un conjunto pequeño de
+- Puerto para reranking de un conjunto pequeño de
   candidatos; el adapter concreto sigue **Planned**.
-- Operación completa del core si los servicios no están disponibles.
+- La indexación falla si no puede completar o reutilizar la proyección semántica.
+- Un lock advisory de proceso por sidecar serializa como una sola operación la
+  publicación SQLite y su proyección semántica requerida.
+- El servidor no publica herramientas sin sentinel semántico compatible.
+- `search_repo` y el foco de `repo_overview` usan fusión híbrida por defecto.
 
 ## Interfaces públicas
 
@@ -121,6 +185,10 @@ MCP v1:
 - `analyze_impact`
 - `related_tests`
 
+`trace_symbol` admite orientación entrante, saliente o `both`. `analyze_impact`
+resuelve rutas exactas mediante el índice de paths, incluye siempre el archivo
+objetivo y acepta archivos estructurales sin símbolos extraídos.
+
 El contrato detallado y los envelopes de respuesta están en
 [mcp-tools.md](mcp-tools.md).
 
@@ -128,10 +196,11 @@ Una integración local puede ejecutar `index` incremental inmediatamente antes d
 abrir el transporte `stdio`, como hace
 `backend/scripts/serve_repo_context_mcp.sh`. Esa preparación ocurre fuera de la
 superficie MCP; durante la conversación las seis herramientas permanecen de solo
-lectura. Para roots relativos, el launcher exige además el checkout Git principal
-esperado y verifica que el root resuelto sea ese checkout o uno de sus worktrees. Una
-configuración global ambigua con `.` falla antes de indexar, en vez de servir otro
-repositorio silenciosamente.
+lectura. Para roots relativos, el launcher resuelve el directorio de trabajo del
+proceso y exige que sea un checkout Git. Una configuración de proyecto puede pasar
+además el checkout principal esperado para restringir el root a ese checkout o sus
+worktrees. El registro global de Codex usa `.` deliberadamente para seguir el
+repositorio de cada sesión.
 
 ## Datos y seguridad
 
@@ -195,4 +264,9 @@ El procedimiento y los goldens se definen en
    componentes.
 4. [README.md](../README.md) describe el snapshot ejecutable y la puesta en marcha.
 5. [auditoria-completa.md](auditoria-completa.md) contrasta el contrato con la
-   implementación y enlaza la auditoría histórica del RAG.
+   implementación y enlaza la auditoría viva e histórica del RAG.
+6. [auditoria-rag-respuestas-sota-2026-08-02.md](auditoria-rag-respuestas-sota-2026-08-02.md)
+   es la evidencia vigente sobre calidad de respuesta documental.
+7. [plan-rag-sintesis-corpus.md](plan-rag-sintesis-corpus.md) es el ledger de
+   ejecución: distingue artefactos **Implemented** y pruebas **Verified** de las
+   puertas G0–G6 todavía **Planned**.

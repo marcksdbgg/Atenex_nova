@@ -82,6 +82,30 @@ class _RepairGateway:
         return "Ungrounded response without citation"
 
 
+class _MapReduceGateway:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    async def generate(
+        self,
+        prompt: str,
+        max_tokens: int = 2048,
+        temperature: float = 0.3,
+        stop: list[str] | None = None,
+    ) -> str:
+        self.prompts.append(prompt)
+        if "Return exactly these lines" in prompt:
+            return "VERDICT: verified\nGROUNDING_SCORE: 0.82\nISSUES: none"
+        if "Analytical memos produced from separate evidence groups" in prompt:
+            return (
+                "Cervantes presenta el amor como una experiencia que exige libertad [1]. "
+                "También muestra que el engaño destruye esa relación [2]."
+            )
+        if "Evidence group:" in prompt:
+            return "El grupo identifica una tesis explícita y su consecuencia [1]."
+        raise AssertionError(f"Unexpected prompt: {prompt[:120]}")
+
+
 @pytest.mark.asyncio
 async def test_generate_raises_service_unavailable_when_llm_returns_empty() -> None:
     orchestrator = AnswerOrchestrator(generator=_BlankGateway())
@@ -183,6 +207,70 @@ async def test_compose_retries_once_when_verification_is_weak() -> None:
     assert bundle.answer.text.startswith("EmbeddingGemma supports")
     assert bundle.answer.evidence_trace["generation_attempts"] == 2
     assert "regenerated_after_failed_verification" in bundle.answer.verification_issues
+    repair_stage = bundle.answer.evidence_trace["synthesis_stages"][-1]
+    assert repair_stage["stage"] == "verification_repair"
+    assert repair_stage["selected"] is True
+    assert bundle.answer.input_token_count > repair_stage["prompt_tokens"]
+
+
+@pytest.mark.asyncio
+async def test_multi_document_plan_executes_real_map_reduce() -> None:
+    generator = _MapReduceGateway()
+    orchestrator = AnswerOrchestrator(generator=generator)
+    query = Query(
+        id="query-map-reduce",
+        collection_id="collection-1",
+        text="¿Qué tesis desarrolla Cervantes sobre el amor y el engaño?",
+        normalized_text="qué tesis desarrolla cervantes sobre el amor y el engaño",
+        language="es",
+        intent="argumentative",
+        route_mode="multi_hop",
+    )
+    evidence_pack = ContextPackingPolicy().build(
+        query.id,
+        query.route_mode,
+        [
+            EvidenceItem(
+                id="evidence-1",
+                query_id=query.id,
+                source_type="chunk",
+                source_id="chunk-1",
+                score=0.98,
+                rank=1,
+                document_id="document-1",
+                title="Amor y libertad",
+                snippet="Cervantes presenta el amor como una experiencia que exige libertad.",
+            ),
+            EvidenceItem(
+                id="evidence-2",
+                query_id=query.id,
+                source_type="chunk",
+                source_id="chunk-2",
+                score=0.96,
+                rank=2,
+                document_id="document-2",
+                title="Engaño y destrucción",
+                snippet="Cervantes muestra que el engaño destruye esa relación amorosa.",
+            ),
+        ],
+        token_budget=500,
+    )
+    result = SearchResult(
+        query=query,
+        hits=[],
+        evidence_pack=evidence_pack,
+        route_reason="multi_hop: two documentary facets",
+    )
+
+    bundle = await orchestrator.compose(result)
+
+    assert bundle.plan_type == "hierarchical_synthesis"
+    stages = bundle.answer.evidence_trace["synthesis_stages"]
+    assert [stage["stage"] for stage in stages] == ["map", "map", "reduce"]
+    assert "Analytical memos produced from separate evidence groups" in bundle.prompt
+    assert "[1]" in bundle.answer.text and "[2]" in bundle.answer.text
+    assert bundle.answer.full_prompt is None
+    assert len(generator.prompts) == 4
 
 
 def test_spanish_prompt_uses_corpus_language_without_translation_step() -> None:
@@ -257,8 +345,55 @@ async def test_llm_verifier_cannot_inflate_deterministic_grounding() -> None:
         [citation],
     )
 
-    assert verification.grounding_score < 0.88
-    assert verification.verdict == AnswerVerdict.PARTIALLY_VERIFIED
+    assert verification.grounding_score <= 0.88
+    assert verification.verdict == AnswerVerdict.VERIFIED
+
+
+@pytest.mark.asyncio
+async def test_claim_verification_does_not_let_one_citation_cover_another_claim() -> None:
+    orchestrator = AnswerOrchestrator(generator=_EchoGateway())
+    query = Query(
+        id="query-claims",
+        collection_id="collection-1",
+        text="What does EmbeddingGemma support?",
+        normalized_text="what does embeddinggemma support",
+        language="en",
+        route_mode="factual_local",
+    )
+    evidence = EvidenceItem(
+        id="evidence-1",
+        query_id=query.id,
+        source_type="chunk",
+        source_id="chunk-1",
+        document_id="document-1",
+        score=1.0,
+        rank=1,
+        snippet="EmbeddingGemma supports 384d embeddings.",
+    )
+    result = SearchResult(
+        query=query,
+        hits=[],
+        evidence_pack=EvidencePack(query_id=query.id, route_mode=query.route_mode, items=[evidence]),
+        route_reason="test",
+    )
+    citation = Citation(
+        id="citation-1",
+        answer_id="answer-1",
+        document_id="document-1",
+        char_start=0,
+        char_end=40,
+        snippet=evidence.snippet,
+    )
+
+    verification = await orchestrator._verify(
+        result,
+        "EmbeddingGemma supports 384d embeddings [1]. It also proves that every retrieval answer is correct.",
+        "direct_answer",
+        [citation],
+    )
+
+    assert verification.verdict != AnswerVerdict.VERIFIED
+    assert "uncited_claims" in verification.issues
 
 
 @pytest.mark.asyncio

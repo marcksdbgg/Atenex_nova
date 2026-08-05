@@ -3,6 +3,7 @@
 Uses pydantic-settings for environment variable loading and profile support.
 """
 
+import hashlib
 from enum import StrEnum
 from pathlib import Path
 from typing import Literal
@@ -74,6 +75,7 @@ class Settings(BaseSettings):
     # --- Qdrant ---
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: str | None = None
+    qdrant_dense_enabled: bool = True
 
     # --- LLM Runtime ---
     llm_backend: Literal["llamacpp", "ollama"] = "ollama"
@@ -88,7 +90,17 @@ class Settings(BaseSettings):
     embedding_ollama_model: str = "embeddinggemma"
     embedding_model: str = "embeddinggemma"
     embedding_profile: EmbeddingProfile = EmbeddingProfile.STANDARD
-    embedding_batch_size: int = 32
+    # 256 is the measured throughput/memory sweet spot for the local RTX 4060;
+    # callers can lower it for smaller GPUs without changing vector semantics.
+    embedding_batch_size: int = Field(default=256, ge=1, le=2048)
+    embedding_query_prefix: str = "task: search result | query: "
+    embedding_document_prefix: str = "title: {title} | text: "
+    embedding_default_document_title: str = "none"
+
+    # --- Structural chunking ---
+    chunk_min_tokens: int = 400
+    chunk_max_tokens: int = 800
+    chunk_overlap_tokens: int = 80
 
     # --- Reranker ---
     reranker_device: str = "cuda"
@@ -104,6 +116,7 @@ class Settings(BaseSettings):
     # --- TurboVec / candidate index ---
     candidate_backend: Literal["auto", "purepy", "turbovec"] = "auto"
     turbovec_bit_width: int = 4
+    purepy_max_vectors_per_layer: int = 100_000
 
     # --- Visual indexing ---
     visual_indexing_enabled: bool = True
@@ -126,6 +139,12 @@ class Settings(BaseSettings):
     min_grounding_score: float = 0.35
     grounding_floor: float = 0.0
     allow_fallback_embeddings: bool = False
+
+    # --- Multi-document synthesis ---
+    synthesis_max_map_calls: int = 6
+    synthesis_map_max_tokens: int = 640
+    synthesis_reduce_max_tokens: int = 1800
+    synthesis_trace_preview_chars: int = 1200
 
     @property
     def strict_mode_enabled(self) -> bool:
@@ -180,8 +199,34 @@ class Settings(BaseSettings):
         }
         return dims[self.embedding_profile]
 
+    @property
+    def embedding_contract_fingerprint(self) -> str:
+        """Stable identity for every setting that makes persisted vectors compatible."""
+        contract_fields = (
+            "embedding-contract-v2",
+            self.embedding_backend,
+            self.embedding_model,
+            self.embedding_ollama_model,
+            str(self.embedding_dimensions),
+            self.embedding_query_prefix,
+            self.embedding_document_prefix,
+            self.embedding_default_document_title,
+            str(self.chunk_min_tokens),
+            str(self.chunk_max_tokens),
+            str(self.chunk_overlap_tokens),
+            "stable-sparse-v1",
+        )
+        digest = hashlib.sha256("\x1f".join(contract_fields).encode("utf-8")).hexdigest()
+        return f"emb-v2-{digest[:16]}"
+
     @model_validator(mode="after")
     def adjust_defaults(self) -> "Settings":
+        if self.chunk_min_tokens < 1:
+            raise ValueError("chunk_min_tokens must be positive")
+        if self.chunk_max_tokens < self.chunk_min_tokens:
+            raise ValueError("chunk_max_tokens must be greater than or equal to chunk_min_tokens")
+        if self.chunk_overlap_tokens < 0 or self.chunk_overlap_tokens >= self.chunk_max_tokens:
+            raise ValueError("chunk_overlap_tokens must be non-negative and smaller than chunk_max_tokens")
         default_sqlite = f"sqlite+aiosqlite:///{DEFAULT_SQLITE_DB_PATH.as_posix()}"
         if self.database_url == default_sqlite and self.profile == Profile.PROD:
             self.database_url = "postgresql+asyncpg://atenex:atenex_dev_password@localhost:5432/atenex_nova"

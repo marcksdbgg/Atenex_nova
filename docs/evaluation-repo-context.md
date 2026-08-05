@@ -261,21 +261,24 @@ implementation-plus-tests case must remain in the held-out split.
 
 The evaluation runner executes:
 
-1. **Core / cold**: build from an empty data root with Qdrant, Ollama, PostgreSQL, and
-   network access unavailable.
-2. **Core / warm**: repeated queries against the published generation.
-3. **Core / incremental**: add, edit, rename where supported, and delete a controlled
+1. **SQLite core / cold**: exercise scanner, parsers and atomic storage directly from
+   an empty data root; this is component evidence, not a servable MCP runtime.
+2. **Hybrid / cold**: build SQLite plus the required Ollama/Qdrant projection from an
+   empty data root.
+3. **Hybrid / warm**: repeated default queries against the published generation.
+4. **Hybrid / incremental**: add, edit, rename where supported, and delete a controlled
    file.
-4. **Hybrid / warm**: the same quality cases with the pinned optional semantic
-   fingerprint.
-5. **Semantic outage**: build/query with the adapter unavailable and verify explicit
-   core fallback.
-6. **Dirty snapshot**: staged, unstaged, untracked, deleted, and capture-race cases.
-7. **Atomic publication**: concurrent query load while a successful and a failing
+5. **Signal ablations**: run the same quality cases with explicit lexical, semantic
+   and hybrid modes for paired comparison.
+6. **Semantic outage**: build/query with an adapter unavailable and verify explicit
+   `SEMANTIC_UNAVAILABLE` plus refusal to serve MCP.
+7. **Dirty snapshot**: staged, unstaged, untracked, deleted, and capture-race cases.
+8. **Atomic publication**: concurrent query load while a successful and a failing
    generation are built.
-8. **Security**: path traversal, symlink escape, binary, large, secret, malicious
+9. **Security**: path traversal, symlink escape, binary, large, secret, malicious
    filename, and prompt-injection-like content fixtures.
-9. **Non-Git fallback**: equivalent fixture copied without `.git`.
+10. **Non-Git scanner component**: equivalent fixture copied without `.git`; the
+    Git-only session launcher must reject it.
 
 Core and hybrid use the same query text, gold judgments, filters, token budget, and
 deduplication policy. This makes their comparison paired rather than anecdotal.
@@ -345,7 +348,7 @@ at least five times when practical and report the median plus the worst observed
 Background load and power mode are recorded. Performance regressions are compared on
 the same machine and snapshot.
 
-### Optional end-to-end usefulness
+### End-to-end usefulness
 
 An agent or answer-model evaluation may additionally measure citation precision,
 supported-answer rate, and task completion. It must pin the model/prompt and preserve

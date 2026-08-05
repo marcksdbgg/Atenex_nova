@@ -1,8 +1,9 @@
 # Backend Architecture
 
 Estado: **Implemented** para Repo Context y para el RAG documental descrito abajo.
-Solo el bounded context Repo Context fue **Verified** en la ejecución del
-2026-07-30; la evidencia del RAG sigue siendo **Historical**.
+Repo Context fue **Verified** en la ejecución del 2026-07-31. Las correcciones del
+flujo documental están **Verified** en pruebas focalizadas del checkout; un rebuild y
+una revalidación de release con servicios vivos permanecen **Planned**.
 
 This guide documents the current backend implementation of Atenex Nova as it exists
 in the repository today. The product now has two explicitly separate bounded
@@ -20,8 +21,10 @@ must not reuse the document RAG tables or entities.
 
 The legacy backend is a modular monolith built around FastAPI, SQLAlchemy, and
 worker-driven background jobs. It follows the product contract in
-[docs/baseline.md](baseline.md). The technical audit linked through
-[docs/auditoria-completa.md](auditoria-completa.md) is a historical ledger.
+[docs/baseline.md](baseline.md). Current documentary-RAG evidence is in
+[auditoria-rag-respuestas-sota-2026-08-02.md](auditoria-rag-respuestas-sota-2026-08-02.md);
+the earlier audit remains historical through
+[auditoria-completa.md](auditoria-completa.md).
 
 ## Entry Points
 
@@ -135,6 +138,12 @@ On startup, [main.py](../backend/atenex_nova/main.py) configures logging, create
 
 The `collections` router creates collections and handles document upload/import. Uploads are stored under `backend/storage/uploads/{collection_id}/{document_id}/{filename}` and document metadata is persisted through the document service.
 
+Folder imports pass through a corpus policy before hashing or registration. The
+policy uses a content-format allowlist, an explicit size bound and exclusions for
+administrative metadata, VCS/build/dependency paths, database/index/archive artifacts
+and symlinks that leave the selected root. Import sessions persist accepted and
+skipped counts plus the reason for each exclusion.
+
 ### 3. Ingestion pipeline
 
 Document ingestion is job-driven and currently follows this chain:
@@ -145,7 +154,17 @@ Document ingestion is job-driven and currently follows this chain:
 4. `EMBED_DOCUMENT`
 5. enrichment jobs: propositions, summaries, graph, visual pages
 
-The parse handler resolves both current and legacy relative source paths so older records still work when the worker CWD changes.
+The parse handler resolves both current and legacy relative source paths so older
+records still work when the worker CWD changes. For transcript-like text, the parser
+separates envelope metadata from transcript content, recognizes SRT/inline timestamps
+and propagates source offsets, temporal bounds and structural role into nodes. These
+fields travel as metadata and source spans; they do not dominate embedding text.
+
+Segmentation uses complete structural units when they fit and subdivides an oversized
+unit at semantic boundaries when necessary. The current contract is a hard maximum
+of 800 estimated tokens with 80 tokens of overlap. Chunk metadata retains node IDs,
+heading path, pages and source spans. Embedding inputs use distinct query and document
+prefixes and are bound to the `emb-v2` compatibility fingerprint.
 
 ### 4. Query and answer flow
 
@@ -160,6 +179,20 @@ Answer generation then selects a synthesis plan, builds a prompt, calls the loca
 
 For the maintained documentary RAG path:
 
+- a collection publication policy fails closed while a rebuild is active, while any
+  document is transitional, when the collection is empty, or when no document is
+  `READY`; terminal `FAILED` documents remain an explicit corpus gap;
+- every external/index hit is checked against the ready SQL inventory and rehydrated
+  from canonical chunk, proposition, summary, node and document rows. Unknown IDs,
+  wrong ownership and incompatible embedding fingerprints are discarded;
+- repositories page through the complete collection instead of imposing a hidden
+  50-document discovery limit;
+- an ambiguous follow-up may incorporate a bounded recent conversation into a
+  transient retrieval query while the persisted user question remains unchanged;
+- `multi_hop`, `argumentative` and `global` routes can produce up to three
+  deterministic facet variants in addition to the original query. Conservative
+  normalization includes the benchmarked `eutanacia` → `eutanasia` correction; RRF
+  fuses variants and records their provenance;
 - a question mark alone does not imply `multi_hop`, and local/exact routes retain a
   direct-answer plan even when a summary appears in the evidence pack;
 - transcript envelopes are removed and long chunks expose a query-centered excerpt;
@@ -170,10 +203,17 @@ For the maintained documentary RAG path:
   documentary citations;
 - citation audit expands grouped markers, records invalid/non-citable/unresolved
   indices, and never appends synthetic markers after binding;
+- complex plans group evidence by document into bounded map calls and reduce their
+  memos into one answer while preserving the original global evidence indices;
+- claim audit segments the answer, checks citation coverage and lexical support for
+  every material claim, and records unsupported/weak claims in the trace;
 - the LLM verifier may lower the deterministic verdict or grounding score, never
   raise it. A clearly English draft for an `es` query triggers one repair attempt;
   persistent failure returns a Spanish unverified fallback rather than a translated
-  answer.
+  answer;
+- public API DTOs remove full source text from evidence metadata and expose its
+  character count instead; full prompts are persisted only when configured for
+  audit.
 
 ### 5. Strict runtime mode
 
@@ -188,15 +228,38 @@ In strict mode, missing evidence, empty LLM outputs, or unavailable required ser
 
 ## Data Model Notes
 
-- Document lifecycle is stateful: `registered -> parsed -> normalized -> segmented -> embedded -> indexed -> ready`. Under strict mode, the document remains in the `indexed` state during async enrichment jobs (propositions extraction, summaries, and graph building), only transitioning to `ready` at the very end of the visual indexing job.
-- Dense vectors are quantized via `VectorQuantizerPort` and indexed using local `.tvim` files through `CandidateIndexPort` (see [docs/turboquant-integration.md](turboquant-integration.md)).
+- Document lifecycle is stateful: `registered -> parsed -> normalized -> segmented -> embedded -> indexed -> ready`. A readiness service now requires chunk, proposition and summary artifacts/embeddings, successful graph work and visual work when applicable; it demotes an incomplete `ready` document and schedules a bounded repair. This is a temporal barrier over jobs and artifacts. A shared `generation_id` plus atomic activation across every store remains **Planned**.
+- Dense vectors are quantized via `VectorQuantizerPort` for compatibility/fallback,
+  while named dense vectors in Qdrant are the primary online retrieval path when the
+  service is available. Startup validates dense name/dimension and sparse schema;
+  incompatible collections require a rebuild. The PurePy fallback skips legacy
+  profiles whose fingerprint is not `emb-v2` and refuses exhaustive layers above its
+  configured safe cardinality. TurboVec/sublinear local generation is not a
+  **Verified** live claim (see [docs/turboquant-integration.md](turboquant-integration.md)).
 - Job lifecycle is stateful: `pending -> running -> succeeded / failed / cancelled`
 - Query mode and answer plan are persisted so the UI can show the actual route taken
-- Qdrant collections are namespaced by collection id for chunks, propositions, summaries, and visual pages
+- The code defines Qdrant namespaces for chunks, propositions, summaries, collection
+  memory and visual pages. Schema guards prove compatibility, not layer completeness;
+  a clean live rebuild and cross-store generation reconciler remain **Planned**.
+- Reparse and rebuild cleanup captures derived IDs before relational deletion and
+  removes the corresponding candidate vectors, quantized rows, Qdrant points,
+  incoming/outgoing edges and visual assets. This cleanup is idempotent, but it is
+  not a substitute for staged `generation_id` activation.
 
 ## Current Implementation Notes
 
-- The graph builder currently creates relation edges with simple heuristic rules over neighboring propositions.
+- The graph builder currently creates relation edges with simple heuristic rules over neighboring propositions and keyword matches inside one document; a real corpus-wide concept graph remains **Planned**.
+- Summary generation is extractive but idempotent: one section summary per chunk and
+  one document summary carry explicit child provenance. `BUILD_COLLECTION_MEMORY` is
+  an explicit ordered hierarchical reduction over ready document summaries and
+  produces exactly one collection summary plus its embedding. Topic clusters,
+  abstractive claim summaries and contradiction modeling remain **Planned**.
+- `hierarchical_synthesis`, `global_synthesis` and argument synthesis execute bounded
+  map-reduce. Iterative retrieval after measuring missing facets remains **Planned**.
+- Context budgets now vary by route and the pack applies relevance, coverage,
+  per-document caps and citability. Conversation context and deterministic facet
+  expansion are implemented; generative rewrite and a calibrated neural reranker
+  remain **Planned**.
 - The visual indexing path groups nodes by page and sends a page payload to the ColPali adapter.
 - The worker runner uses polling and status updates in the database; there is no external queue service in the current repo.
 - Pipeline audit records are used throughout ingestion and enrichment to keep the processing trail visible.
@@ -208,3 +271,5 @@ In strict mode, missing evidence, empty LLM outputs, or unavailable required ser
 - [docs/turboquant-integration.md](turboquant-integration.md)
 - [docs/jobs-and-workers.md](jobs-and-workers.md)
 - [docs/api-endpoints.md](api-endpoints.md)
+- [docs/auditoria-rag-respuestas-sota-2026-08-02.md](auditoria-rag-respuestas-sota-2026-08-02.md)
+- [docs/plan-rag-sintesis-corpus.md](plan-rag-sintesis-corpus.md)

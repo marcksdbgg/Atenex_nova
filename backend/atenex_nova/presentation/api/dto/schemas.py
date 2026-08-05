@@ -6,6 +6,21 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+def compact_evidence_metadata(metadata: dict[str, object] | None) -> dict[str, object]:
+    """Remove duplicated full-source payloads from public evidence responses."""
+    if not metadata:
+        return {}
+    compact = {
+        key: value
+        for key, value in metadata.items()
+        if key not in {"source_text", "raw_text", "full_text"}
+    }
+    source_text = metadata.get("source_text")
+    if isinstance(source_text, str):
+        compact["source_text_chars"] = len(source_text)
+    return compact
+
+
 # --- Collection ---
 class CreateCollectionRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)

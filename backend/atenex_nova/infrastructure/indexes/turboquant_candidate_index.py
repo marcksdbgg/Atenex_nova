@@ -22,7 +22,7 @@ _TURBOVEC_INSTALL_HINT = (
 
 def _id_map_index_type() -> Any:
     try:
-        from turbovec import IdMapIndex  # type: ignore[import-untyped]
+        from turbovec import IdMapIndex
     except ImportError as exc:
         raise ImportError(_TURBOVEC_INSTALL_HINT) from exc
     return IdMapIndex

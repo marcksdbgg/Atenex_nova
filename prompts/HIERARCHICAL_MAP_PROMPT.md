@@ -5,15 +5,20 @@ Plan: {{PLAN}}
 Generation Profile: {{GENERATION_PROFILE}}
 Route Reason: {{ROUTE_REASON}}
 Language: {{LANGUAGE}}
+Evidence group: {{GROUP_LABEL}}
 
 Evidence:
 {{EVIDENCE}}
 
 Instructions:
-- Group evidence by document or theme.
-- Produce a structured synthesis with citations inline.
+- Analyze only this evidence group; do not answer from prior knowledge.
+- Recover the author's thesis, reasons, qualifications, examples and tensions that
+  are relevant to the query.
+- Separate explicit statements from reasonable inferences and identify missing
+  support instead of filling gaps.
+- Preserve the original evidence numbers and cite every mapped claim inline.
+- Do not write a generic search-result summary and do not repeat metadata.
 - Respond strictly in {{LANGUAGE}}.
 - {{UNCERTAINTY_POLICY}}
-{{REDUCE_INSTRUCTIONS}}
 
-Return a mapped synthesis with a few compact paragraphs.
+Return a compact analytical memo for the reduce stage, not the final answer.

@@ -19,8 +19,13 @@ from atenex_nova.presentation.api.dto.schemas import (
     QueryHitResponse,
     QuerySearchResponse,
     SearchRequest,
+    compact_evidence_metadata,
 )
-from atenex_nova.shared.exceptions.base import ServiceUnavailableError, StrictModeViolationError
+from atenex_nova.shared.exceptions.base import (
+    CollectionPublicationError,
+    ServiceUnavailableError,
+    StrictModeViolationError,
+)
 
 router = APIRouter(prefix="/queries", tags=["queries"])
 
@@ -86,6 +91,15 @@ async def search_queries(
             query=body.query,
             mode=body.mode,
         )
+    except CollectionPublicationError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": exc.code,
+                "message": exc.message,
+                "document_statuses": exc.document_statuses,
+            },
+        ) from exc
     except StrictModeViolationError as exc:
         raise HTTPException(status_code=422, detail={"code": exc.code, "message": exc.message}) from exc
     except ServiceUnavailableError as exc:
@@ -111,7 +125,7 @@ async def search_queries(
                 score=hit.score,
                 rank=hit.rank,
                 page_number=hit.page_number,
-                metadata=hit.metadata,
+                metadata=compact_evidence_metadata(hit.metadata),
             )
             for hit in result.hits
         ],
@@ -137,6 +151,15 @@ async def answer_query(
             generation_profile=body.generation_profile,
             chat_id=body.chat_id,
         )
+    except CollectionPublicationError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": exc.code,
+                "message": exc.message,
+                "document_statuses": exc.document_statuses,
+            },
+        ) from exc
     except StrictModeViolationError as exc:
         raise HTTPException(status_code=422, detail={"code": exc.code, "message": exc.message}) from exc
     except ServiceUnavailableError as exc:
@@ -190,7 +213,7 @@ async def answer_query(
                 score=item.score,
                 rank=item.rank,
                 page_number=item.page_number,
-                metadata=item.metadata,
+                metadata=compact_evidence_metadata(item.metadata),
             )
             for item in result.evidence_items
         ],

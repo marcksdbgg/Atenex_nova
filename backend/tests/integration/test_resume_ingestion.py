@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 
@@ -19,6 +20,10 @@ from atenex_nova.domain.entities.proposition import Proposition
 from atenex_nova.domain.entities.relation_edge import RelationEdge
 from atenex_nova.domain.entities.summary_node import SummaryNode
 from atenex_nova.domain.value_objects.identifiers import DocumentStatus, JobStatus, JobType, new_id
+from atenex_nova.infrastructure.db.models.tables import (
+    QuantizationProfileModel,
+    QuantizedVectorModel,
+)
 from atenex_nova.infrastructure.db.repositories.sql_chunk_repo import SqlChunkRepository
 from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocumentRepository
 from atenex_nova.infrastructure.db.repositories.sql_job_repo import SqlJobRepository
@@ -50,7 +55,7 @@ def mock_candidate_index(monkeypatch: pytest.MonkeyPatch):
     mock_idx = MagicMock()
     mock_idx.remove_vectors = AsyncMock()
     monkeypatch.setattr(
-        "atenex_nova.infrastructure.indexes.candidate_index_factory.build_candidate_index",
+        "atenex_nova.workers.jobs.ingestion_job.build_candidate_index",
         lambda session: mock_idx,
     )
     return mock_idx
@@ -59,10 +64,12 @@ def mock_candidate_index(monkeypatch: pytest.MonkeyPatch):
 @pytest.fixture()
 def mock_qdrant(monkeypatch: pytest.MonkeyPatch):
     mock_qd = MagicMock()
+    mock_qd.delete_points = AsyncMock()
     mock_qd.delete_by_filter = AsyncMock()
+    mock_qd.is_available = True
     monkeypatch.setattr(
-        "atenex_nova.infrastructure.qdrant.qdrant_adapter.QdrantAdapter",
-        lambda: mock_qd,
+        "atenex_nova.workers.jobs.ingestion_job.QdrantAdapter",
+        lambda **kwargs: mock_qd,
     )
     return mock_qd
 
@@ -87,6 +94,7 @@ def mock_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     )
     settings.visual_pages_path.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr("atenex_nova.shared.config.settings.get_settings", lambda: settings)
+    monkeypatch.setattr("atenex_nova.workers.jobs.ingestion_job.get_settings", lambda: settings)
     return settings
 
 
@@ -194,13 +202,27 @@ async def test_clean_slate_reprocessing_deletes_old_records(
         )
         await proposition_repo.create_many([prop])
 
-        summary = SummaryNode(
+        document_summary = SummaryNode(
             id=new_id(),
             scope_type="document",
             scope_id=doc.id,
             text="Old doc summary",
         )
-        await summary_repo.create_many([summary])
+        section_summary = SummaryNode(
+            id=new_id(),
+            scope_type="section",
+            scope_id=chunk.id,
+            text="Old section summary",
+        )
+        collection_summary = SummaryNode(
+            id=new_id(),
+            scope_type="collection",
+            scope_id=doc.collection_id,
+            text="Old collection summary",
+        )
+        await summary_repo.create_many(
+            [document_summary, section_summary, collection_summary]
+        )
 
         rel = RelationEdge(
             id=new_id(),
@@ -211,6 +233,60 @@ async def test_clean_slate_reprocessing_deletes_old_records(
             relation="mentions",
         )
         await relation_repo.create_many([rel])
+
+        inbound_rel = RelationEdge(
+            id=new_id(),
+            source_type="proposition",
+            source_id="other_prop",
+            target_type="proposition",
+            target_id=prop.id,
+            relation="supports",
+        )
+        await relation_repo.create_many([inbound_rel])
+
+        visual_id = new_id()
+        other_visual_id = new_id()
+        visual_cache = mock_settings.visual_pages_path / "col1.json"
+        visual_cache.write_text(
+            "["
+            f'{{"id":"{visual_id}","document_id":"{doc.id}"}},'
+            f'{{"id":"{other_visual_id}","document_id":"other-doc"}}'
+            "]",
+            encoding="utf-8",
+        )
+        visual_asset_dir = mock_settings.visual_pages_path / doc.id
+        visual_asset_dir.mkdir()
+        (visual_asset_dir / "page-1.png").write_bytes(b"generated")
+
+        profile_id = new_id()
+        session.add(
+            QuantizationProfileModel(
+                id=profile_id,
+                embedding_model="test-embedding",
+                dimension=4,
+            )
+        )
+        indexed_ids = [
+            (chunk.id, "chunk"),
+            (prop.id, "proposition"),
+            (document_summary.id, "summary"),
+            (section_summary.id, "summary"),
+            (collection_summary.id, "summary"),
+            (visual_id, "visual"),
+        ]
+        for position, (node_id, memory_layer) in enumerate(indexed_ids, start=1):
+            session.add(
+                QuantizedVectorModel(
+                    id=new_id(),
+                    node_id=node_id,
+                    uint64_id=position,
+                    collection_id=doc.collection_id,
+                    memory_layer=memory_layer,
+                    profile_id=profile_id,
+                    idx_blob=b"idx",
+                    qjl_blob=b"qjl",
+                )
+            )
 
         await session.commit()
 
@@ -240,15 +316,56 @@ async def test_clean_slate_reprocessing_deletes_old_records(
             # Also check summaries and relations
             doc_sum = await s_repo.list_by_scope("document", doc.id)
             assert len(doc_sum) == 0
+            assert await s_repo.list_by_scope("section", chunk.id) == []
+            assert await s_repo.list_by_scope("collection", doc.collection_id) == []
             relations = await r_repo.list_by_source_ids([prop.id])
             assert len(relations) == 0
+            assert await r_repo.list_by_source_ids(["other_prop"]) == []
+            quantized_count = (
+                await session_check.execute(
+                    select(func.count())
+                    .select_from(QuantizedVectorModel)
+                    .where(QuantizedVectorModel.collection_id == doc.collection_id)
+                )
+            ).scalar_one()
+            assert quantized_count == 0
 
-            # Verify Qdrant deletion was called
+            # Every vector namespace is cleaned by stable ID plus legacy filters.
+            mock_qdrant.delete_points.assert_any_call(
+                "collection_col1", (chunk.id,)
+            )
+            mock_qdrant.delete_points.assert_any_call(
+                "collection_col1_propositions", (prop.id,)
+            )
+            summary_ids = {document_summary.id, section_summary.id, collection_summary.id}
+            summary_point_call = next(
+                call
+                for call in mock_qdrant.delete_points.await_args_list
+                if call.args[0] == "collection_col1_summaries"
+            )
+            assert set(summary_point_call.args[1]) == summary_ids
+            mock_qdrant.delete_points.assert_any_call("pages_visual", (visual_id,))
             mock_qdrant.delete_by_filter.assert_any_call("collection_col1", {"document_id": doc.id})
+            mock_qdrant.delete_by_filter.assert_any_call(
+                "collection_col1_propositions", {"document_id": doc.id}
+            )
             mock_qdrant.delete_by_filter.assert_any_call("pages_visual", {"document_id": doc.id})
 
-            # Verify Candidate Index deletion was called
-            mock_candidate_index.remove_vectors.assert_called_once_with("col1", [chunk.id, prop.id])
+            # Candidate cleanup spans chunk/proposition/summary/visual layers.
+            candidate_call = mock_candidate_index.remove_vectors.await_args
+            assert candidate_call is not None
+            assert candidate_call.args[0] == "col1"
+            assert set(candidate_call.args[1]) == {
+                chunk.id,
+                prop.id,
+                *summary_ids,
+                visual_id,
+            }
+
+            remaining_visual = visual_cache.read_text(encoding="utf-8")
+            assert visual_id not in remaining_visual
+            assert other_visual_id in remaining_visual
+            assert not visual_asset_dir.exists()
 
 
 @pytest.mark.asyncio
@@ -280,7 +397,7 @@ async def test_resume_endpoint_requeues_failed_documents(session_factory) -> Non
         doc1.error_message = "error info"
         await doc_repo.create(doc1)
 
-        # Document 2: READY -> should not be touched
+        # Document 2: legacy READY without persisted layers -> must be repaired
         doc2 = Document(
             id=new_id(),
             collection_id="col1",
@@ -318,7 +435,7 @@ async def test_resume_endpoint_requeues_failed_documents(session_factory) -> Non
             doc_service=doc_service,
         )
 
-        assert result == {"requeued_count": 1}
+        assert result == {"requeued_count": 2}
 
         # Check Document 1 status in database
         updated_doc1 = await doc_repo.get_by_id(doc1.id)
@@ -331,3 +448,10 @@ async def test_resume_endpoint_requeues_failed_documents(session_factory) -> Non
         assert len(jobs) == 1
         assert jobs[0].job_type == JobType.PARSE_DOCUMENT
         assert jobs[0].status == JobStatus.PENDING
+
+        updated_doc2 = await doc_repo.get_by_id(doc2.id)
+        assert updated_doc2 is not None
+        assert updated_doc2.status == DocumentStatus.REGISTERED
+        ready_repair_jobs = await job_repo.list_by_target(doc2.id)
+        assert len(ready_repair_jobs) == 1
+        assert ready_repair_jobs[0].job_type == JobType.PARSE_DOCUMENT

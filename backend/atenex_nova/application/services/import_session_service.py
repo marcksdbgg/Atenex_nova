@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import mimetypes
+from dataclasses import dataclass
+from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from atenex_nova.application.policies.corpus_import_policy import (
+    CorpusImportDecision,
+    CorpusImportPolicy,
+)
 from atenex_nova.application.services.document_service import DocumentService
 from atenex_nova.domain.entities.document import Document
 from atenex_nova.domain.value_objects.identifiers import DocumentStatus
@@ -17,14 +23,23 @@ from atenex_nova.infrastructure.db.repositories.sql_import_session_repo import (
 from atenex_nova.infrastructure.db.repositories.sql_job_repo import SqlJobRepository
 
 
+@dataclass(frozen=True, slots=True)
+class _LocalImportCandidate:
+    path: Path
+    relative_path: str
+    decision: CorpusImportDecision
+
+
 class ImportSessionService:
     def __init__(
         self,
         session: AsyncSession,
         doc_service: DocumentService,
+        corpus_policy: CorpusImportPolicy | None = None,
     ) -> None:
         self._session = session
         self._doc_service = doc_service
+        self._corpus_policy = corpus_policy or CorpusImportPolicy()
         self._repo = SqlImportSessionRepository(session)
         self._job_repo = SqlJobRepository(session)
 
@@ -112,9 +127,8 @@ class ImportSessionService:
         if not resolved_folder.exists() or not resolved_folder.is_dir():
             raise ValueError(f"Source folder not found: {source_folder}")
 
-        iterator = resolved_folder.rglob("*") if recursive else resolved_folder.glob("*")
-        files = sorted(path for path in iterator if path.is_file())
-        if not files:
+        candidates = self._discover_local_candidates(resolved_folder, recursive=recursive)
+        if not candidates:
             raise ValueError(f"Source folder has no files: {source_folder}")
 
         base_collection_path = DocumentService._normalize_collection_path(collection_path)
@@ -123,21 +137,42 @@ class ImportSessionService:
             source_kind="local_folder",
             source_root=str(resolved_folder),
             collection_path=base_collection_path,
-            discovered_count=len(files),
+            discovered_count=len(candidates),
         )
 
         documents: list[Document] = []
         seen_checksums: dict[str, Document] = {}
-        for file_path in files:
-            relative_file_path = file_path.relative_to(resolved_folder).as_posix()
+        for candidate in candidates:
+            file_path = candidate.path
+            relative_file_path = candidate.relative_path
+            mime_type = mimetypes.guess_type(file_path.name)[0]
+            if not candidate.decision.accepted:
+                await self._repo.add_item(
+                    import_session.id,
+                    relative_path=relative_file_path,
+                    source_path=str(file_path),
+                    mime_type=mime_type,
+                    status="skipped",
+                    error=candidate.decision.report or "excluded_by_corpus_policy",
+                )
+                await self._repo.increment_counters(
+                    import_session.id,
+                    attempted=1,
+                    skipped=1,
+                )
+                continue
+
             target_collection_path = DocumentService._join_collection_paths(
                 base_collection_path,
                 relative_file_path,
             )
-            mime_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
-            checksum = DocumentService._checksum_file(file_path)
+            resolved_mime_type = mime_type or "application/octet-stream"
+            checksum: str | None = None
             try:
-                existing = await self._doc_service.find_by_collection_checksum(collection_id, checksum)
+                checksum = DocumentService._checksum_file(file_path)
+                existing = await self._doc_service.find_by_collection_checksum(
+                    collection_id, checksum
+                )
                 doc_in_session = seen_checksums.get(checksum)
                 is_duplicate = doc_in_session is not None
                 doc = doc_in_session or existing
@@ -148,7 +183,7 @@ class ImportSessionService:
                         relative_path=relative_file_path,
                         source_path=str(file_path),
                         checksum=checksum,
-                        mime_type=mime_type,
+                        mime_type=resolved_mime_type,
                         status="deduplicated",
                         document_id=doc.id if doc else None,
                     )
@@ -171,7 +206,7 @@ class ImportSessionService:
                         relative_path=relative_file_path,
                         source_path=str(file_path),
                         checksum=checksum,
-                        mime_type=mime_type,
+                        mime_type=resolved_mime_type,
                         status="created",
                         document_id=doc.id,
                         job_id=jobs[0].id if jobs else None,
@@ -189,7 +224,7 @@ class ImportSessionService:
                     relative_path=relative_file_path,
                     source_path=str(file_path),
                     checksum=checksum,
-                    mime_type=mime_type,
+                    mime_type=resolved_mime_type,
                     status="failed",
                     error=str(exc),
                 )
@@ -202,6 +237,61 @@ class ImportSessionService:
         finalized = await self._repo.finalize_session(import_session.id)
         assert finalized is not None
         return finalized, documents
+
+    def _discover_local_candidates(
+        self,
+        source_root: Path,
+        *,
+        recursive: bool,
+    ) -> list[_LocalImportCandidate]:
+        candidates: list[_LocalImportCandidate] = []
+        pending_directories = [source_root]
+
+        while pending_directories:
+            directory = pending_directories.pop()
+            try:
+                entries = sorted(directory.iterdir(), key=lambda item: item.name.casefold())
+            except OSError as exc:
+                if directory == source_root:
+                    raise ValueError(f"Source folder is not readable: {source_root}") from exc
+                candidates.append(
+                    _LocalImportCandidate(
+                        path=directory,
+                        relative_path=directory.relative_to(source_root).as_posix(),
+                        decision=self._corpus_policy.unreadable_directory(directory, exc),
+                    )
+                )
+                continue
+
+            traversable_directories: list[Path] = []
+            for path in entries:
+                if path.is_dir():
+                    if not recursive:
+                        continue
+                    decision = self._corpus_policy.evaluate_directory(path, source_root)
+                    if decision.accepted:
+                        traversable_directories.append(path)
+                    else:
+                        candidates.append(
+                            _LocalImportCandidate(
+                                path=path,
+                                relative_path=path.relative_to(source_root).as_posix(),
+                                decision=decision,
+                            )
+                        )
+                    continue
+
+                candidates.append(
+                    _LocalImportCandidate(
+                        path=path,
+                        relative_path=path.relative_to(source_root).as_posix(),
+                        decision=self._corpus_policy.evaluate_file(path, source_root),
+                    )
+                )
+
+            pending_directories.extend(reversed(traversable_directories))
+
+        return sorted(candidates, key=lambda item: item.relative_path.casefold())
 
     async def finalize_session(self, session_id: str) -> ImportSessionRecord | None:
         return await self._repo.finalize_session(session_id)

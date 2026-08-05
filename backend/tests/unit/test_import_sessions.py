@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 
+from atenex_nova.application.policies.corpus_import_policy import CorpusImportPolicy
 from atenex_nova.application.services.document_service import DocumentService
 from atenex_nova.application.services.import_session_service import ImportSessionService
 from atenex_nova.domain.entities.collection import Collection
@@ -29,7 +30,9 @@ async def session_factory(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_import_local_folder_tracks_deduplicated_and_created(session_factory, tmp_path) -> None:
+async def test_import_local_folder_tracks_deduplicated_and_created(
+    session_factory, tmp_path
+) -> None:
     folder = tmp_path / "corpus"
     folder.mkdir()
     (folder / "a.txt").write_text("alpha", encoding="utf-8")
@@ -62,6 +65,71 @@ async def test_import_local_folder_tracks_deduplicated_and_created(session_facto
         assert len(items) == 3
         assert sum(1 for item in items if item.status == "created") == 2
         assert sum(1 for item in items if item.status == "deduplicated") == 1
+
+
+@pytest.mark.asyncio
+async def test_import_local_folder_reports_policy_skips_without_following_external_symlink(
+    session_factory,
+    tmp_path,
+) -> None:
+    folder = tmp_path / "corpus"
+    folder.mkdir()
+    (folder / "accepted.txt").write_text("ok", encoding="utf-8")
+    (folder / "table.csv").write_text("a,b", encoding="utf-8")
+    (folder / "large.md").write_text("123456789", encoding="utf-8")
+    (folder / "archive.zip").write_bytes(b"not really an archive")
+    (folder / "config.json").write_text('{"kind": "administrative"}', encoding="utf-8")
+    (folder / "metadata.csv").write_text("key,value", encoding="utf-8")
+
+    for directory_name in ("_meta", ".git", "dist", "node_modules"):
+        excluded_directory = folder / directory_name
+        excluded_directory.mkdir()
+        (excluded_directory / "ignored.txt").write_text("must not be discovered", encoding="utf-8")
+
+    outside_file = tmp_path / "outside.txt"
+    outside_file.write_text("outside corpus", encoding="utf-8")
+    (folder / "escape.txt").symlink_to(outside_file)
+
+    async with session_factory() as session:
+        collection_repo = SqlCollectionRepository(session)
+        collection_id = new_id()
+        await collection_repo.create(Collection(id=collection_id, name="Bounded corpus"))
+
+        doc_service = DocumentService(SqlDocumentRepository(session), SqlJobRepository(session))
+        import_service = ImportSessionService(
+            session,
+            doc_service,
+            corpus_policy=CorpusImportPolicy(max_file_size_bytes=8),
+        )
+
+        import_session, documents = await import_service.import_local_folder(
+            collection_id=collection_id,
+            source_folder=str(folder),
+        )
+        await session.commit()
+
+        assert import_session.discovered_count == 11
+        assert import_session.attempted_count == 11
+        assert import_session.created_count == 2
+        assert import_session.deduplicated_count == 0
+        assert import_session.skipped_count == 9
+        assert import_session.failed_count == 0
+        assert import_session.status == "completed"
+        assert {document.title for document in documents} == {"accepted.txt", "table.csv"}
+
+        items = await import_service.list_items(import_session.id, limit=20)
+        skipped = {item.relative_path: item.error for item in items if item.status == "skipped"}
+        assert skipped["_meta"] == "excluded_directory: _meta"
+        assert skipped[".git"] == "excluded_directory: .git"
+        assert skipped["dist"] == "excluded_directory: dist"
+        assert skipped["node_modules"] == "excluded_directory: node_modules"
+        assert skipped["archive.zip"] == "excluded_archive: .zip"
+        assert skipped["config.json"] == "unsupported_extension: .json"
+        assert skipped["metadata.csv"] == "excluded_administrative_file: metadata.csv"
+        assert skipped["large.md"] == "file_too_large: 9 bytes exceeds limit of 8 bytes"
+        assert skipped["escape.txt"] is not None
+        assert skipped["escape.txt"].startswith("symlink_outside_root:")
+        assert all("ignored.txt" not in item.relative_path for item in items)
 
 
 @pytest.mark.asyncio

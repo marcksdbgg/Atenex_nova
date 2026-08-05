@@ -77,6 +77,21 @@ class SqlRelationRepository:
         await self._session.flush()
         return result.rowcount > 0
 
+    async def delete_by_node_ids(self, node_ids: list[str]) -> int:
+        """Delete graph edges incident to any removed proposition."""
+        if not node_ids:
+            return 0
+        result = await self._session.execute(
+            delete(RelationEdgeModel).where(
+                or_(
+                    RelationEdgeModel.source_id.in_(node_ids),
+                    RelationEdgeModel.target_id.in_(node_ids),
+                )
+            )
+        )
+        await self._session.flush()
+        return int(result.rowcount or 0)
+
     @staticmethod
     def _to_entity(model: RelationEdgeModel) -> RelationEdge:
         return RelationEdge(

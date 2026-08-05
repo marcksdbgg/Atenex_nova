@@ -18,7 +18,7 @@ _TURBOVEC_UNAVAILABLE_MSG = (
 def is_turbovec_available() -> bool:
     """Return True when the optional turbovec package can be imported."""
     try:
-        import turbovec  # type: ignore[import-untyped]  # noqa: F401
+        import turbovec  # noqa: F401
     except ImportError:
         return False
     return True

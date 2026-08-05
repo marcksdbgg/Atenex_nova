@@ -40,7 +40,14 @@ def _mock_llm_and_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
         self.model = object()
         self._fallback_only = False
 
+    async def _deterministic_embed(
+        self: EmbeddingGemmaAdapter,
+        texts: list[str],
+    ) -> list[list[float]]:
+        return [self._fallback_embed(text) for text in texts]
+
     monkeypatch.setattr(EmbeddingGemmaAdapter, "__init__", _fast_init)
+    monkeypatch.setattr(EmbeddingGemmaAdapter, "embed", _deterministic_embed)
 
 
 @pytest.fixture()

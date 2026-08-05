@@ -1,8 +1,14 @@
 import numpy as np
-from scipy.stats import spearmanr
 
 from atenex_nova.infrastructure.db.models.tables import QuantizationProfileModel
 from atenex_nova.infrastructure.vector_quantization.turboquant_adapter import TurboQuantAdapter
+
+
+def _spearman_correlation(left: np.ndarray, right: np.ndarray) -> float:
+    """Spearman correlation for continuous test data without a SciPy dependency."""
+    left_ranks = np.argsort(np.argsort(left, kind="stable"), kind="stable")
+    right_ranks = np.argsort(np.argsort(right, kind="stable"), kind="stable")
+    return float(np.corrcoef(left_ranks, right_ranks)[0, 1])
 
 
 def test_turboquant_quantize_dequantize():
@@ -103,7 +109,7 @@ def test_inner_product_ranking_recall():
     est_top10 = set(np.argsort(-est_ips)[:10].tolist())
 
     recall_at_10 = len(exact_top10 & est_top10) / 10.0
-    spearman_corr = float(spearmanr(exact_ips, est_ips).correlation)
+    spearman_corr = _spearman_correlation(exact_ips, est_ips)
 
     assert recall_at_10 >= 0.90
     assert spearman_corr >= 0.95

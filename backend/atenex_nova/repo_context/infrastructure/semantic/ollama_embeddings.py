@@ -1,4 +1,4 @@
-"""Local Ollama embeddings behind an optional port."""
+"""Local Ollama embeddings for the required semantic projection."""
 
 from __future__ import annotations
 
@@ -28,9 +28,18 @@ class OllamaEmbeddingProvider:
         request = Request(f"{self._base_url}/api/tags", method="GET")
         try:
             with urlopen(request, timeout=min(self._timeout, 2.0)) as response:
-                return 200 <= int(response.status) < 300
-        except (OSError, URLError):
+                if not 200 <= int(response.status) < 300:
+                    return False
+                body = json.loads(response.read().decode("utf-8"))
+        except (OSError, URLError, ValueError):
             return False
+        expected = self._model.removesuffix(":latest")
+        return any(
+            isinstance(item, dict)
+            and isinstance(item.get("name"), str)
+            and item["name"].removesuffix(":latest") == expected
+            for item in body.get("models", [])
+        )
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         if not texts:

@@ -38,3 +38,30 @@ def test_global_question_uses_global_synthesis_when_summaries_are_available() ->
     )
 
     assert AnswerPlanningPolicy().choose_plan(pack) == "global_synthesis"
+
+
+def test_global_question_does_not_require_a_pseudo_summary() -> None:
+    pack = EvidencePack(
+        query_id="query-1",
+        route_mode="global",
+        items=[],
+        summaries=[],
+    )
+
+    assert AnswerPlanningPolicy().choose_plan(pack) == "global_synthesis"
+
+
+def test_multi_hop_across_documents_uses_hierarchical_synthesis() -> None:
+    first = _summary()
+    first.document_id = "document-1"
+    second = _summary()
+    second.id = "summary-2"
+    second.source_id = "summary-2"
+    second.document_id = "document-2"
+    pack = EvidencePack(
+        query_id="query-1",
+        route_mode="multi_hop",
+        items=[first, second],
+    )
+
+    assert AnswerPlanningPolicy().choose_plan(pack) == "hierarchical_synthesis"

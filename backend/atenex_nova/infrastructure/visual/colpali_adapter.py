@@ -40,6 +40,7 @@ class VisualPageRetriever:
 
     def __init__(self, storage_dir: Path | None = None) -> None:
         settings = get_settings()
+        self._embedding_contract = settings.embedding_contract_fingerprint
         qdrant_endpoint = urlparse(settings.qdrant_url)
         qdrant_host = qdrant_endpoint.hostname or "localhost"
         qdrant_port = qdrant_endpoint.port or 6333
@@ -69,7 +70,10 @@ class VisualPageRetriever:
             return []
 
         await self._persist_local(collection_id, records)
-        vectors = await self._embedder.embed([record.text for record in records])
+        vectors = await self._embedder.embed_documents(
+            [record.text for record in records],
+            titles=[record.title for record in records],
+        )
 
         if session is not None:
             from atenex_nova.application.orchestrators.ingestion_orchestrator import (
@@ -102,6 +106,7 @@ class VisualPageRetriever:
                         **asdict(record),
                         "collection_id": collection_id,
                         "retrieval_backend": "page_text_embedding",
+                        "embedding_contract": self._embedding_contract,
                     },
                 )
                 for record, vector in zip(records, vectors, strict=False)
@@ -120,15 +125,21 @@ class VisualPageRetriever:
         if not query:
             return []
 
-        query_vector = (await self._embedder.embed([query]))[0]
+        query_vector = await self._embedder.embed_query(query)
         qdrant_hits = await self._qdrant.search(
             "pages_visual",
             query_vector,
             limit=limit,
             filter_dict={"collection_id": collection_id},
         )
-        if qdrant_hits:
-            return [self._from_payload(hit) for hit in qdrant_hits[:limit]]
+        current_qdrant_hits = [
+            hit
+            for hit in qdrant_hits
+            if isinstance(hit.get("payload"), dict)
+            and hit["payload"].get("embedding_contract") == self._embedding_contract
+        ]
+        if current_qdrant_hits:
+            return [self._from_payload(hit) for hit in current_qdrant_hits[:limit]]
 
         if self._strict_visual:
             return []
@@ -174,7 +185,12 @@ class VisualPageRetriever:
         ranked: list[dict[str, Any]] = []
         for index, record in enumerate(local_records):
             record_text = str(record.get("text") or "")
-            vector = (await self._embedder.embed([record_text]))[0]
+            vector = (
+                await self._embedder.embed_documents(
+                    [record_text],
+                    titles=[str(record.get("title") or "Visual page")],
+                )
+            )[0]
             dense_score = self._cosine(query_vector, vector)
             lexical_score = sparse_scores[index] if index < len(sparse_scores) else 0.0
             bonus = 0.1 if query_tokens.intersection(set(record_text.lower().split())) else 0.0
@@ -204,6 +220,7 @@ class VisualPageRetriever:
             **cast(dict[str, Any], page.get("metadata") or {}),
             "source_page_id": source_page_id,
             "retrieval_backend": "page_text_embedding",
+            "embedding_contract": self._embedding_contract,
             "visual_asset_status": "rendered" if image_path else "unavailable",
         }
         return VisualPage(
@@ -244,7 +261,7 @@ class VisualPageRetriever:
 
         try:
             if source.suffix.lower() == ".pdf":
-                import pypdfium2 as pdfium  # type: ignore[import-untyped]
+                import pypdfium2 as pdfium  # type: ignore[import-not-found]
 
                 pdf = pdfium.PdfDocument(str(source))
                 index = max(page_number - 1, 0)

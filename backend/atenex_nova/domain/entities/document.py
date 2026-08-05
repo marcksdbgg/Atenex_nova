@@ -71,6 +71,10 @@ class Document:
         """Mark document as ready for querying."""
         self._transition_to(DocumentStatus.READY)
 
+    def mark_incomplete(self) -> None:
+        """Move a legacy READY document back behind the enrichment barrier."""
+        self._transition_to(DocumentStatus.INDEXED)
+
     def mark_registered(self) -> None:
         """Return document to the registered state for a rebuild."""
         self._transition_to(DocumentStatus.REGISTERED)

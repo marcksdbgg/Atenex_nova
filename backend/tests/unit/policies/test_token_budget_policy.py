@@ -1,5 +1,9 @@
 """Unit tests for TokenBudgetPolicy."""
 
+from itertools import pairwise
+
+import pytest
+
 from atenex_nova.application.policies.token_budget_policy import (
     DefaultTokenEstimator,
     TokenBudgetPolicy,
@@ -26,8 +30,8 @@ def test_should_split_max_tokens():
     policy = TokenBudgetPolicy()
     # If adding the new node pushes us over max_tokens, and we have some tokens, split.
     assert policy.should_split(current_tokens=750, next_node_tokens=100, node_type="paragraph", max_tokens=800) is True
-    # If we are starting fresh (current=0), don't split, even if next node is huge (we have to include it).
-    assert policy.should_split(current_tokens=0, next_node_tokens=1000, node_type="paragraph", max_tokens=800) is False
+    # An oversized first node must be subdivided rather than violating the hard cap.
+    assert policy.should_split(current_tokens=0, next_node_tokens=1000, node_type="paragraph", max_tokens=800) is True
 
 
 def test_should_split_structural_boundary():
@@ -57,3 +61,42 @@ def test_transformers_token_estimator():
     estimator = TransformersTokenEstimator("embeddinggemma")
     tokens = estimator.estimate("12345678901234567890")
     assert tokens > 0
+
+
+def test_split_text_enforces_hard_cap_and_preserves_ordered_spans() -> None:
+    policy = TokenBudgetPolicy()
+    text = " ".join(
+        f"Sentence {index} contains enough words for a stable semantic boundary."
+        for index in range(20)
+    )
+
+    segments = policy.split_text(text, max_tokens=40, overlap_tokens=6)
+
+    assert len(segments) > 1
+    assert segments[0].char_start == 0
+    assert segments[-1].char_end == len(text)
+    assert all(segment.text == text[segment.char_start : segment.char_end] for segment in segments)
+    assert all(segment.token_count <= 40 for segment in segments)
+    for previous, current in pairwise(segments):
+        assert previous.char_start < current.char_start
+        assert current.char_start <= previous.char_end
+        assert current.char_start < previous.char_end  # bounded overlap
+
+
+def test_split_text_handles_a_single_unbroken_oversized_node() -> None:
+    policy = TokenBudgetPolicy()
+    text = "x" * 1000
+
+    segments = policy.split_text(text, max_tokens=25, overlap_tokens=5)
+
+    assert len(segments) > 1
+    assert all(segment.token_count <= 25 for segment in segments)
+    assert all(segment.text == text[segment.char_start : segment.char_end] for segment in segments)
+    assert segments[-1].char_end == len(text)
+
+
+def test_split_text_rejects_overlap_that_cannot_make_progress() -> None:
+    policy = TokenBudgetPolicy()
+
+    with pytest.raises(ValueError, match="smaller than max_tokens"):
+        policy.split_text("oversized text", max_tokens=10, overlap_tokens=10)

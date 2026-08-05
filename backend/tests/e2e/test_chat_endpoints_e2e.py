@@ -1,11 +1,14 @@
 """E2E tests for the new Chat API endpoints."""
 
+from pathlib import Path
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from atenex_nova.main import app
 from tests.e2e.test_document_ingestion_e2e import (
     _create_collection,
+    _run_jobs_to_completion,
 )
 from tests.e2e.test_document_ingestion_e2e import (
     e2e_env as e2e_env,
@@ -13,10 +16,22 @@ from tests.e2e.test_document_ingestion_e2e import (
 
 
 @pytest.mark.asyncio
-async def test_chat_endpoints_lifecycle(e2e_env) -> None:
+async def test_chat_endpoints_lifecycle(e2e_env, tmp_path: Path) -> None:
+    source_file = tmp_path / "chat-grounding-source.txt"
+    source_file.write_text(
+        "Atenex Nova grounds every answer in corpus evidence and citations.",
+        encoding="utf-8",
+    )
+
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         # 1. Create a collection
         collection_id = await _create_collection(client, "Chats API E2E Collection")
+        imported = await client.post(
+            f"/collections/{collection_id}/documents/import",
+            json={"source_path": str(source_file), "title": "Chat grounding source"},
+        )
+        assert imported.status_code == 201
+        await _run_jobs_to_completion(e2e_env["session_factory"])
 
         # 2. List chats (should be empty initially)
         list_res = await client.get(f"/collections/{collection_id}/chats")

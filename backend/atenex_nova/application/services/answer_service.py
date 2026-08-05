@@ -12,6 +12,7 @@ from atenex_nova.application.orchestrators.answer_orchestrator import (
     AnswerOrchestrator,
     normalize_citation_answer_ids,
 )
+from atenex_nova.application.orchestrators.retrieval_orchestrator import SearchResult
 from atenex_nova.application.services.query_service import QueryService
 from atenex_nova.domain.entities.answer import Answer
 from atenex_nova.domain.entities.citation import Citation
@@ -54,6 +55,7 @@ class AnswerService:
         mode: str = "auto",
         generation_profile: str = "standard",
         chat_id: str | None = None,
+        search_result: SearchResult | None = None,
     ) -> AnswerBundle:
         chat_history = None
         chat_repo = None
@@ -62,7 +64,18 @@ class AnswerService:
             chat_repo = SqlChatRepository(self._session)
             chat_history = await chat_repo.get_last_messages(chat_id, limit=5)
 
-        search_result = await self._query_service.search_only(collection_id=collection_id, query=query, mode=mode)
+        if search_result is None:
+            search_result = await self._query_service.search_only(
+                collection_id=collection_id,
+                query=query,
+                mode=mode,
+                conversation_history=chat_history,
+            )
+        elif (
+            search_result.query.collection_id != collection_id
+            or search_result.query.text != query
+        ):
+            raise ValueError("search_result does not belong to the requested collection/query")
         async with self._audit.step(
             run_id=search_result.query.id,
             entity_type="query",

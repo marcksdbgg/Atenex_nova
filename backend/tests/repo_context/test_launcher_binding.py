@@ -66,7 +66,9 @@ class LauncherRepositoryBindingTests(unittest.TestCase):
         )
         return environment, log_path
 
-    def test_relative_root_requires_expected_checkout(self) -> None:
+    def test_relative_root_follows_current_repository_without_expected_checkout(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             repository = root / "repository"
@@ -75,8 +77,20 @@ class LauncherRepositoryBindingTests(unittest.TestCase):
 
             result = _run(".", cwd=repository, env=environment)
 
+            self.assertEqual(result.returncode, 0, result.stderr)
+            arguments = log_path.read_text().splitlines()
+            self.assertEqual(arguments.count("--repo"), 2)
+            self.assertEqual(arguments.count(os.fspath(repository)), 2)
+
+    def test_relative_root_rejects_non_git_working_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            environment, log_path = self._environment(root)
+
+            result = _run(".", cwd=root, env=environment)
+
             self.assertEqual(result.returncode, 2)
-            self.assertIn("require an expected checkout root", result.stderr)
+            self.assertIn("not a Git checkout", result.stderr)
             self.assertFalse(log_path.exists())
 
     def test_relative_root_rejects_another_repository_identity(self) -> None:

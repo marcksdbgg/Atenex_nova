@@ -1,94 +1,80 @@
-# Documentation Index
+# Documentación de Atenex Nova
 
-This directory separates the product contract, verified implementation evidence,
-live architecture notes, and future plans. A document can describe more than one
-state, but every non-trivial claim should make its state clear.
+Este índice separa autoridad, referencia técnica, evidencia, planes y archivo. El
+código, las pruebas y la configuración actuales prevalecen sobre cualquier resumen.
 
-## Status Vocabulary
+## Estados permitidos
 
-| Status | Meaning |
+| Estado | Significado |
 |---|---|
-| **Implemented** | The described artifact or behavior exists in the current checkout. This does not by itself mean it was exercised in the current verification run. |
-| **Verified** | The claim is backed by a named test, inspection, or runtime check recorded in the repository. |
-| **Planned** | The item is an approved target or design contract that is not yet present in the current implementation. |
-| **Historical** | The content records an earlier finding, decision, or result and must not be read as the live state without its later contrast. |
+| **Implemented** | El artefacto o comportamiento existe en el checkout actual. |
+| **Verified** | Una inspección, prueba o ejecución reproducible respalda el claim. |
+| **Planned** | Es un objetivo aprobado todavía no entregado. |
+| **Historical** | Registra un estado anterior y no describe el runtime vivo. |
 
-`Planned` is never evidence of implementation. When documents disagree, use the
-precedence rules below instead of choosing the newest-looking statement.
+`Planned` nunca prueba implementación y `Implemented` no implica por sí solo que una
+capacidad haya sido revalidada.
 
-## Sources of Truth
+## Autoridad vigente
 
-| Document | State | Role |
+| Documento | Rol |
+|---|---|
+| [README del repositorio](../README.md) | Snapshot operativo, quick start y últimas verificaciones. |
+| [baseline.md](baseline.md) | Contrato de producto e invariantes. |
+| [auditoria-completa.md](auditoria-completa.md) | Ledger breve de claim → estado → evidencia → gap. |
+| [runbook-local.md](runbook-local.md) | Arranque y apagado exactos para esta estación Linux. |
+
+## RAG documental
+
+| Documento | Estado | Alcance |
 |---|---|---|
-| [../README.md](../README.md) | **Implemented / Verified** | Live repository snapshot, quick start, commands, and current verification summary. |
-| [baseline.md](baseline.md) | **Implemented** | Current product contract and rationale; optional/live-provider gates remain explicit. |
-| [auditoria-completa.md](auditoria-completa.md) | **Implemented / Verified** | Canonical contrastive Repo Context ledger and pointer to the historical RAG audit. |
-| [architecture-repo-context.md](architecture-repo-context.md) | **Implemented / Verified** | Delivered bounded context, deterministic core, CLI/MCP adapter and optional semantic boundary. |
-| [indexing-and-storage.md](indexing-and-storage.md) | **Implemented / Verified** | Scanner, parser, SQLite/FTS5 and atomic generation contract as implemented. |
-| [mcp-tools.md](mcp-tools.md) | **Implemented / Verified** | Six read-only tool schemas and common response/error contract. |
-| [operations.md](operations.md) | **Implemented** | Installation, lifecycle commands, diagnostics and optional semantics. |
-| [runbook-local.md](runbook-local.md) | **Implemented / Verified** | Exact startup, verification and safe shutdown procedure for this Linux station. |
-| [evaluation-repo-context.md](evaluation-repo-context.md) | **Implemented / Planned** | Reproducible smoke runner and current evidence; larger held-out/release matrix remains planned. |
-| [plan-repo-context-mcp.md](plan-repo-context-mcp.md) | **Implemented / Planned** | Original end-to-end plan plus execution ledger and remaining gates. |
-| [architecture-backend.md](architecture-backend.md) | **Implemented** | Repo Context boundary plus historical RAG backend boundaries. |
-| [architecture-frontend.md](architecture-frontend.md) | **Implemented / Historical scope** | RAG frontend snapshot; not revalidated in this delivery. |
-| [api-endpoints.md](api-endpoints.md) | **Implemented / Historical scope** | RAG HTTP contract; previous test evidence is archived. |
-| [jobs-and-workers.md](jobs-and-workers.md) | **Implemented / Historical scope** | RAG background job model, separate from Repo Context. |
-| [turboquant-integration.md](turboquant-integration.md) | **Historical / Experimental** | Vector-quantization design from the RAG bounded context. |
-| [plan-correccion-vecquant-operacional.md](plan-correccion-vecquant-operacional.md) | **Historical** | Redirect to the archived operational plan. |
+| [architecture-backend.md](architecture-backend.md) | **Implemented** | Límites del backend y flujo documental. |
+| [architecture-frontend.md](architecture-frontend.md) | **Implemented** | UI, contrato de confianza y gaps visibles. |
+| [api-endpoints.md](api-endpoints.md) | **Implemented** | Contrato HTTP; OpenAPI vivo es la autoridad final. |
+| [jobs-and-workers.md](jobs-and-workers.md) | **Implemented** | DAG y ejecución asíncrona. |
+| [turboquant-integration.md](turboquant-integration.md) | **Implemented** | Cuantización e índices candidatos; aceleración opcional explícita. |
+| [auditoría RAG 2026-08-02](auditoria-rag-respuestas-sota-2026-08-02.md) | **Verified** | Evidencia end-to-end, experimento Jesús G, tesis, EOS y contraste SOTA. |
+| [ledger de síntesis de corpus](plan-rag-sintesis-corpus.md) | **Implemented** | Separa entregas verificadas en tests de las puertas G0–G6, que continúan **Planned** hasta validar un rebuild vivo y el benchmark. |
 
-## Reading Paths
+## Repo Context MCP
 
-### Understand the current Atenex application
+| Documento | Estado | Alcance |
+|---|---|---|
+| [architecture-repo-context.md](architecture-repo-context.md) | **Implemented** | Bounded context, puertos y composition root. |
+| [indexing-and-storage.md](indexing-and-storage.md) | **Implemented** | Scanner, parsers, SQLite/FTS5 y generaciones atómicas. |
+| [mcp-tools.md](mcp-tools.md) | **Implemented** | Contrato de las seis herramientas read-only. |
+| [operations.md](operations.md) | **Implemented** | Instalación y operación portable. |
+| [evaluation-repo-context.md](evaluation-repo-context.md) | **Verified** | Protocolo y evidencia de evaluación. |
+| [plan-repo-context-mcp.md](plan-repo-context-mcp.md) | **Implemented** | Plan original y gates todavía abiertos. |
 
-1. Read [../README.md](../README.md).
-2. Read [architecture-backend.md](architecture-backend.md) or
-   [architecture-frontend.md](architecture-frontend.md), depending on the area.
-3. Read [api-endpoints.md](api-endpoints.md) and
-   [jobs-and-workers.md](jobs-and-workers.md) for public and asynchronous
-   contracts.
-4. Check [auditoria-completa.md](auditoria-completa.md) before treating a
-   baseline claim as delivered.
+## Decisiones
 
-### Change backend behavior
+Los ADR conservan por qué existen los límites actuales:
 
-1. Read [baseline.md](baseline.md).
-2. Read [auditoria-completa.md](auditoria-completa.md).
-3. Read [architecture-backend.md](architecture-backend.md) and
-   [jobs-and-workers.md](jobs-and-workers.md).
-4. If retrieval quantization or candidate indexes are involved, also read
-   [turboquant-integration.md](turboquant-integration.md).
+- [0001 — Repo Context como producto](decisions/0001-repository-context-product.md)
+- [0002 — SQLite para el core](decisions/0002-sqlite-core-index.md)
+- [0003 — Generaciones atómicas](decisions/0003-atomic-index-generations.md)
+- [0004 — MCP read-only](decisions/0004-read-only-mcp-surface.md)
+- [0005 — Autoridad del worktree](decisions/0005-source-worktree-authority.md)
+- [0006 — Semántica opcional (Historical)](decisions/0006-optional-semantic-retrieval.md)
+- [0007 — Semántica requerida](decisions/0007-required-semantic-retrieval.md)
 
-### Work on Repo Context
+## Archivo
 
-1. Read [../README.md](../README.md) for installation and verified state.
-2. Use [runbook-local.md](runbook-local.md) for the exact commands on this PC.
-3. Read [architecture-repo-context.md](architecture-repo-context.md) and
-   [indexing-and-storage.md](indexing-and-storage.md) before changing core code.
-4. Read [mcp-tools.md](mcp-tools.md) before changing a public response.
-5. Use [plan-repo-context-mcp.md](plan-repo-context-mcp.md) and
-   [evaluation-repo-context.md](evaluation-repo-context.md) to distinguish the
-   delivered core from the pending full release matrix.
-6. Agent clients use the canonical project workflow in
-   `../.agents/skills/atenex-repo-context/SKILL.md`; Claude loads the thin adapter in
-   `../.claude/skills/atenex-repo-context/SKILL.md`.
+[archive/README.md](archive/README.md) clasifica snapshots sustituidos. El plan
+VecQuant anterior se conserva directamente en
+[archive/rag-v0/plan-correccion-vecquant-operacional.md](archive/rag-v0/plan-correccion-vecquant-operacional.md),
+sin un redirect adicional en la raíz.
 
-## Precedence and Drift Rules
+## Precedencia y mantenimiento
 
-1. The product contract in [baseline.md](baseline.md) explains what Atenex Nova
-   is meant to become.
-2. The contrastive ledger in
-   [auditoria-completa.md](auditoria-completa.md) determines whether a baseline
-   claim is **Implemented**, **Verified**, still **Planned**, or only
-   **Historical**.
-3. [../README.md](../README.md) is the operational snapshot for setup and the
-   latest recorded checks.
-4. The generated OpenAPI schema is authoritative for live HTTP routes;
-   [api-endpoints.md](api-endpoints.md) must remain synchronized with it.
-5. Architecture documents describe delivered boundaries plus explicitly marked
-   extensions. Plan documents record both completed work and future gates but do
-   not prove verification by themselves.
-
-When a change affects product behavior, architecture, or a declared gap, update
-the live snapshot and the canonical audit together. Change `Verified` claims only
-alongside reproducible evidence.
+1. `baseline.md` define el contrato.
+2. `auditoria-completa.md` determina si cada claim está **Implemented**, **Verified**,
+   **Planned** o es **Historical**.
+3. El `README.md` raíz describe el estado operativo más reciente.
+4. OpenAPI manda sobre `api-endpoints.md` para rutas HTTP; `mcp-tools.md` manda sobre
+   resúmenes para la superficie MCP.
+5. Los documentos especializados describen mecanismos; cifras de un runtime concreto
+   pertenecen a una auditoría fechada.
+6. Cuando cambie comportamiento, actualizar contrato, ledger, especialización y plan
+   en el mismo cambio.

@@ -9,14 +9,23 @@ class AnswerPlanningPolicy:
     """Select a synthesis plan from an evidence pack."""
 
     def choose_plan(self, evidence_pack: EvidencePack) -> str:
-        if evidence_pack.route_mode == "visual":
+        route_mode = evidence_pack.route_mode
+        if route_mode == "visual":
             return "visual_grounded_synthesis"
-        if evidence_pack.contradictions:
+        if route_mode == "argumentative" or evidence_pack.contradictions:
             return "argument_synthesis"
-        if evidence_pack.route_mode in {"exact", "factual_local"}:
-            return "direct_answer"
-        if len(evidence_pack.items) > 8:
-            return "hierarchical_synthesis"
-        if evidence_pack.route_mode == "global" and evidence_pack.summaries:
+        if route_mode == "global":
             return "global_synthesis"
+        if route_mode in {"exact", "factual_local"}:
+            return "direct_answer"
+
+        document_ids = {
+            item.document_id
+            for item in evidence_pack.items
+            if item.document_id is not None
+        }
+        if route_mode == "multi_hop" and len(document_ids) >= 2:
+            return "hierarchical_synthesis"
+        if len(evidence_pack.items) > 8 and len(document_ids) >= 2:
+            return "hierarchical_synthesis"
         return "direct_answer"

@@ -48,7 +48,10 @@ VALID_TRANSITIONS: dict[DocumentStatus, set[DocumentStatus]] = {
     DocumentStatus.SEGMENTED: {DocumentStatus.EMBEDDED, DocumentStatus.FAILED, DocumentStatus.REGISTERED},
     DocumentStatus.EMBEDDED: {DocumentStatus.INDEXED, DocumentStatus.FAILED, DocumentStatus.REGISTERED},
     DocumentStatus.INDEXED: {DocumentStatus.READY, DocumentStatus.FAILED, DocumentStatus.REGISTERED},
-    DocumentStatus.READY: {DocumentStatus.REGISTERED},  # re-ingest
+    DocumentStatus.READY: {
+        DocumentStatus.INDEXED,
+        DocumentStatus.REGISTERED,
+    },  # repair incomplete enrichment or re-ingest
     DocumentStatus.FAILED: {DocumentStatus.REGISTERED},  # retry
 }
 
@@ -79,6 +82,9 @@ class JobType(StrEnum):
     INDEX_CHUNKS = "index_chunks"
     INDEX_VISUAL_PAGES = "index_visual_pages"
     BUILD_GRAPH = "build_graph"
+    CHECK_DOCUMENT_READINESS = "check_document_readiness"
+    BUILD_COLLECTION_MEMORY = "build_collection_memory"
+    EMBED_COLLECTION_MEMORY = "embed_collection_memory"
     RUN_BENCHMARK = "run_benchmark"
     REBUILD_COLLECTION = "rebuild_collection"
 

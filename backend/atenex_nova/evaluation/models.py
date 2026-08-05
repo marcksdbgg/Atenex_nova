@@ -15,6 +15,11 @@ class GoldenCase:
     expected_keywords: list[str]
     route_mode: str
     mode: str = "auto"
+    required_claims: list[list[str]] = field(default_factory=list)
+    forbidden_phrases: list[str] = field(default_factory=list)
+    expected_source_patterns: list[str] = field(default_factory=list)
+    min_distinct_documents: int = 1
+    min_citations: int = 1
 
 
 @dataclass(slots=True)
@@ -34,7 +39,7 @@ class EvaluationCaseResult:
     route_mode: str
     retrieval_metrics: dict[str, float]
     answer_metrics: dict[str, float]
-    retrieved: list[dict[str, str]]
+    retrieved: list[dict[str, str | float]]
     answer_id: str | None = None
 
 

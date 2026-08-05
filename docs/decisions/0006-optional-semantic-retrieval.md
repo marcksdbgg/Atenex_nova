@@ -1,9 +1,12 @@
 # ADR-0006: Make semantic retrieval optional
 
-- **Status:** Accepted
+- **Status:** Historical
 - **Date:** 2026-07-30
-- **Implementation status:** adapters/RRF **Implemented** and fake-tested; live
-  providers **Planned**
+- **Implementation status:** **Historical**; superseded by
+  [ADR-0007](0007-required-semantic-retrieval.md)
+
+This ADR records the previous runtime contract and no longer describes current
+behavior.
 
 ## Context
 

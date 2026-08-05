@@ -8,8 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from atenex_nova.repo_context.application.semantic import OptionalSemanticCoordinator
-from atenex_nova.repo_context.application.services import RepoContextServices
+from atenex_nova.repo_context.application.semantic import SemanticCoordinator
+from atenex_nova.repo_context.application.services import (
+    RepoContextError,
+    RepoContextServices,
+)
 from atenex_nova.repo_context.domain.models import GenerationInfo
 from atenex_nova.repo_context.domain.ports import (
     ContextIndex,
@@ -29,9 +32,17 @@ class RepoContextRuntime:
     extractors: tuple[LanguageExtractor, ...]
     indexer: Any
     services: RepoContextServices
-    semantic: OptionalSemanticCoordinator | None = None
+    semantic: SemanticCoordinator
 
     def index_repository(self, *, full: bool = False) -> dict[str, Any]:
+        from atenex_nova.repo_context.infrastructure.writer_lock import (
+            repository_writer_lock,
+        )
+
+        with repository_writer_lock(self.data_dir):
+            return self._index_repository_locked(full=full)
+
+    def _index_repository_locked(self, *, full: bool) -> dict[str, Any]:
         execute = self.indexer.execute
         parameters = inspect.signature(execute).parameters
         result = execute(full=full) if "full" in parameters else execute()
@@ -58,21 +69,25 @@ class RepoContextRuntime:
                 "database": str(self.index.database_path),
                 "full": full,
             }
-        if self.semantic is not None:
-            try:
-                payload["semantic"] = {
-                    "state": "ready",
-                    "identity": self.semantic.identity,
-                    "chunks": self.semantic.build(generation, self.index),
-                }
-            except Exception as exc:
-                payload["semantic"] = {
-                    "state": "degraded",
-                    "identity": self.semantic.identity,
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-        else:
-            payload["semantic"] = {"state": "disabled"}
+        try:
+            reused = self.semantic.available() and self.semantic.ready_for(generation)
+            chunks = (
+                generation.chunk_count
+                if reused
+                else self.semantic.build(generation, self.index)
+            )
+        except Exception as exc:
+            raise RepoContextError(
+                "SEMANTIC_UNAVAILABLE",
+                "required semantic projection could not be completed",
+                details={"cause": type(exc).__name__},
+            ) from exc
+        payload["semantic"] = {
+            "state": "ready",
+            "identity": self.semantic.identity,
+            "chunks": chunks,
+            "reused": reused,
+        }
         return payload
 
     def tool_handler(self) -> Any:
@@ -126,31 +141,29 @@ def build_runtime(
     )
     extractors: tuple[LanguageExtractor, ...] = (default_extractor,)
     indexer = IndexRepositoryService(scanner, index, extractors)
-    semantic: OptionalSemanticCoordinator | None = None
-    if _env_enabled("ATENEX_REPO_CONTEXT_SEMANTIC"):
-        from atenex_nova.repo_context.infrastructure.semantic import (
-            OllamaEmbeddingProvider,
-            QdrantSemanticIndex,
-        )
+    from atenex_nova.repo_context.infrastructure.semantic import (
+        OllamaEmbeddingProvider,
+        QdrantSemanticIndex,
+    )
 
-        semantic = OptionalSemanticCoordinator(
-            embedder=OllamaEmbeddingProvider(
-                base_url=os.getenv(
-                    "ATENEX_REPO_CONTEXT_OLLAMA_URL",
-                    "http://127.0.0.1:11434",
-                ),
-                model=os.getenv(
-                    "ATENEX_REPO_CONTEXT_EMBEDDING_MODEL",
-                    "embeddinggemma",
-                ),
+    semantic = SemanticCoordinator(
+        embedder=OllamaEmbeddingProvider(
+            base_url=os.getenv(
+                "ATENEX_REPO_CONTEXT_OLLAMA_URL",
+                "http://127.0.0.1:11434",
             ),
-            semantic_index=QdrantSemanticIndex(
-                url=os.getenv(
-                    "ATENEX_REPO_CONTEXT_QDRANT_URL",
-                    "http://127.0.0.1:6333",
-                )
+            model=os.getenv(
+                "ATENEX_REPO_CONTEXT_EMBEDDING_MODEL",
+                "embeddinggemma",
             ),
-        )
+        ),
+        semantic_index=QdrantSemanticIndex(
+            url=os.getenv(
+                "ATENEX_REPO_CONTEXT_QDRANT_URL",
+                "http://127.0.0.1:6333",
+            )
+        ),
+    )
     services = RepoContextServices(
         scanner,
         index,
@@ -167,7 +180,3 @@ def build_runtime(
         services=services,
         semantic=semantic,
     )
-
-
-def _env_enabled(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}

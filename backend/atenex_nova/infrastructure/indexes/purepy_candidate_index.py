@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from atenex_nova.domain.ports.candidate_index import CandidateIndexPort
 from atenex_nova.infrastructure.indexes.quantized_code_store import QuantizedCodeStore
 from atenex_nova.infrastructure.vector_quantization.turboquant_adapter import TurboQuantAdapter
+from atenex_nova.shared.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ class PurePyTurboQuantCandidateIndex(CandidateIndexPort):
         self._store = QuantizedCodeStore(session)
         self._quantizer = quantizer or TurboQuantAdapter()
         self._cache_max_size = max(1, cache_max_size)
+        self._max_vectors_per_layer = max(1, get_settings().purepy_max_vectors_per_layer)
         self._cache: OrderedDict[tuple[str, str], _LayerCacheEntry] = OrderedDict()
 
     async def add_vectors(
@@ -75,6 +77,7 @@ class PurePyTurboQuantCandidateIndex(CandidateIndexPort):
             return []
 
         all_results: list[dict[str, Any]] = []
+        expected_contract = get_settings().embedding_contract_fingerprint
         for layer in memory_layers:
             entry = await self._load_layer(collection_id, layer)
             for profile_id, batch in entry.by_profile.items():
@@ -83,6 +86,13 @@ class PurePyTurboQuantCandidateIndex(CandidateIndexPort):
                 profile = await self._store.get_profile(profile_id)
                 if profile is None:
                     logger.warning("Missing quantization profile %s; skipping batch", profile_id)
+                    continue
+                if not str(profile.codebook_version).endswith(f"|{expected_contract}"):
+                    logger.warning(
+                        "Skipping incompatible vector profile %s: expected embedding contract %s",
+                        profile_id,
+                        expected_contract,
+                    )
                     continue
                 scores = self._quantizer.estimate_inner_products(
                     query_vector, batch.codes, profile
@@ -121,6 +131,20 @@ class PurePyTurboQuantCandidateIndex(CandidateIndexPort):
         if cached is not None:
             self._cache.move_to_end(key)
             return cached
+
+        vector_count = await self._store.count_vectors_by_layer(collection_id, memory_layer)
+        if vector_count > self._max_vectors_per_layer:
+            logger.warning(
+                "Skipping exhaustive purepy scan for collection=%s layer=%s: "
+                "%d vectors exceeds safe limit %d; use Qdrant dense or turbovec",
+                collection_id,
+                memory_layer,
+                vector_count,
+                self._max_vectors_per_layer,
+            )
+            entry = _LayerCacheEntry()
+            self._cache[key] = entry
+            return entry
 
         vectors = await self._store.get_vectors_by_layer(collection_id, memory_layer)
         by_profile: dict[str, _ProfileBatch] = {}

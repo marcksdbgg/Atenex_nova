@@ -2,8 +2,8 @@
 import json
 
 from sqlalchemy import delete
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 from atenex_nova.domain.entities.chunk import Chunk
 from atenex_nova.infrastructure.db.models.tables import ChunkModel, DocumentModel
@@ -61,7 +61,13 @@ class SqlChunkRepository:
         return [self._to_entity(m) for m in result.scalars().all()]
 
     async def delete_by_document(self, document_id: str) -> bool:
-        stmt = delete(ChunkModel).where(ChunkModel.document_id == document_id)
+        return bool(await self.delete_by_documents([document_id]))
+
+    async def delete_by_documents(self, document_ids: list[str]) -> int:
+        """Delete chunks for captured document IDs without committing the unit of work."""
+        if not document_ids:
+            return 0
+        stmt = delete(ChunkModel).where(ChunkModel.document_id.in_(document_ids))
         result = await self.session.execute(stmt)
-        await self.session.commit()
-        return result.rowcount > 0
+        await self.session.flush()
+        return int(result.rowcount or 0)

@@ -8,8 +8,9 @@ from typing import Any
 
 from atenex_nova.domain.entities.document_node import DocumentNode
 from atenex_nova.domain.entities.job import Job
-from atenex_nova.domain.value_objects.identifiers import DocumentStatus, NodeType, new_id
+from atenex_nova.domain.value_objects.identifiers import JobType, NodeType, new_id
 from atenex_nova.infrastructure.db.repositories.sql_document_repo import SqlDocumentRepository
+from atenex_nova.infrastructure.db.repositories.sql_job_repo import SqlJobRepository
 from atenex_nova.infrastructure.db.repositories.sql_node_repo import SqlDocumentNodeRepository
 from atenex_nova.infrastructure.visual.colpali_adapter import VisualPageRetriever
 from atenex_nova.shared.observability.pipeline_audit import PipelineAuditService
@@ -25,6 +26,7 @@ class IndexVisualPagesJobHandler(BaseJobHandler):
         async with self.session_factory() as session:
             doc_repo = SqlDocumentRepository(session)
             node_repo = SqlDocumentNodeRepository(session)
+            job_repo = SqlJobRepository(session)
             audit = PipelineAuditService(session=session)
             document = await doc_repo.get_by_id(document_id)
             if document is None:
@@ -32,10 +34,11 @@ class IndexVisualPagesJobHandler(BaseJobHandler):
 
             nodes = await node_repo.get_by_document(document_id)
             if not nodes:
-                if document.status != DocumentStatus.READY:
-                    document.mark_ready()
-                    await doc_repo.update(document)
-                    await session.commit()
+                await job_repo.ensure_pending(
+                    job_type=JobType.CHECK_DOCUMENT_READINESS,
+                    target_id=document_id,
+                )
+                await session.commit()
                 return {"visual_pages_indexed": 0}
 
             async with audit.step(
@@ -88,9 +91,10 @@ class IndexVisualPagesJobHandler(BaseJobHandler):
                 )
                 result: dict[str, object] = {"visual_pages_indexed": len(indexed)}
 
-            if document.status != DocumentStatus.READY:
-                document.mark_ready()
-                await doc_repo.update(document)
+            await job_repo.ensure_pending(
+                job_type=JobType.CHECK_DOCUMENT_READINESS,
+                target_id=document_id,
+            )
 
             await session.commit()
             return result

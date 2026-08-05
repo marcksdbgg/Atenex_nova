@@ -17,7 +17,10 @@ from atenex_nova.workers.jobs.mem_builder_job import (
     SegmentDocumentJobHandler,
 )
 from atenex_nova.workers.jobs.memory_enrichment_job import (
+    BuildCollectionMemoryJobHandler,
     BuildGraphJobHandler,
+    CheckDocumentReadinessJobHandler,
+    EmbedCollectionMemoryJobHandler,
     EmbedPropositionsJobHandler,
     EmbedSummariesJobHandler,
     ExtractPropositionsJobHandler,
@@ -32,9 +35,12 @@ logger = logging.getLogger(__name__)
 async def main() -> None:
     settings = get_settings()
     setup_logging(settings.log_level)
-    from atenex_nova.workers.sqlite_lock import acquire_sqlite_worker_lock
+    from atenex_nova.workers.sqlite_lock import (
+        acquire_sqlite_worker_lock,
+        release_sqlite_worker_lock,
+    )
 
-    acquire_sqlite_worker_lock()
+    lock_handle = acquire_sqlite_worker_lock()
     logger.info("Starting worker process...")
 
     session_factory = get_session_factory()
@@ -89,6 +95,18 @@ async def main() -> None:
         BuildGraphJobHandler(session_factory),
     )
     runner.register_handler(
+        JobType.CHECK_DOCUMENT_READINESS.value,
+        CheckDocumentReadinessJobHandler(session_factory),
+    )
+    runner.register_handler(
+        JobType.BUILD_COLLECTION_MEMORY.value,
+        BuildCollectionMemoryJobHandler(session_factory),
+    )
+    runner.register_handler(
+        JobType.EMBED_COLLECTION_MEMORY.value,
+        EmbedCollectionMemoryJobHandler(session_factory),
+    )
+    runner.register_handler(
         JobType.INDEX_VISUAL_PAGES.value,
         IndexVisualPagesJobHandler(session_factory),
     )
@@ -98,6 +116,8 @@ async def main() -> None:
     except KeyboardInterrupt:
         logger.info("Stopping worker process...")
         runner.stop()
+    finally:
+        release_sqlite_worker_lock(lock_handle)
 
 if __name__ == "__main__":
     asyncio.run(main())

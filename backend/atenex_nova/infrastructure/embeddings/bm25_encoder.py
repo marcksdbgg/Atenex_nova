@@ -6,8 +6,10 @@ import hashlib
 import logging
 import math
 import re
+import threading
 from collections import Counter
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
 from atenex_nova.shared.exceptions.base import ServiceUnavailableError
@@ -34,8 +36,10 @@ def tokenize(text: str) -> list[str]:
     ]
 
 
+@lru_cache(maxsize=131_072)
 def hash_token(token: str) -> int:
-    return int(hashlib.md5(token.encode("utf-8")).hexdigest()[:8], 16)
+    """Return the existing stable 32-bit hash while caching repeated vocabulary."""
+    return int.from_bytes(hashlib.md5(token.encode("utf-8")).digest()[:4], "big")
 
 
 class StableSparseEncoder:
@@ -52,6 +56,9 @@ class StableSparseEncoder:
     _device: str = "cpu"
     _uses_fallback: bool = True
     _encoder_name: str = "lexical_hash"
+    _load_attempted: bool = False
+    _configuration_key: str | None = None
+    _initialization_lock = threading.Lock()
 
     def __new__(cls, *args: object, **kwargs: object) -> StableSparseEncoder:
         if cls._instance is None:
@@ -59,38 +66,59 @@ class StableSparseEncoder:
         return cls._instance
 
     def __init__(self, model_name: str = "prithivida/Splade_PP_en_v1", required: bool = False) -> None:
-        if self._model is not None:
-            return
-        logger.info("Initializing SpladeSparseEncoder with model: %s", model_name)
-        try:
-            import torch  # type: ignore[import-not-found]
-            from transformers import (  # type: ignore[import-not-found]
-                AutoModelForMaskedLM,
-                AutoTokenizer,
-            )
+        cls = self.__class__
+        with cls._initialization_lock:
+            if cls._load_attempted and cls._configuration_key == model_name:
+                if required and cls._model is None:
+                    raise ServiceUnavailableError(
+                        service="sparse-encoder",
+                        message=f"sparse model '{model_name}' is unavailable",
+                    )
+                return
 
-            self._device = "cuda" if torch.cuda.is_available() else "cpu"
-            self.__class__._tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self.__class__._model = AutoModelForMaskedLM.from_pretrained(model_name).to(self._device)
-            self.__class__._model.eval()
-            self.__class__._uses_fallback = False
-            self.__class__._encoder_name = model_name
-        except Exception as exc:
-            if required:
-                raise ServiceUnavailableError(
-                    service="sparse-encoder",
-                    message=f"failed to load sparse model '{model_name}': {exc}",
-                ) from exc
-            logger.warning("Failed to initialize SPLADE: %s. Using deterministic lexical sparse fallback.", exc)
-            self.__class__._model = None
-            self.__class__._tokenizer = None
-            self.__class__._uses_fallback = True
-            self.__class__._encoder_name = "lexical_hash"
+            cls._load_attempted = True
+            cls._configuration_key = model_name
+            cls._model = None
+            cls._tokenizer = None
+            cls._device = "cpu"
+            cls._uses_fallback = True
+            cls._encoder_name = "lexical_hash"
+            logger.info("Initializing SpladeSparseEncoder with model: %s", model_name)
+            try:
+                import torch
+                from transformers import (
+                    AutoModelForMaskedLM,
+                    AutoTokenizer,
+                )
+
+                cls._device = "cuda" if torch.cuda.is_available() else "cpu"
+                cls._tokenizer = AutoTokenizer.from_pretrained(
+                    model_name,
+                    local_files_only=True,
+                )
+                cls._model = AutoModelForMaskedLM.from_pretrained(
+                    model_name,
+                    local_files_only=True,
+                ).to(cls._device)
+                cls._model.eval()
+                cls._uses_fallback = False
+                cls._encoder_name = model_name
+            except Exception as exc:
+                if required:
+                    raise ServiceUnavailableError(
+                        service="sparse-encoder",
+                        message=f"failed to load sparse model '{model_name}': {exc}",
+                    ) from exc
+                logger.warning(
+                    "Failed to initialize local SPLADE: %s. "
+                    "Using deterministic lexical sparse fallback.",
+                    exc,
+                )
 
     def _encode(self, text: str) -> tuple[list[int], list[float]]:
         if self._model is None or self._tokenizer is None:
             return self._encode_lexical(text)
-        import torch  # type: ignore[import-not-found]
+        import torch
 
         inputs = self._tokenizer(text, return_tensors="pt", truncation=True, max_length=512).to(self._device)
         with torch.no_grad():
@@ -133,6 +161,20 @@ class StableSparseEncoder:
     @property
     def encoder_name(self) -> str:
         return self._encoder_name
+
+    @classmethod
+    def reset_cache_for_tests(cls) -> None:
+        """Reset process-wide model state for isolated tests."""
+        with cls._initialization_lock:
+            cls._model = None
+            cls._tokenizer = None
+            cls._device = "cpu"
+            cls._uses_fallback = True
+            cls._encoder_name = "lexical_hash"
+            cls._load_attempted = False
+            cls._configuration_key = None
+            cls._instance = None
+        hash_token.cache_clear()
 
 
 @dataclass

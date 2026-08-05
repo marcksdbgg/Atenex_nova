@@ -26,15 +26,16 @@ The indexer:
 4. confirms by a second scan, inside the transaction, that the worktree did not
    change during the attempt;
 5. changes the generation state and active pointer in that transaction;
-6. after core activation, optionally builds semantic data for the same
-   repository/generation and advertises it only after its completion sentinel.
+6. after core activation, builds or reuses semantic data for the same
+   repository/generation and advertises MCP only after its completion sentinel.
 
 Readers capture one active generation and verify the pointer again before
 returning; an intervening activation makes the query fail closed and retry. A failed, interrupted, or
 source-raced **core** staging attempt is never query-visible; the preceding
-active generation remains intact. Failure of an optional semantic provider does
-not block an otherwise valid core activation, but no partial semantic data is
-advertised. The store retains the active generation and one inactive generation.
+active generation remains intact. Failure of a semantic provider does not invalidate
+an otherwise valid SQLite generation, but it fails indexing/serving and no partial
+semantic data is advertised. The store retains the active generation and one inactive
+generation.
 
 ## Consequences
 
@@ -45,8 +46,8 @@ advertised. The store retains the active generation and one inactive generation.
   atomicity.
 - Storage temporarily includes staging and prior generations.
 - SQLite `BEGIN IMMEDIATE` serializes writers per sidecar.
-- Optional semantic data that is absent or mismatched cannot contaminate core
-  results.
+- Semantic data that is absent or mismatched cannot contaminate results or be served
+  as a compatible MCP generation.
 
 ## Rejected alternatives
 

@@ -8,7 +8,10 @@ from atenex_nova.application.policies.indexing_policy import dense_goes_to_qdran
 from atenex_nova.application.services.quantization_policy_service import (
     QuantizationPolicyService,
 )
-from atenex_nova.infrastructure.indexes.quantized_code_store import QuantizedCodeStore
+from atenex_nova.infrastructure.indexes.quantized_code_store import (
+    QuantizedCodeStore,
+    QuantizedVectorWrite,
+)
 from atenex_nova.infrastructure.indexes.turboquant_candidate_index import (
     TurboQuantCandidateIndex,
     string_to_uint64,
@@ -53,7 +56,9 @@ class IngestionOrchestrator:
             dimension: The vector dimension.
             tenant_id: The optional tenant ID.
         """
-        if not node_ids or not vectors:
+        if len(node_ids) != len(vectors):
+            raise ValueError("node_ids and vectors must have the same length")
+        if not node_ids:
             return
 
         # 1. Resolve or create quantization profile
@@ -62,20 +67,24 @@ class IngestionOrchestrator:
         )
 
         # 2. Quantize vectors and save to relational DB code store
-        for node_id, vector in zip(node_ids, vectors, strict=False):
+        vector_writes: list[QuantizedVectorWrite] = []
+        for node_id, vector in zip(node_ids, vectors, strict=True):
             code = self._quant_service.quantize(vector, profile)
             uint64_id = string_to_uint64(node_id)
-            await self._code_store.save_vector(
-                node_id=node_id,
-                uint64_id=uint64_id,
-                collection_id=collection_id,
-                memory_layer=memory_layer,
-                profile_id=profile.id,
-                idx_blob=code["idx_blob"],
-                qjl_blob=code["qjl_blob"],
-                residual_norm=code["residual_norm"],
-                vector_norm=code["vector_norm"],
+            vector_writes.append(
+                QuantizedVectorWrite(
+                    node_id=node_id,
+                    uint64_id=uint64_id,
+                    collection_id=collection_id,
+                    memory_layer=memory_layer,
+                    profile_id=profile.id,
+                    idx_blob=code["idx_blob"],
+                    qjl_blob=code["qjl_blob"],
+                    residual_norm=code["residual_norm"],
+                    vector_norm=code["vector_norm"],
+                )
             )
+        await self._code_store.save_vectors(vector_writes)
 
         # 3. Update candidate index (PurePy cache invalidation; turbovec float32 only in MAX)
         if not isinstance(self._candidate_index, TurboQuantCandidateIndex) or dense_goes_to_qdrant(

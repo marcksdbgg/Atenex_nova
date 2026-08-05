@@ -3,6 +3,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, ty
 
 import { ConversationThread } from '../components/ConversationThread';
 import { AnswerPanel } from '../components/AnswerPanel';
+import {
+  formatVerificationIssues,
+  getAnswerVerificationPresentation,
+} from '../components/answerTrust';
 import { CitationSidebar } from '../components/CitationSidebar';
 import { normalizeAssistantText } from '../components/chatMessageText';
 import { EvidenceCard } from '../components/EvidenceCard';
@@ -86,6 +90,7 @@ type ChatTurn = {
   kind: 'search' | 'answer';
   answer?: string;
   verdict?: string;
+  verificationIssues?: string[];
   groundingScore?: number;
   citationsCount?: number;
   hits?: QueryHit[];
@@ -310,6 +315,7 @@ function mapAnswerResultToTurn(response: AnswerResponse): ChatTurn {
     kind: 'answer',
     answer: response.answer,
     verdict: response.verdict,
+    verificationIssues: response.verification_issues,
     groundingScore: response.grounding_score,
     citationsCount: response.citations.length,
     hits: evidence,
@@ -2259,6 +2265,7 @@ export function QueryPage() {
   const [activeAnswer, setActiveAnswer] = useState<AnswerResponse | null>(null);
   const [activeSearchHits, setActiveSearchHits] = useState<QueryHit[]>([]);
   const [inspectorDocumentId, setInspectorDocumentId] = useState('');
+  const [inspectorPageNumber, setInspectorPageNumber] = useState<number | null>(null);
   const [inspectorNodes, setInspectorNodes] = useState<DocumentNode[]>([]);
   const [inspectorChunks, setInspectorChunks] = useState<Chunk[]>([]);
   const [inspectorPropositions, setInspectorPropositions] = useState<Proposition[]>([]);
@@ -2285,6 +2292,7 @@ export function QueryPage() {
   const composerFormRef = useRef<HTMLFormElement | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
   const threadViewportRef = useRef<HTMLDivElement | null>(null);
+  const inspectorSectionRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -2334,6 +2342,7 @@ export function QueryPage() {
                   answerId: detail.answer_id,
                   groundingScore: detail.grounding_score,
                   verdict: detail.verdict,
+                  verificationIssues: detail.verification_issues,
                   citationsCount: detail.citations.length,
                   hits: evidence,
                   citations: detail.citations,
@@ -2548,6 +2557,18 @@ export function QueryPage() {
     [activeTurnId, visibleTurns],
   );
 
+  const activeVerification = useMemo(
+    () => getAnswerVerificationPresentation(activeTurn?.verdict),
+    [activeTurn?.verdict],
+  );
+
+  const activeVerificationIssues = useMemo(
+    () => formatVerificationIssues(
+      activeAnswer?.verification_issues ?? activeTurn?.verificationIssues,
+    ),
+    [activeAnswer?.verification_issues, activeTurn?.verificationIssues],
+  );
+
   const activeEvidence = useMemo(
     () => activeAnswer ? getAnswerEvidence(activeAnswer) : activeSearchHits,
     [activeAnswer, activeSearchHits],
@@ -2557,6 +2578,29 @@ export function QueryPage() {
     () => activeAnswer?.citations ?? activeTurn?.citations ?? [],
     [activeAnswer, activeTurn],
   );
+
+  const documentTitleById = useMemo(() => {
+    const titles: Record<string, string> = {};
+    for (const document of collectionDocuments) {
+      titles[document.id] = document.title.trim() || getCollectionDisplayTitle(document);
+    }
+    for (const evidence of activeEvidence) {
+      if (evidence.document_id && evidence.title.trim() && !titles[evidence.document_id]) {
+        titles[evidence.document_id] = evidence.title.trim();
+      }
+    }
+    return titles;
+  }, [activeEvidence, collectionDocuments]);
+
+  const selectInspectorDocument = useCallback((documentId: string, pageNumber?: number | null) => {
+    setInspectorDocumentId(documentId);
+    setInspectorPageNumber(typeof pageNumber === 'number' ? pageNumber : null);
+    setTechnicalTab('summary');
+    window.requestAnimationFrame(() => {
+      inspectorSectionRef.current?.scrollIntoView({ block: 'nearest' });
+      inspectorSectionRef.current?.focus({ preventScroll: true });
+    });
+  }, []);
 
   const activeCitationHydrationFailed = Boolean(
     activeTurn
@@ -2574,10 +2618,15 @@ export function QueryPage() {
     const nextId = candidateIds[0] ?? '';
     if (!nextId) {
       setInspectorDocumentId('');
+      setInspectorPageNumber(null);
       return;
     }
     setInspectorDocumentId(current => (current && candidateIds.includes(current) ? current : nextId));
   }, [activeCitations, activeEvidence, collectionDocuments]);
+
+  useEffect(() => {
+    setInspectorPageNumber(null);
+  }, [activeTurn?.id]);
 
   useEffect(() => {
     if (!inspectorDocumentId) {
@@ -2590,7 +2639,8 @@ export function QueryPage() {
     }
 
     let mounted = true;
-    const candidatePageNumber = activeCitations.find(item => item.document_id === inspectorDocumentId)?.page_number
+    const candidatePageNumber = inspectorPageNumber
+      ?? activeCitations.find(item => item.document_id === inspectorDocumentId)?.page_number
       ?? activeEvidence.find(item => item.document_id === inspectorDocumentId)?.page_number
       ?? null;
 
@@ -2624,7 +2674,7 @@ export function QueryPage() {
     return () => {
       mounted = false;
     };
-  }, [activeCitations, activeEvidence, inspectorDocumentId]);
+  }, [activeCitations, activeEvidence, inspectorDocumentId, inspectorPageNumber]);
 
   const technicalTags = useMemo(() => {
     if (!activeTurn) return [] as string[];
@@ -2634,8 +2684,8 @@ export function QueryPage() {
     tags.add(activeTurn.intent);
     tags.add(activeTurn.language);
 
-    if (activeTurn.verdict) {
-      tags.add(activeTurn.verdict);
+    if (activeTurn.kind === 'answer') {
+      tags.add(activeVerification.label);
     }
 
     activeEvidence.slice(0, 4).forEach(item => {
@@ -2643,7 +2693,7 @@ export function QueryPage() {
     });
 
     return Array.from(tags).slice(0, 8);
-  }, [activeEvidence, activeTurn]);
+  }, [activeEvidence, activeTurn, activeVerification.label]);
 
   const activeContextSummary = useMemo(() => {
     if (!activeTurn) {
@@ -2697,18 +2747,29 @@ export function QueryPage() {
     const citationsCount = activeTurn.citationsCount ?? 0;
     const citationsInPanel = activeCitations.length;
     const groundingScore = activeTurn.groundingScore;
+    const verification = getAnswerVerificationPresentation(activeTurn.verdict);
     const answerText = (activeAnswer?.answer ?? activeTurn.answer ?? '').trim();
+
+    if (verification.key === 'unverified') {
+      alerts.push('El verificador marcó esta respuesta como no verificada; no la trates como una conclusión del corpus.');
+    } else if (verification.key === 'conflicting') {
+      alerts.push('La evidencia recuperada contiene conflictos no resueltos en esta respuesta.');
+    } else if (verification.key === 'partially_verified') {
+      alerts.push('Solo una parte de la respuesta quedó verificada contra sus evidencias.');
+    } else if (verification.key === 'unknown') {
+      alerts.push(verification.description);
+    }
 
     if (citationsCount === 0) {
       alerts.push('La respuesta no incluye citas explícitas en el turno activo.');
     }
 
     if (typeof groundingScore === 'number' && groundingScore < 0.6) {
-      alerts.push('El grounding es bajo para este turno; valida la respuesta con las evidencias del panel.');
+      alerts.push('El nivel de fundamento es bajo; valida la respuesta con las evidencias del panel.');
     }
 
     if (activeTurn.language.startsWith('es') && /^(the evidence supports|i could not|corpus-level synthesis|visual grounding|hierarchical synthesis)/i.test(answerText)) {
-      alerts.push('La respuesta parece usar una plantilla en ingles, posible desalineacion de idioma.');
+      alerts.push('La respuesta parece usar una plantilla en inglés; puede haber una desalineación de idioma.');
     }
 
     if (activeEvidence.length === 0) {
@@ -2716,14 +2777,18 @@ export function QueryPage() {
     }
 
     if (citationsCount > 0 && citationsInPanel === 0) {
-      alerts.push('Hay citas reportadas pero no visibles en el panel; posible fallo de hidratacion del detalle.');
+      alerts.push('Hay citas reportadas pero no visibles en el panel; puede haber fallado la carga del detalle.');
     }
 
     if ((groundingScore ?? 0) >= 0.75 && activeEvidence.length === 0) {
-      alerts.push('Grounding alto sin evidencias visibles: no confies en esta respuesta hasta rehidratar el turno.');
+      alerts.push('El fundamento reportado es alto, pero no hay evidencias visibles; no confíes en la respuesta hasta recargar el turno.');
     }
 
-    return alerts.slice(0, 3);
+    alerts.push(...formatVerificationIssues(
+      activeAnswer?.verification_issues ?? activeTurn.verificationIssues,
+    ));
+
+    return Array.from(new Set(alerts)).slice(0, 6);
   }, [activeAnswer, activeCitations, activeEvidence, activeTurn]);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -3048,6 +3113,9 @@ export function QueryPage() {
                     citations={activeCitations}
                     expectedCount={activeTurn.citationsCount ?? activeCitations.length}
                     hydrationFailed={activeCitationHydrationFailed}
+                    documentTitles={documentTitleById}
+                    selectedDocumentId={inspectorDocumentId}
+                    onSelectDocument={selectInspectorDocument}
                   />
                 </div>
 
@@ -3056,24 +3124,27 @@ export function QueryPage() {
                   {activeEvidence.length === 0 ? (
                     <p className="query-panel-note">No hay fragmentos para este turno.</p>
                   ) : (
-                    <div className="query-turn__evidence-list">
-                      {activeEvidence.slice(0, 5).map(hit => (
-                        <div
-                          key={hit.id}
-                          style={{ cursor: hit.document_id ? 'pointer' : 'default' }}
-                          onClick={() => {
-                            if (hit.document_id) setInspectorDocumentId(hit.document_id);
-                          }}
-                        >
-                          <EvidenceCard evidence={hit} />
-                        </div>
-                      ))}
-                    </div>
+                    <>
+                      <p className="query-panel-note">
+                        Mostrando {Math.min(activeEvidence.length, 20)} de {activeEvidence.length} evidencias seleccionadas.
+                      </p>
+                      <div className="query-turn__evidence-list">
+                        {activeEvidence.slice(0, 20).map(hit => (
+                          <EvidenceCard
+                            key={hit.id}
+                            evidence={hit}
+                            documentTitle={hit.document_id ? documentTitleById[hit.document_id] : undefined}
+                            selected={Boolean(hit.document_id && hit.document_id === inspectorDocumentId)}
+                            onSelectDocument={selectInspectorDocument}
+                          />
+                        ))}
+                      </div>
+                    </>
                   )}
                 </div>
                 <div className="query-context__block">
                   <div className="query-panel-heading">Visual evidence</div>
-                  <PageViewer evidence={activeEvidence} />
+                  <PageViewer evidence={activeEvidence.slice(0, 20)} />
                 </div>
               </>
             )}
@@ -3241,11 +3312,11 @@ export function QueryPage() {
                               className="query-rail__item"
                               role="button"
                               tabIndex={0}
-                              onClick={() => setInspectorDocumentId(document.id)}
+                              onClick={() => selectInspectorDocument(document.id)}
                               onKeyDown={event => {
                                   if (event.key === 'Enter' || event.key === ' ') {
                                     event.preventDefault();
-                                    setInspectorDocumentId(document.id);
+                                    selectInspectorDocument(document.id);
                                   }
                               }}
                               style={{
@@ -3264,7 +3335,13 @@ export function QueryPage() {
                       )}
                     </div>
                   </section>
-                  <section className="query-context__block">
+                  <section
+                    ref={inspectorSectionRef}
+                    id="query-document-inspector"
+                    className="query-context__block"
+                    tabIndex={-1}
+                    aria-label="Inspector documental"
+                  >
                     <div className="query-panel-heading">Inspector documental</div>
                     {!inspectorDocumentId ? (
                       <p className="query-panel-note">Selecciona un documento del corpus o de la evidencia para inspeccionarlo.</p>
@@ -3273,7 +3350,9 @@ export function QueryPage() {
                     ) : (
                       <div style={{ display: 'grid', gap: 'var(--space-3)' }}>
                         <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-                          <span className="query-chip">Documento {inspectorDocumentId}</span>
+                          <span className="query-chip" title={inspectorDocumentId}>
+                            Documento {documentTitleById[inspectorDocumentId] ?? inspectorDocumentId}
+                          </span>
                           <span className="query-chip">Nodos {inspectorNodes.length}</span>
                           <span className="query-chip">Chunks {inspectorChunks.length}</span>
                           <span className="query-chip">Proposiciones {inspectorPropositions.length}</span>
@@ -3446,18 +3525,30 @@ export function QueryPage() {
                       Grounding & Auditoría
                     </div>
                     <div style={{ marginTop: 'var(--space-2)', fontSize: 'var(--font-sm)', display: 'grid', gap: 'var(--space-2)' }}>
-                      <div><strong>Verdict:</strong> <span className={`badge badge--${activeTurn.verdict === 'verified' ? 'success' : activeTurn.verdict === 'partially_verified' ? 'warning' : 'error'}`} style={{ marginLeft: '0.3rem' }}>{activeTurn.verdict}</span></div>
-                      <div><strong>Score Grounding:</strong> <code>{activeTurn.groundingScore?.toFixed(3) ?? '—'}</code></div>
-                      {activeAnswer?.verification_issues && activeAnswer.verification_issues.length > 0 ? (
+                      <div>
+                        <strong>Verificación:</strong>{' '}
+                        <span className={`badge badge--${activeVerification.tone}`}>
+                          {activeVerification.label}
+                        </span>
+                      </div>
+                      <p className="query-panel-note">{activeVerification.description}</p>
+                      <div><strong>Fundamento:</strong> <code>{activeTurn.groundingScore?.toFixed(3) ?? '—'}</code></div>
+                      {activeVerification.requiresAlert ? (
+                        <div className="answer-trust-alert answer-trust-alert--error" role="alert">
+                          <span className="answer-trust-alert__icon" aria-hidden="true">!</span>
+                          <span>Este resultado requiere revisión manual aunque tenga citas asociadas.</span>
+                        </div>
+                      ) : null}
+                      {activeVerificationIssues.length > 0 ? (
                         <div>
-                          <strong style={{ color: 'var(--color-error)' }}>Problemas hallados:</strong>
+                          <strong>Qué debes revisar:</strong>
                           <ul style={{ margin: '0.2rem 0 0 0', paddingLeft: '1.1rem', color: 'var(--color-text-secondary)', fontSize: 'var(--font-xs)' }}>
-                            {activeAnswer.verification_issues.map((issue, idx) => <li key={idx}>{issue}</li>)}
+                            {activeVerificationIssues.map(issue => <li key={issue}>{issue}</li>)}
                           </ul>
                         </div>
-                      ) : (
-                        <div style={{ color: 'var(--color-success)', fontWeight: 'var(--font-weight-semibold)', fontSize: 'var(--font-xs)' }}>✓ Grounding verificado sin problemas.</div>
-                      )}
+                      ) : activeVerification.key === 'verified' ? (
+                        <div style={{ color: 'var(--color-success)', fontWeight: 'var(--font-weight-semibold)', fontSize: 'var(--font-xs)' }}>Verificación completada sin incidencias reportadas.</div>
+                      ) : null}
                     </div>
                   </div>
                 </div>

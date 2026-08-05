@@ -1,10 +1,21 @@
 # Integración de TurboQuant en Atenex Nova
 
-Estado: **Historical / Experimental** para Repo Context.
+Estado: **Historical** como diseño original de VecQuant y **Implemented / Verified**
+para el fallback acotado descrito aquí. Dense Qdrant es ahora el camino primario del
+RAG documental; la aceleración TurboVec viva y calibrada sigue **Planned**.
 
 Este documento describe una optimización del bounded context RAG documental.
 TurboQuant no está en la ruta crítica de Repo Context v1: el core determinista usa
 SQLite FTS5 e índices estructurales; la recuperación semántica opcional usa Qdrant.
+
+Contraste vivo del 2026-08-02 (**Historical** respecto del checkout actual): la
+cuantización y el estimador existían, pero la aceleración no estaba **Verified**. El runtime no tenía
+TurboVec ni archivos `.tvim`; `candidate_backend=auto` seleccionó PurePy. PurePy
+escanea todos los códigos y materializa matrices `N × 384`: con la capa viva de
+propositions, `score_propositions` tardó 48–69 s y presentó un riesgo de varios GiB
+por consulta. El reranker neural también estaba degradado porque `torch` no estaba
+instalado. Véase
+[auditoria-rag-respuestas-sota-2026-08-02.md](auditoria-rag-respuestas-sota-2026-08-02.md).
 
 Este documento describe la especificación técnica, el diseño de arquitectura y el estado de la integración de **TurboQuant / VecQuant** en la plataforma local de memoria documental **Atenex Nova**.
 
@@ -26,19 +37,27 @@ Esto permite que la estimación de producto interno entre el vector de consulta 
 
 ---
 
-## 2. ¿Qué reemplaza y qué optimiza en el Pipeline?
+## 2. Papel actual en el pipeline
 
-### Una sola copia dense canónica (LITE/STANDARD)
+### Qdrant dense primario; cuantización como representación derivada
 
-En perfiles **LITE** y **STANDARD**, el dense ya **no** se duplica en Qdrant ni en archivos `.tvim` como fuente de verdad. La representación canónica es:
+En todos los perfiles, si Qdrant está habilitado y disponible, el camino online
+primario usa el vector dense nombrado `dense` y la señal sparse nombrada `sparse`.
+La cuantización SQL se conserva como representación derivada y fallback explícito:
 
 1. **Ingesta**:
-   * Docling segmenta el documento; `EmbeddingGemma` genera embeddings float32 en memoria.
-   * `TurboQuantAdapter` cuantiza cada vector (Lloyd-Max + QJL) y persiste los códigos en SQL (`quantized_vectors`).
-   * Qdrant recibe **solo sparse** (BM25/SPLADE) en LITE/STANDARD; dense float32 en Qdrant queda reservado al perfil **MAX** (`dense_goes_to_qdrant`).
-   * `turbovec` (extra opcional `[accel]`) puede acelerar la búsqueda de candidatos construyendo un índice `.tvim` a partir de los mismos códigos; si no está instalado, `PurePyTurboQuantCandidateIndex` puntúa directamente sobre SQL.
+   * Docling y el chunker producen unidades con hard cap; `EmbeddingGemma` aplica el
+     prefijo de documento y genera embeddings float32 en memoria.
+   * `TurboQuantAdapter` cuantiza cada vector y persiste códigos en
+     `quantized_vectors` con un perfil cuyo `codebook_version` incluye el fingerprint
+     de compatibilidad `emb-v2`.
+   * Qdrant recibe dense+sparse. Antes de usar una colección existente, el adapter
+     valida nombre, dimensión y schema; una incompatibilidad exige rebuild.
+   * `turbovec` puede construir un `.tvim` opcional. PurePy solo actúa cuando Qdrant
+     dense no está disponible y la capa no excede el límite seguro configurado.
 
-2. **Decoplamiento de citas**: las citas siguen apuntando a tablas relacionales (`retrieval_chunks`, proposiciones, resúmenes, nodos de documento), no a blobs cuantizados.
+2. **Desacoplamiento de citas**: las citas siguen apuntando a tablas relacionales
+   (`retrieval_chunks`, propositions, summaries y nodos), no a blobs cuantizados.
 
 ### Scoring por estimador de producto interno (H-3 cerrado)
 
@@ -46,17 +65,20 @@ La búsqueda dense **no reconstruye** vectores para rankear. `TurboQuantAdapter.
 
 ### Flujo de consulta (Candidate Generation)
 
-* **Stage 1 (candidatos dense)**: `CandidateIndexPort.search` — pure-python o turbovec — devuelve top-N usando el estimador IP.
+* **Stage 1 (candidatos dense)**: Qdrant devuelve top-N cuando su dense está listo.
+  `CandidateIndexPort.search` es el fallback PurePy/TurboVec. PurePy puntúa
+  exhaustivamente solo capas bajo el límite configurado; por encima degrada de forma
+  visible en vez de materializar una matriz sin cota.
 * **Stage 2 (sparse + fusión)**: BM25/SPLADE en Qdrant o local; fusión RRF con candidatos dense.
-* **Stage 3 (rerank)**: reranker neural sobre texto de los finalistas (una pasada final, no por capa).
+* **Stage 3 (rerank)**: el contrato admite reranker sobre los finalistas. En el runtime auditado, el adapter no pudo cargar `torch` y degradó a una heurística; reranking neural vivo sigue **Planned**.
 
 ### Selección de backend
 
 | `ATENEX_CANDIDATE_BACKEND` | Comportamiento |
 |---|---|
-| `purepy` (default implícito sin turbovec) | Lee `quantized_vectors`, puntúa con estimador IP |
+| `purepy` (default implícito sin turbovec) | Fallback: lee perfiles `emb-v2` compatibles y puntúa solo capas bajo el límite seguro |
 | `turbovec` | Requiere `pip install -e ".[accel]"`; acelera con `.tvim` |
-| `auto` | turbovec si importable y perfil LITE/STANDARD; si no, purepy |
+| `auto` | selecciona siempre PurePy en la implementación actual; no activa TurboVec solo por ser importable |
 
 ---
 
@@ -71,7 +93,7 @@ Domain (domain/ports/)
 
 Application (application/)
   ├── IngestionOrchestrator (cuantiza → SQL; invalida caché del índice)
-  ├── RetrievalOrchestrator (dense_turbo_ip + sparse + rerank final)
+  ├── RetrievalOrchestrator (Qdrant dense+sparse; fallback dense_turbo_ip; RRF)
   └── QuantizationPolicyService (perfiles y bit-width)
 
 Infrastructure
@@ -90,17 +112,39 @@ Infrastructure
 
 ---
 
-## 4. ¿Qué resta para la Implementación Completa? (Brechas Identificadas)
+## 4. ¿Qué resta para la implementación completa? (brechas vigentes)
 
-Aunque la topología de TurboQuant está completamente implementada, se identifican las siguientes brechas operativas para un cierre del 100%:
+La topología de puertos y la cuantización están implementadas, pero el índice operativo
+no está cerrado para escala de corpus. Antes de optimizaciones de codebook se requieren:
 
-1. **Auto-Calibración del Codebook**:
+1. **Candidate generation sublineal o acotada**:
+   * *Estado actual*: Qdrant dense es primario y el fallback PurePy tiene un límite
+     estricto de cardinalidad; perfiles legados incompatibles se omiten.
+   * *Pendiente*: TurboVec vivo verificado o una segunda ANN local para operar sin
+     Qdrant a gran escala, con métricas y degradación explícitas.
+2. **Readiness y paridad por generación**:
+   * *Estado actual*: schema guard, fingerprint `emb-v2` y barrera temporal de
+     readiness están **Implemented / Verified** en pruebas focalizadas.
+   * *Pendiente*: `generation_id`, manifest, cardinalidad, checksums y activación
+     atómica definitiva por capa; rebuild limpio vivo.
+3. **Reranking real**:
+   * *Estado actual*: el contrato y el fallback existen.
+   * *Pendiente*: adapter multilingüe vivo calibrado, health explícito y ablación de
+     calidad.
+4. **Validación a escala**:
+   * *Estado actual*: los unit tests prueban precisión del estimador, no RAM/latencia
+     sobre cientos de miles de vectores.
+   * *Pendiente*: p50/p95/p99, RAM pico, concurrencia y degradación por cardinalidad.
+
+Mejoras posteriores:
+
+5. **Auto-Calibración del Codebook**:
    * *Estado actual*: El registro de perfiles (`TurboQuantProfileRegistry`) utiliza centroides precalculados para distribuciones normales estándar \(N(0,1)\) de Lloyd-Max.
    * *Pendiente*: Un mecanismo de ajuste dinámico de codebooks en caliente según la distribución real de embeddings de la colección para colecciones muy específicas (ej. dominios médicos o legales con vocabulario restringido).
-2. **Compresión Adaptativa en Caliente**:
+6. **Compresión Adaptativa en Caliente**:
    * *Estado actual*: El bit-width (usualmente 4 bits) se configura globalmente mediante `ATENEX_TURBOVEC_BIT_WIDTH`.
    * *Pendiente*: Permitir que el sistema reduzca dinámicamente a 2 o 3 bits para ciertas capas (como resúmenes) y mantenga 4 bits para capas factuales críticas (proposiciones y chunks) de manera automática.
-3. **Optimización de Reranking sobre Residuales**:
+7. **Optimización de Reranking sobre Residuales**:
    * *Estado actual*: El Stage 2 y Rerank neural operan sobre texto reconstruido o re-embedding exacto.
    * *Pendiente*: Implementar scoring por late-interaction (estilo ColPali) utilizando de manera directa el residual cuantizado para evitar pasadas secundarias al modelo de embeddings.
 
@@ -124,6 +168,8 @@ backend/.venv312/Scripts/python.exe -m pytest tests/unit/test_turboquant.py -v
 ```powershell
 backend/.venv312/Scripts/python.exe -m pytest tests -q
 ```
-* **Comparativa de Rendimiento (Lite vs. Advanced)**:
+* **Comparativa de rendimiento (objetivo Planned, no evidencia viva)**:
   * **Lite (8 GB RAM)**: Debe usar 2-3 bits en perfiles y verificar que no hay picos de consumo de RAM superiores a 200 MB adicionales durante la carga del índice local de candidatos.
-  * **Standard/Advanced**: Comparar latencia de búsqueda de candidatos (debe responder en < 5ms sobre el índice cuantizado local).
+  * **Standard/Advanced**: definir y medir un SLO de candidate search. El objetivo
+    histórico `< 5 ms` no fue validado y contradice la latencia de decenas de segundos
+    del backend PurePy vivo.

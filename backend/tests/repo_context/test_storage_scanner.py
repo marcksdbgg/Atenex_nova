@@ -120,6 +120,10 @@ class SQLiteContextIndexTests(unittest.TestCase):
             self.assertEqual(first.symbol_count, 2)
             self.assertEqual(first.chunk_count, 1)
             self.assertEqual(index.symbols("alpha")[0].qualified_name, "main.alpha")
+            self.assertEqual(
+                [item.id for item in index.symbols_for_path("src/main.py")],
+                ["symbol-alpha", "symbol-beta"],
+            )
             self.assertEqual(index.symbol_by_id("symbol-alpha"), extraction.symbols[0])
             outgoing = index.edges("symbol-alpha", direction="callees")
             self.assertEqual(outgoing[0].target_symbol_id, "symbol-beta")

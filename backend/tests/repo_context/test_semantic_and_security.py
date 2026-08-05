@@ -5,9 +5,13 @@ import tempfile
 import unittest
 from collections.abc import Sequence
 from pathlib import Path
+from unittest.mock import patch
 
-from atenex_nova.repo_context.application.semantic import OptionalSemanticCoordinator
-from atenex_nova.repo_context.application.services import RepoContextServices
+from atenex_nova.repo_context.application.semantic import SemanticCoordinator
+from atenex_nova.repo_context.application.services import (
+    RepoContextError,
+    RepoContextServices,
+)
 from atenex_nova.repo_context.composition import build_runtime
 from atenex_nova.repo_context.domain.policies import resolve_inside, safe_relative_path
 from atenex_nova.repo_context.infrastructure.semantic.fusion import reciprocal_rank_fusion
@@ -55,7 +59,7 @@ class SemanticAdapterTests(unittest.TestCase):
         self.assertNotEqual(first, other)
         self.assertTrue(first.startswith("atenex_repo_"))
 
-    def test_optional_semantic_build_and_hybrid_search(self) -> None:
+    def test_required_semantic_build_and_default_hybrid_search(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "repo"
             root.mkdir()
@@ -65,18 +69,18 @@ class SemanticAdapterTests(unittest.TestCase):
                 encoding="utf-8",
             )
             runtime = build_runtime(repo=root)
-            runtime.index_repository()
+            runtime.indexer.execute()
             generation = runtime.index.active_generation()
             self.assertIsNotNone(generation)
 
             vector_index = _FakeSemanticIndex()
-            coordinator = OptionalSemanticCoordinator(
+            coordinator = SemanticCoordinator(
                 embedder=_FakeEmbedder(),
                 semantic_index=vector_index,
             )
             inserted = coordinator.build(generation, runtime.index)  # type: ignore[arg-type]
             self.assertGreater(inserted, 0)
-            restarted = OptionalSemanticCoordinator(
+            restarted = SemanticCoordinator(
                 embedder=_FakeEmbedder(),
                 semantic_index=vector_index,
             )
@@ -89,26 +93,82 @@ class SemanticAdapterTests(unittest.TestCase):
             )
             response = services.search_repo(
                 "conceptual context",
-                modes=["lexical", "semantic"],
                 top_k=5,
             )
-            self.assertIn("semantic", response["data"]["modes"])
-            self.assertTrue(response["data"]["results"])
-            self.assertFalse(
-                any(
-                    item["code"] == "SEMANTIC_UNAVAILABLE"
-                    for item in response["diagnostics"]
-                )
+            self.assertEqual(
+                response["data"]["modes"],
+                ["lexical", "symbol", "semantic"],
             )
+            self.assertTrue(response["data"]["results"])
+            self.assertEqual(response["diagnostics"], [])
+
+    def test_composition_builds_and_reuses_required_semantic_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            root.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            (root / "app.py").write_text("value = 'semantic'\n", encoding="utf-8")
+            embedder = _FakeEmbedder()
+            vector_index = _FakeSemanticIndex()
+            with (
+                patch(
+                    "atenex_nova.repo_context.infrastructure.semantic."
+                    "OllamaEmbeddingProvider",
+                    return_value=embedder,
+                ),
+                patch(
+                    "atenex_nova.repo_context.infrastructure.semantic."
+                    "QdrantSemanticIndex",
+                    return_value=vector_index,
+                ),
+            ):
+                runtime = build_runtime(repo=root)
+                first = runtime.index_repository()
+                embedded_after_first = embedder.embedded_texts
+                second = runtime.index_repository()
+
+            self.assertEqual(first["semantic"]["state"], "ready")
+            self.assertFalse(first["semantic"]["reused"])
+            self.assertTrue(second["semantic"]["reused"])
+            self.assertEqual(embedder.embedded_texts, embedded_after_first)
+
+    def test_index_fails_when_required_semantic_services_are_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            root.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            (root / "app.py").write_text("value = 1\n", encoding="utf-8")
+            embedder = _FakeEmbedder(available=False)
+            with (
+                patch(
+                    "atenex_nova.repo_context.infrastructure.semantic."
+                    "OllamaEmbeddingProvider",
+                    return_value=embedder,
+                ),
+                patch(
+                    "atenex_nova.repo_context.infrastructure.semantic."
+                    "QdrantSemanticIndex",
+                    return_value=_FakeSemanticIndex(),
+                ),
+            ):
+                runtime = build_runtime(repo=root)
+                with self.assertRaises(RepoContextError) as captured:
+                    runtime.index_repository()
+                self.assertEqual(captured.exception.code, "SEMANTIC_UNAVAILABLE")
 
 
 class _FakeEmbedder:
     identity = "fake:embedding"
 
+    def __init__(self, *, available: bool = True) -> None:
+        self._available = available
+        self.embedded_texts = 0
+
     def available(self) -> bool:
-        return True
+        return self._available
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        self.embedded_texts += len(texts)
         return [[float(len(text)), 1.0] for text in texts]
 
 

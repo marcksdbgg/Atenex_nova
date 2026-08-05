@@ -70,6 +70,9 @@ async def create_all_tables() -> None:
             await _ensure_sqlite_columns(conn, "retrieval_chunks", {
                 "metadata_json": "ALTER TABLE retrieval_chunks ADD COLUMN metadata_json TEXT NULL",
             })
+            await _ensure_sqlite_columns(conn, "summary_nodes", {
+                "provenance_json": "ALTER TABLE summary_nodes ADD COLUMN provenance_json TEXT NOT NULL DEFAULT '{}'",
+            })
             await _ensure_sqlite_columns(conn, "answers", {
                 "prompt_version": "ALTER TABLE answers ADD COLUMN prompt_version VARCHAR(50) NOT NULL DEFAULT 'v1'",
                 "draft_text": "ALTER TABLE answers ADD COLUMN draft_text TEXT NOT NULL DEFAULT ''",
@@ -100,6 +103,9 @@ async def create_all_tables() -> None:
             )
             await conn.exec_driver_sql(
                 "ALTER TABLE retrieval_chunks ADD COLUMN IF NOT EXISTS metadata_json TEXT NULL"
+            )
+            await conn.exec_driver_sql(
+                "ALTER TABLE summary_nodes ADD COLUMN IF NOT EXISTS provenance_json TEXT NOT NULL DEFAULT '{}'"
             )
             await conn.exec_driver_sql(
                 "ALTER TABLE answers ADD COLUMN IF NOT EXISTS prompt_version VARCHAR(50) NOT NULL DEFAULT 'v1'"

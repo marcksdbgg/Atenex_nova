@@ -37,14 +37,20 @@ class QuantizationPolicyService:
         if hasattr(self._settings, "turbovec_bit_width") and self._settings.turbovec_bit_width:
             bit_width = int(self._settings.turbovec_bit_width)
 
+        defaults = TurboQuantProfileRegistry.get_profile_defaults(bit_width)
+        codebook_version = (
+            f"{defaults['codebook_version']}|"
+            f"{self._settings.embedding_contract_fingerprint}"
+        )
+
         profile = await self._store.get_profile_by_config(
             embedding_model=embedding_model,
             dimension=dimension,
             bit_width=bit_width,
+            codebook_version=codebook_version,
         )
 
         if profile is None:
-            defaults = TurboQuantProfileRegistry.get_profile_defaults(bit_width)
             profile = QuantizationProfileModel(
                 id=new_id(),
                 algorithm="turboquant_prod",
@@ -53,7 +59,7 @@ class QuantizationPolicyService:
                 bit_width=bit_width,
                 rotation_seed=defaults["rotation_seed"],
                 qjl_seed=defaults["qjl_seed"],
-                codebook_version=defaults["codebook_version"],
+                codebook_version=codebook_version,
             )
             await self._store.save_profile(profile)
             logger.info(

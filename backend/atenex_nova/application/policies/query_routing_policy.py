@@ -19,6 +19,8 @@ class QueryFeatures:
     has_exact_tokens: bool
     has_comparison: bool
     has_contradiction: bool
+    has_argumentative_terms: bool
+    asks_author_stance: bool
     has_global_terms: bool
     has_visual_terms: bool
     multi_clause: bool
@@ -55,6 +57,50 @@ class QueryRoutingPolicy:
         "contra",
         "conflict",
     }
+    argumentative_markers: ClassVar[set[str]] = {
+        "analiza",
+        "analice",
+        "argumento",
+        "argumentos",
+        "conclusion",
+        "conclusión",
+        "critica",
+        "critique",
+        "evalua",
+        "evalúa",
+        "evaluate",
+        "implica",
+        "infiere",
+        "infer",
+        "objecion",
+        "objeción",
+        "premisa",
+        "por eso",
+        "por lo tanto",
+        "razona",
+        "tiene razon",
+        "tiene razón",
+    }
+    author_stance_markers: ClassVar[set[str]] = {
+        "afirma",
+        "argumenta",
+        "considera",
+        "defiende",
+        "dice que",
+        "dicen que",
+        "opinion",
+        "opinión",
+        "plantea",
+        "postura",
+        "que decia",
+        "que dice",
+        "qué decía",
+        "qué dice",
+        "segun",
+        "según",
+        "sostiene",
+        "tesis",
+    }
     global_markers: ClassVar[set[str]] = {
         "overall",
         "summary",
@@ -86,6 +132,16 @@ class QueryRoutingPolicy:
         ) or any(marker in tokens for marker in self.exact_markers)
         has_comparison = self._contains_marker(normalized, tokens, self.comparison_markers)
         has_contradiction = self._contains_marker(normalized, tokens, self.contradiction_markers)
+        has_argumentative_terms = self._contains_marker(
+            normalized,
+            tokens,
+            self.argumentative_markers,
+        )
+        asks_author_stance = self._contains_marker(
+            normalized,
+            tokens,
+            self.author_stance_markers,
+        )
         has_global_terms = self._contains_marker(normalized, tokens, self.global_markers)
         has_visual_terms = self._contains_marker(normalized, tokens, self.visual_markers)
         multi_clause = (
@@ -102,6 +158,8 @@ class QueryRoutingPolicy:
             has_exact_tokens=has_exact_tokens,
             has_comparison=has_comparison,
             has_contradiction=has_contradiction,
+            has_argumentative_terms=has_argumentative_terms,
+            asks_author_stance=asks_author_stance,
             has_global_terms=has_global_terms,
             has_visual_terms=has_visual_terms,
             multi_clause=multi_clause,
@@ -112,8 +170,10 @@ class QueryRoutingPolicy:
             return QueryMode.VISUAL
         if features.has_global_terms:
             return QueryMode.GLOBAL
-        if features.has_contradiction:
+        if features.has_contradiction or features.has_argumentative_terms:
             return QueryMode.ARGUMENTATIVE
+        if features.asks_author_stance:
+            return QueryMode.MULTI_HOP
         if features.has_exact_tokens:
             return QueryMode.EXACT
         if features.has_comparison or features.multi_clause:
@@ -125,7 +185,11 @@ class QueryRoutingPolicy:
             return QueryIntent.VISUAL
         if features.has_global_terms:
             return QueryIntent.GLOBAL
-        if features.has_contradiction:
+        if (
+            features.has_contradiction
+            or features.has_argumentative_terms
+            or features.asks_author_stance
+        ):
             return QueryIntent.ARGUMENTATIVE
         if features.has_comparison:
             return QueryIntent.COMPARATIVE
@@ -141,6 +205,10 @@ class QueryRoutingPolicy:
             reasons.append("comparison cues detected")
         if features.has_contradiction:
             reasons.append("contradiction or debate cues detected")
+        if features.has_argumentative_terms:
+            reasons.append("argument analysis cues detected")
+        if features.asks_author_stance:
+            reasons.append("author-stance cues detected")
         if features.has_global_terms:
             reasons.append("global summary cues detected")
         if features.has_visual_terms:

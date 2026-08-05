@@ -56,7 +56,11 @@ class _TrackingQdrant:
 
 
 def _patch_standard_settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
-    settings = Settings(embedding_profile=EmbeddingProfile.STANDARD, candidate_backend="purepy")
+    settings = Settings(
+        embedding_profile=EmbeddingProfile.STANDARD,
+        candidate_backend="purepy",
+        qdrant_dense_enabled=False,
+    )
 
     def _getter() -> Settings:
         return settings
@@ -65,6 +69,7 @@ def _patch_standard_settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
         "atenex_nova.shared.config.settings.get_settings",
         "atenex_nova.application.orchestrators.retrieval_orchestrator.get_settings",
         "atenex_nova.infrastructure.indexes.candidate_index_factory.get_settings",
+        "atenex_nova.infrastructure.indexes.purepy_candidate_index.get_settings",
     ):
         monkeypatch.setattr(target, _getter)
     return settings
@@ -118,7 +123,7 @@ async def _seed_collection_with_quantized_chunk(
         bit_width=4,
         rotation_seed=42,
         qjl_seed=1337,
-        codebook_version="v1",
+        codebook_version=f"v1-b4|{Settings().embedding_contract_fingerprint}",
     )
     vector = [0.5] * 384
 
@@ -177,7 +182,7 @@ async def _seed_collection_with_quantized_chunk(
 
 
 @pytest.mark.asyncio
-async def test_standard_query_uses_candidate_index_not_qdrant_dense(
+async def test_standard_query_uses_candidate_index_when_qdrant_dense_disabled(
     session_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -200,6 +205,11 @@ async def test_standard_query_uses_candidate_index_not_qdrant_dense(
     assert any(hit.source_id == chunk_id for hit in chunk_hits)
     assert all(
         (hit.metadata or {}).get("retrieval_stage") == "dense_turbo_ip"
+        for hit in chunk_hits
+        if hit.source_id == chunk_id
+    )
+    assert all(
+        "local_sparse" in (hit.metadata or {}).get("retrieval_stages", [])
         for hit in chunk_hits
         if hit.source_id == chunk_id
     )

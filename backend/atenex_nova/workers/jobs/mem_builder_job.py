@@ -6,7 +6,9 @@ from typing import Any
 from urllib.parse import urlparse
 
 from atenex_nova.application.policies.indexing_policy import dense_goes_to_qdrant
+from atenex_nova.application.policies.token_budget_policy import TokenBudgetPolicy
 from atenex_nova.domain.entities.chunk import Chunk
+from atenex_nova.domain.entities.document_node import DocumentNode
 from atenex_nova.domain.entities.job import Job
 from atenex_nova.domain.value_objects.identifiers import DocumentStatus, JobType, new_id
 from atenex_nova.infrastructure.db.repositories.sql_chunk_repo import SqlChunkRepository
@@ -25,6 +27,142 @@ from atenex_nova.shared.observability.pipeline_audit import PipelineAuditService
 from atenex_nova.workers.runner import BaseJobHandler
 
 logger = logging.getLogger(__name__)
+
+
+def build_document_chunks(
+    document_id: str,
+    nodes: list[DocumentNode],
+    *,
+    policy: TokenBudgetPolicy,
+    min_tokens: int,
+    max_tokens: int,
+    overlap_tokens: int,
+) -> list[Chunk]:
+    """Build hard-bounded chunks while preserving node-local source spans."""
+    chunks: list[Chunk] = []
+    text_parts: list[str] = []
+    node_ids: list[str] = []
+    source_spans: list[dict[str, object]] = []
+    heading_path: list[str] = []
+    page_numbers: list[int] = []
+    node_types: list[str] = []
+    bboxes: list[dict[str, object]] = []
+
+    def current_text() -> str:
+        return "\n\n".join(text_parts)
+
+    def flush() -> None:
+        nonlocal text_parts, node_ids, source_spans, heading_path, page_numbers, node_types, bboxes
+        if not text_parts:
+            return
+        text = current_text()
+        token_count = policy.estimate_tokens(text)
+        if token_count > max_tokens:
+            raise ValueError(
+                f"chunk budget invariant violated: {token_count} > {max_tokens} tokens"
+            )
+        chunks.append(
+            Chunk(
+                id=new_id(),
+                document_id=document_id,
+                text=text,
+                summary=text[:280],
+                token_count=max(1, token_count),
+                node_ids=list(node_ids),
+                metadata={
+                    "chunk_index": len(chunks),
+                    "heading_path": list(heading_path),
+                    "page_numbers": list(page_numbers),
+                    "bboxes": list(bboxes),
+                    "node_types": list(node_types),
+                    "source_spans": list(source_spans),
+                    "chunk_max_tokens": max_tokens,
+                    "chunk_overlap_tokens": overlap_tokens,
+                },
+            )
+        )
+        text_parts = []
+        node_ids = []
+        source_spans = []
+        heading_path = []
+        page_numbers = []
+        node_types = []
+        bboxes = []
+
+    for node in nodes:
+        if node.metadata.get("content_role") == "metadata":
+            # Keep export envelopes in the source tree for audit/navigation, but do
+            # not let administrative headers consume embedding or retrieval budget.
+            continue
+        source_field = "normalized_text" if node.normalized_text else "raw_text"
+        node_text = node.normalized_text or node.raw_text
+        if not node_text.strip():
+            continue
+        segments = policy.split_text(
+            node_text,
+            max_tokens=max_tokens,
+            overlap_tokens=overlap_tokens,
+        )
+        raw_heading_path = node.metadata.get("heading_path", [])
+        candidate_heading_path = (
+            [str(item) for item in raw_heading_path]
+            if isinstance(raw_heading_path, (list, tuple))
+            else []
+        )
+
+        for segment_index, segment in enumerate(segments):
+            existing_text = current_text()
+            candidate_text = (
+                f"{existing_text}\n\n{segment.text}" if existing_text else segment.text
+            )
+            current_tokens = policy.estimate_tokens(existing_text)
+            exceeds_budget = policy.estimate_tokens(candidate_text) > max_tokens
+            structural_boundary = policy.should_split(
+                current_tokens=current_tokens,
+                next_node_tokens=segment.token_count,
+                node_type=node.node_type.value,
+                min_tokens=min_tokens,
+                max_tokens=max_tokens,
+            )
+            if text_parts and (exceeds_budget or structural_boundary):
+                flush()
+
+            text_parts.append(segment.text)
+            if node.id not in node_ids:
+                node_ids.append(node.id)
+            span: dict[str, object] = {
+                "node_id": node.id,
+                "char_start": segment.char_start,
+                "char_end": segment.char_end,
+                "segment_index": segment_index,
+                "segment_count": len(segments),
+                "overlap_left": segment_index > 0,
+                "source_field": source_field,
+            }
+            for metadata_key in (
+                "source_char_start",
+                "source_char_end",
+                "content_role",
+                "timestamp_start",
+                "timestamp_end",
+            ):
+                metadata_value = node.metadata.get(metadata_key)
+                if metadata_value is not None:
+                    span[metadata_key] = metadata_value
+            source_spans.append(span)
+            if not heading_path and candidate_heading_path:
+                heading_path = candidate_heading_path
+            if node.page_number is not None and node.page_number not in page_numbers:
+                page_numbers.append(node.page_number)
+            node_types.append(node.node_type.value)
+            if node.bbox and node.bbox not in bboxes:
+                bboxes.append(node.bbox)
+
+            if policy.estimate_tokens(current_text()) > max_tokens:
+                raise ValueError("chunk budget invariant violated after adding a source segment")
+
+    flush()
+    return chunks
 
 
 class SegmentDocumentJobHandler(BaseJobHandler):
@@ -52,8 +190,6 @@ class SegmentDocumentJobHandler(BaseJobHandler):
                 if existing_chunks:
                     return {"chunks_created": len(existing_chunks), "skipped": "already_segmented"}
 
-            from atenex_nova.application.policies.token_budget_policy import TokenBudgetPolicy
-
             async with audit.step(
                 run_id=job.id,
                 entity_type="document",
@@ -62,69 +198,27 @@ class SegmentDocumentJobHandler(BaseJobHandler):
                 stage="segment",
                 context={"node_count": len(nodes)},
             ) as step:
-                chunks: list[Chunk] = []
-                current_text = ""
-                current_nodes: list[str] = []
-                current_metadata: dict[str, object] = {"heading_path": [], "page_numbers": [], "bboxes": [], "node_types": []}
-
+                settings = get_settings()
                 policy = TokenBudgetPolicy()
-
-                for node in nodes:
-                    text = node.normalized_text or node.raw_text
-                    if not text.strip():
-                        continue
-
-                    current_tokens = policy.estimate_tokens(current_text)
-                    next_node_tokens = policy.estimate_tokens(text)
-                    heading_path = node.metadata.get("heading_path", []) if isinstance(node.metadata, dict) else []
-
-                    if policy.should_split(current_tokens, next_node_tokens, node.node_type.value) and current_nodes:
-                        chunks.append(Chunk(
-                            id=new_id(),
-                            document_id=document_id,
-                            text=current_text,
-                            summary=current_text[:280],
-                            token_count=max(1, current_tokens),
-                            node_ids=current_nodes,
-                            metadata=current_metadata,
-                        ))
-                        current_text = text
-                        current_nodes = [node.id]
-                        current_metadata = {
-                            "heading_path": heading_path,
-                            "page_numbers": [node.page_number] if node.page_number is not None else [],
-                            "node_types": [node.node_type.value],
-                            "bboxes": [node.bbox] if node.bbox else [],
-                        }
-                    else:
-                        current_text += ("\n\n" if current_text else "") + text
-                        current_nodes.append(node.id)
-                        current_metadata.setdefault("heading_path", heading_path)
-                        if node.page_number is not None:
-                            current_metadata.setdefault("page_numbers", [])
-                            if node.page_number not in current_metadata["page_numbers"]:
-                                current_metadata["page_numbers"].append(node.page_number)
-                        current_metadata.setdefault("node_types", [])
-                        current_metadata["node_types"].append(node.node_type.value)
-                        if node.bbox:
-                            current_metadata.setdefault("bboxes", [])
-                            current_metadata["bboxes"].append(node.bbox)
-
-                if current_nodes:
-                    chunks.append(Chunk(
-                        id=new_id(),
-                        document_id=document_id,
-                        text=current_text,
-                        summary=current_text[:280],
-                        token_count=max(1, policy.estimate_tokens(current_text)),
-                        node_ids=current_nodes,
-                        metadata=current_metadata,
-                    ))
+                chunks = build_document_chunks(
+                    document_id,
+                    nodes,
+                    policy=policy,
+                    min_tokens=settings.chunk_min_tokens,
+                    max_tokens=settings.chunk_max_tokens,
+                    overlap_tokens=settings.chunk_overlap_tokens,
+                )
 
                 await chunk_repo.create_many(chunks)
                 doc.mark_segmented()
                 await doc_repo.update(doc)
-                step.metrics(chunks_created=len(chunks), nodes_consumed=len(nodes))
+                step.metrics(
+                    chunks_created=len(chunks),
+                    nodes_consumed=len(nodes),
+                    max_chunk_tokens=max((chunk.token_count for chunk in chunks), default=0),
+                    chunk_budget=settings.chunk_max_tokens,
+                    chunk_overlap=settings.chunk_overlap_tokens,
+                )
 
             # Enqueue Embed Job
             job_repo = SqlJobRepository(session)
@@ -182,21 +276,24 @@ class EmbedDocumentJobHandler(BaseJobHandler):
 
                     document_nodes = {node.id: node for node in await node_repo.get_by_document(document_id)}
 
-                    texts_to_embed = []
+                    texts_to_embed: list[str] = []
                     for c in chunks_to_embed:
                         linked_nodes = [document_nodes[node_id] for node_id in c.node_ids if node_id in document_nodes]
-                        heading_path = []
+                        heading_path: list[str] = []
                         for node in linked_nodes:
                             candidate_path = node.metadata.get("heading_path", []) if isinstance(node.metadata, dict) else []
                             if candidate_path:
                                 heading_path = [str(item) for item in candidate_path]
                                 break
-                        context_str = f"Documento: {doc.title}"
+                        embedding_text = c.text
                         if heading_path:
-                            context_str += f" > Sección: {' > '.join(heading_path)}"
-                        texts_to_embed.append(f"{context_str}\n\n{c.text}")
+                            embedding_text = f"Sección: {' > '.join(heading_path)}\n\n{embedding_text}"
+                        texts_to_embed.append(embedding_text)
 
-                    vectors = await embedder.embed(texts_to_embed)
+                    vectors = await embedder.embed_documents(
+                        texts_to_embed,
+                        titles=[doc.title] * len(texts_to_embed),
+                    )
 
                     # Quantize and index candidates using IngestionOrchestrator
                     from atenex_nova.application.orchestrators.ingestion_orchestrator import (
@@ -211,8 +308,6 @@ class EmbedDocumentJobHandler(BaseJobHandler):
                         embedding_model=settings.embedding_model,
                         dimension=settings.embedding_dimensions,
                     )
-
-                    import uuid
 
                     qdrant = QdrantAdapter(
                         host=qdrant_host,
@@ -230,7 +325,9 @@ class EmbedDocumentJobHandler(BaseJobHandler):
 
                     vector_docs: list[QdrantDocument] = []
                     for chunk, vector in zip(chunks_to_embed, vectors, strict=False):
-                        point_id = str(uuid.uuid4()) if store_dense_in_qdrant else chunk.id
+                        # Stable source IDs make retries idempotent and let SQL/Qdrant
+                        # parity be checked without an opaque mapping table.
+                        point_id = chunk.id
                         chunk.embedding_ref = point_id
                         sparse_terms = {
                             token.lower().strip(".,:;!?()[]{}")
@@ -274,6 +371,7 @@ class EmbedDocumentJobHandler(BaseJobHandler):
                                 "sparse_ref": chunk.sparse_ref,
                                 "sparse_encoder": sparse_encoder.encoder_name,
                                 "sparse_fallback": sparse_encoder.uses_fallback,
+                                "embedding_contract": settings.embedding_contract_fingerprint,
                                 "page_numbers": page_numbers,
                                 "heading_path": heading_path,
                                 "bboxes": bbox_candidates,
@@ -296,9 +394,6 @@ class EmbedDocumentJobHandler(BaseJobHandler):
 
             doc.mark_embedded()
             doc.mark_indexed()
-            # In strict mode the document becomes READY only after enrichment jobs complete.
-            if not get_settings().strict_mode_enabled:
-                doc.mark_ready()
             await doc_repo.update(doc)
 
             # Phase 4 starts once the textual memory is ready.
@@ -336,9 +431,41 @@ class RebuildCollectionJobHandler(BaseJobHandler):
             if collection is None:
                 raise ValueError(f"Collection {collection_id} not found")
 
-            # Fetch all documents in the collection, lifting the default limit of 50
-            documents = await doc_repo.list_by_collection(collection_id, limit=100000)
+            documents = []
+            async for page in doc_repo.iter_by_collection_pages(collection_id):
+                documents.extend(page)
             target_ids = [collection_id, *[document.id for document in documents]]
+            if await job_repo.has_running_by_targets(
+                target_ids,
+                exclude_job_id=job.id,
+            ):
+                raise RuntimeError(
+                    f"Collection {collection_id} has running ingestion jobs; "
+                    "retry rebuild after they stop"
+                )
+
+            # Capture every persistent ID before deleting any SQL rows. A full
+            # rebuild removes all four candidate layers and all Qdrant namespaces.
+            chunks = await chunk_repo.list_by_collection(collection_id)
+            propositions = await proposition_repo.list_by_collection(collection_id)
+            summary_ids = await summary_repo.list_ids_for_collection_cleanup(collection_id)
+            document_ids = [document.id for document in documents]
+
+            from atenex_nova.workers.jobs.ingestion_job import (
+                _build_qdrant_adapter,
+                _load_visual_records,
+                _remove_visual_asset_dir,
+                _visual_cache_path,
+            )
+
+            visual_root = get_settings().visual_pages_path
+            visual_cache = _visual_cache_path(visual_root, collection_id)
+            visual_records = _load_visual_records(visual_cache)
+            visual_ids = [
+                str(item["id"])
+                for item in (visual_records or [])
+                if item.get("id") is not None
+            ]
             async with audit.step(
                 run_id=job.id,
                 entity_type="collection",
@@ -356,31 +483,58 @@ class RebuildCollectionJobHandler(BaseJobHandler):
                 candidate_idx = build_candidate_index(session)
                 await candidate_idx.delete_collection_indexes(collection_id)
 
+                qdrant = _build_qdrant_adapter()
+                chunk_namespace = f"collection_{collection_id}"
+                await qdrant.delete_collection(chunk_namespace)
+                await qdrant.delete_collection(f"{chunk_namespace}_propositions")
+                await qdrant.delete_collection(f"{chunk_namespace}_summaries")
+                await qdrant.delete_points("pages_visual", visual_ids)
+                await qdrant.delete_by_filter(
+                    "pages_visual",
+                    {"collection_id": collection_id},
+                )
+                qdrant_cleanup_complete = qdrant.is_available
+
+                # Reset relational state only after external namespaces were
+                # addressed. Bulk deletes preserve one transaction for all docs.
+                await relation_repo.delete_by_node_ids(
+                    [proposition.id for proposition in propositions]
+                )
+                await summary_repo.delete_by_ids(summary_ids)
+                await proposition_repo.delete_by_documents(document_ids)
+                await chunk_repo.delete_by_documents(document_ids)
+                await node_repo.delete_by_documents(document_ids)
+
                 for document in documents:
                     document.mark_registered()
                     await doc_repo.update(document)
+                    await job_repo.create(
+                        Job(
+                            id=new_id(),
+                            job_type=JobType.PARSE_DOCUMENT,
+                            target_id=document.id,
+                        )
+                    )
 
-                    chunks = await chunk_repo.get_by_document(document.id)
-                    propositions = await proposition_repo.list_by_document(document.id)
-                    await proposition_repo.delete_by_document(document.id)
-                    await summary_repo.delete_by_scope("document", document.id)
-                    await summary_repo.delete_by_scope("collection", collection_id)
-                    for chunk in chunks:
-                        await summary_repo.delete_by_scope("section", chunk.id)
-                    await relation_repo.delete_by_source_ids([prop.id for prop in propositions])
-                    await chunk_repo.delete_by_document(document.id)
-                    await node_repo.delete_by_document(document.id)
-                    await job_repo.create(Job(id=new_id(), job_type=JobType.PARSE_DOCUMENT, target_id=document.id))
-
-                visual_cache = get_settings().visual_pages_path / f"{collection_id}.json"
-                if visual_cache.exists():
+                if visual_cache.is_symlink() or visual_cache.exists():
                     visual_cache.unlink()
+                for document_id in document_ids:
+                    _remove_visual_asset_dir(visual_root, document_id)
 
                 step.metrics(
                     documents_requeued=len(documents),
                     parse_jobs_created=len(documents),
                     stale_jobs_removed=removed_jobs,
+                    stale_chunk_vectors=len(chunks),
+                    stale_proposition_vectors=len(propositions),
+                    stale_summary_vectors=len(summary_ids),
+                    stale_visual_vectors=len(visual_ids),
+                    candidate_namespaces=("chunk", "proposition", "summary", "visual"),
+                    qdrant_cleanup_complete=qdrant_cleanup_complete,
                 )
 
             await session.commit()
-            return {"documents_requeued": len(documents)}
+            return {
+                "documents_requeued": len(documents),
+                "qdrant_cleanup_complete": qdrant_cleanup_complete,
+            }

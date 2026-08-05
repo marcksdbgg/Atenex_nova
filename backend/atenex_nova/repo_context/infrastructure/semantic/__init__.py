@@ -1,7 +1,4 @@
-"""Optional semantic adapters.
-
-Importing this package never requires Ollama, Qdrant, or sentence-transformers.
-"""
+"""Semantic adapters loaded by the standalone Repo Context composition root."""
 
 from atenex_nova.repo_context.infrastructure.semantic.fusion import reciprocal_rank_fusion
 from atenex_nova.repo_context.infrastructure.semantic.ollama_embeddings import (

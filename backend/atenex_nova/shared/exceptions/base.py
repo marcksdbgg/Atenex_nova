@@ -50,6 +50,22 @@ class ValidationError(DomainError):
         super().__init__(message=message, code="VALIDATION_ERROR")
 
 
+class CollectionPublicationError(DomainError):
+    """Raised when retrieval cannot observe a stable published collection."""
+
+    def __init__(
+        self,
+        *,
+        collection_id: str,
+        code: str,
+        message: str,
+        document_statuses: dict[str, int],
+    ) -> None:
+        super().__init__(message=message, code=code)
+        self.collection_id = collection_id
+        self.document_statuses = dict(document_statuses)
+
+
 class InfrastructureError(AtenexError):
     """Error raised by the infrastructure layer."""
 

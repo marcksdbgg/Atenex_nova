@@ -88,7 +88,8 @@ El RAG documental heredado conserva sus entry points:
 ## Invariantes Repo Context
 
 - Core offline: scanner Git-aware, hashes, SQLite FTS5, símbolos, grafo y RepoMap.
-- Servicios semánticos son opcionales y su ausencia debe ser visible.
+- Ollama, Qdrant y una proyección semántica compatible son requisitos del runtime
+  MCP; su ausencia debe fallar explícitamente con `SEMANTIC_UNAVAILABLE`.
 - Rutas internas relativas POSIX; rechazar traversal y symlink escapes.
 - Ejecutar subprocesses con listas de argumentos y `shell=False`.
 - Nunca indexar secretos, binarios, sidecars, dependencias o outputs de build.
