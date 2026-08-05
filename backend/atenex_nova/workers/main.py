@@ -47,7 +47,7 @@ async def main() -> None:
 
     runner = JobRunner(
         session_factory=session_factory,
-        poll_interval=2.0,
+        poll_interval=settings.worker_poll_interval,
     )
 
     runner.register_handler(
