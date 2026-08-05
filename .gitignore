@@ -109,7 +109,7 @@ storage/observability/
 backend/storage/uploads/
 backend/storage/visual_pages/
 backend/storage/observability/
-backend/storage/worker.lock
+backend/storage/*.lock
 
 # ---------------------------------------------------------------------------
 # Database files

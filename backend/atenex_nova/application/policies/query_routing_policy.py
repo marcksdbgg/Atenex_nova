@@ -272,6 +272,7 @@ class QueryRoutingPolicy:
             "y",
             "que",
             "como",
+            "con",
             "cual",
             "donde",
             "explica",
@@ -288,6 +289,7 @@ class QueryRoutingPolicy:
             "evidencias",
             "idioma",
             "pagina",
+            "sobre",
         }
         english_markers = {
             "a",
@@ -326,7 +328,8 @@ class QueryRoutingPolicy:
         spanish_score = sum(1 for token in tokens if token in spanish_markers)
         english_score = sum(1 for token in tokens if token in english_markers)
 
-        if re.search(r"\b(?:cion|ciones|mente|idad|ario|aria)\b", lower):
+        spanish_suffixes = ("ción", "ciones", "mente", "idad", "ario", "aria")
+        if any(token.endswith(spanish_suffixes) for token in tokens):
             spanish_score += 1
 
         if spanish_score == english_score == 0:
