@@ -32,7 +32,7 @@ exec "$llama_server" \
   --port "$embedding_port" \
   --ctx-size 2048 \
   --batch-size 2048 \
-  --ubatch-size 512 \
+  --ubatch-size 1024 \
   --parallel 1 \
   --embedding \
   --gpu-layers 99 \
