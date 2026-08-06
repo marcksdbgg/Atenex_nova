@@ -87,6 +87,10 @@ class Settings(BaseSettings):
     # backend "sentence_transformers" → carga el modelo desde disco con SentenceTransformers.
     embedding_backend: Literal["ollama", "sentence_transformers"] = "ollama"
     embedding_url: str = "http://localhost:11434"
+    # Transport only: it does not change model weights, prompts, or persisted vectors.
+    # ``openai`` supports a dedicated llama.cpp embedding server while preserving the
+    # same embedding compatibility contract as Ollama.
+    embedding_api_format: Literal["ollama", "openai"] = "ollama"
     embedding_ollama_model: str = "embeddinggemma"
     embedding_model: str = "embeddinggemma"
     embedding_profile: EmbeddingProfile = EmbeddingProfile.STANDARD

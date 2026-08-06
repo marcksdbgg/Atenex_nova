@@ -35,6 +35,7 @@ class EmbeddingGemmaAdapter(Embedder):
         self._dim = dim
         self._required = settings.embeddings_required if required is None else required
         self._backend = settings.embedding_backend
+        self._api_format = settings.embedding_api_format
         self._query_prefix = settings.embedding_query_prefix
         self._document_prefix = settings.embedding_document_prefix
         self._default_document_title = settings.embedding_default_document_title
@@ -191,7 +192,12 @@ class EmbeddingGemmaAdapter(Embedder):
     async def _embed_ollama(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        url = f"{self._ollama_url}/api/embed"
+        api_format = getattr(self, "_api_format", "ollama")
+        url = (
+            f"{self._ollama_url}/v1/embeddings"
+            if api_format == "openai"
+            else f"{self._ollama_url}/api/embed"
+        )
         batch_size = max(1, self._batch_size)
         vectors: list[list[float]] = []
         async with httpx.AsyncClient(timeout=120.0) as client:
@@ -205,16 +211,38 @@ class EmbeddingGemmaAdapter(Embedder):
                     )
                     response.raise_for_status()
                     data = response.json()
-                    raw = data.get("embeddings") if isinstance(data, dict) else None
+                    raw: object | None = None
+                    if isinstance(data, dict) and api_format == "openai":
+                        indexed = data.get("data")
+                        if isinstance(indexed, list):
+                            ordered = sorted(
+                                (
+                                    item
+                                    for item in indexed
+                                    if isinstance(item, dict)
+                                    and isinstance(item.get("index"), int)
+                                ),
+                                key=lambda item: int(item["index"]),
+                            )
+                            if [item["index"] for item in ordered] == list(range(len(batch))):
+                                raw = [item.get("embedding") for item in ordered]
+                    elif isinstance(data, dict):
+                        raw = data.get("embeddings")
                     received = len(raw) if isinstance(raw, list) else 0
-                    if received != len(batch) or not raw or any(not vector for vector in raw):
+                    if (
+                        not isinstance(raw, list)
+                        or received != len(batch)
+                        or any(not isinstance(vector, list) or not vector for vector in raw)
+                    ):
                         raise ValueError(
                             "ollama returned invalid embedding cardinality for "
                             f"batch {batch_number}: expected {len(batch)}, got {received}"
                         )
                     vectors.extend(
-                        self._truncate_normalize([float(value) for value in vector])
-                        for vector in raw
+                        self._truncate_normalize(
+                            [float(cast(Any, value)) for value in vector]
+                        )
+                        for vector in cast(list[list[object]], raw)
                     )
                 except Exception as exc:
                     raise RuntimeError(

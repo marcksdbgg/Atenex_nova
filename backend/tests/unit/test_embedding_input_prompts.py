@@ -79,6 +79,38 @@ class _OrderedBatchClient:
         return _OrderedBatchResponse(batch)
 
 
+class _OpenAIEmbeddingResponse:
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return {
+            "data": [
+                {"index": 1, "embedding": [0.0, 2.0]},
+                {"index": 0, "embedding": [1.0, 0.0]},
+            ]
+        }
+
+
+class _OpenAIEmbeddingClient:
+    urls: ClassVar[list[str]] = []
+
+    def __init__(self, timeout: float) -> None:
+        self.timeout = timeout
+
+    async def __aenter__(self) -> _OpenAIEmbeddingClient:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+    async def post(self, url: str, json: dict[str, Any]) -> _OpenAIEmbeddingResponse:
+        assert json["model"] == "embeddinggemma"
+        assert json["input"] == ["first", "second"]
+        type(self).urls.append(url)
+        return _OpenAIEmbeddingResponse()
+
+
 @pytest.mark.asyncio
 async def test_embedding_inputs_use_official_query_and_document_prompts(
     monkeypatch: pytest.MonkeyPatch,
@@ -210,3 +242,27 @@ async def test_ollama_batch_failure_aborts_strict_embedding_without_partial_resu
         await adapter.embed(["1", "2", "3"])
 
     assert _OrderedBatchClient.batches == [["1", "2"], ["3"]]
+
+
+@pytest.mark.asyncio
+async def test_openai_embedding_transport_preserves_response_index_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        embedding_api_format="openai",
+        embedding_url="http://127.0.0.1:11435",
+    )
+    monkeypatch.setattr(
+        "atenex_nova.infrastructure.embeddings.embedding_adapter.get_settings",
+        lambda: settings,
+    )
+    monkeypatch.setattr(
+        "atenex_nova.infrastructure.embeddings.embedding_adapter.httpx.AsyncClient",
+        _OpenAIEmbeddingClient,
+    )
+    _OpenAIEmbeddingClient.urls = []
+
+    vectors = await EmbeddingGemmaAdapter(dim=2, required=True).embed(["first", "second"])
+
+    assert _OpenAIEmbeddingClient.urls == ["http://127.0.0.1:11435/v1/embeddings"]
+    assert vectors == [[1.0, 0.0], [0.0, 1.0]]

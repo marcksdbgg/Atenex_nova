@@ -151,6 +151,55 @@ class StableSparseEncoder:
     def encode_document(self, text: str) -> tuple[list[int], list[float]]:
         return self._encode(text)
 
+    def encode_documents(
+        self,
+        texts: list[str],
+        *,
+        batch_size: int = 16,
+    ) -> list[tuple[list[int], list[float]]]:
+        """Encode persisted sparse vectors in bounded neural batches.
+
+        SPLADE's masked-LM logits are expensive when invoked once per proposition.
+        Padding-aware batches preserve the same per-document max-pooling semantics
+        while keeping peak VRAM bounded on an 8 GiB workstation GPU.
+        """
+        if batch_size < 1:
+            raise ValueError("batch_size must be positive")
+        if not texts:
+            return []
+        if self._model is None or self._tokenizer is None:
+            return [self._encode_lexical(text) for text in texts]
+
+        import torch
+
+        encoded: list[tuple[list[int], list[float]]] = []
+        for offset in range(0, len(texts), batch_size):
+            batch = texts[offset : offset + batch_size]
+            inputs = self._tokenizer(
+                batch,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=512,
+            ).to(self._device)
+            with torch.inference_mode():
+                outputs = self._model(**inputs)
+                vectors = torch.max(
+                    torch.log1p(torch.relu(outputs.logits))
+                    * inputs.attention_mask.unsqueeze(-1),
+                    dim=1,
+                )[0]
+            for vector in vectors:
+                indices = vector.nonzero().squeeze(-1)
+                values = vector[indices]
+                encoded.append(
+                    (
+                        [int(index) for index in indices.reshape(-1).tolist()],
+                        [float(value) for value in values.reshape(-1).tolist()],
+                    )
+                )
+        return encoded
+
     def encode_query(self, text: str) -> tuple[list[int], list[float]]:
         return self._encode(text)
 

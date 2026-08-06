@@ -134,6 +134,10 @@ Remediación en el checkout actual:
   con procedencia, construcción explícita de una memoria de colección, barrera
   temporal de readiness, síntesis map-reduce acotada, auditoría por claims, payload de
   evidencia compacto y avisos de confianza en la UI.
+- **Implemented / Verified** en runtime vivo: transporte OpenAI-compatible opcional
+  para las mismas pesas BF16 de EmbeddingGemma, servidor CUDA dedicado y SPLADE
+  persistido por lotes. En la RTX 4060, el tramo de proposiciones pasó de 13,3/s a
+  102,7/s end-to-end sin retirar el título contextual ni cambiar el fingerprint.
 - **Implemented / Verified** en pruebas focalizadas: publicación fail-closed durante
   rebuild o estados transitorios; exclusión visible de documentos fallidos;
   revalidación y rehidratación de toda evidencia desde SQL; y limpieza simétrica e

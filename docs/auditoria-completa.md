@@ -24,6 +24,19 @@ colección Qdrant visual viva con schema anterior. La validación no mutó esa c
 ni convierte el runtime documental completo en **Verified**; su rebuild sigue
 **Planned**.
 
+### Optimización viva de ingesta — 2026-08-05
+
+La reingesta limpia de `Jesus. G.` expuso 927.310 proposiciones esperadas. Ollama
+cargaba inicialmente sólo 63 MB de 709 MB de EmbeddingGemma BF16 en VRAM y el worker
+sostenía 13,3 proposiciones/s. Se añadió un transporte HTTP OpenAI-compatible que no
+forma parte del fingerprint, un launcher llama.cpp con offload CUDA completo y
+codificación SPLADE persistida en lotes acotados. La prueba viva posterior sostuvo
+102,7 proposiciones/s end-to-end sobre ocho jobs (5.231 proposiciones), con API,
+Qdrant y dependencias en verde. El runbook conserva comandos, puertos y recuperación.
+
+Esta medición valida rendimiento operativo, no calidad RAG. El rebuild y el benchmark
+humano siguen abiertos hasta que la colección alcance `READY` y se ejecuten sus gates.
+
 ## Remediación del RAG en el checkout actual
 
 | Claim | Estado del código | Evidencia focalizada | Runtime vivo |

@@ -179,6 +179,30 @@ ollama pull gemma4:12b
 ollama pull embeddinggemma
 ```
 
+Para ingestas documentales grandes en la RTX 4060, conservar Ollama en `11434` para
+generación y servir las mismas pesas BF16 de EmbeddingGemma mediante el runtime CUDA
+dedicado en `11435`. La copia del tag es local, recuperable y no duplica el blob:
+
+```bash
+ollama cp embeddinggemma:latest embeddinggemma:bf16-stock
+backend/scripts/serve_embeddinggemma_gpu.sh
+curl --fail --silent --show-error http://127.0.0.1:11435/health
+```
+
+En `backend/.env`, seleccionar el transporte sin cambiar el contrato semántico:
+
+```dotenv
+ATENEX_EMBEDDING_BACKEND=ollama
+ATENEX_EMBEDDING_URL=http://127.0.0.1:11435
+ATENEX_EMBEDDING_API_FORMAT=openai
+ATENEX_EMBEDDING_OLLAMA_MODEL=embeddinggemma
+ATENEX_EMBEDDING_BATCH_SIZE=256
+```
+
+`embedding_api_format` sólo cambia el protocolo HTTP. El modelo, dimensión, prompts
+y fingerprint persistido permanecen iguales. En esta estación, 256 proposiciones
+reales pasaron de 13,3/s a 120,3/s sin eliminar el título contextual.
+
 ### 2. API
 
 En una terminal:
@@ -255,6 +279,12 @@ systemd-run --user --unit=atenex-nova-api \
   /mnt/ssd/Atenex/Atenex_nova/backend/.venv-context/bin/python \
   -m uvicorn atenex_nova.main:app --host 127.0.0.1 --port 8000
 
+systemd-run --user --unit=atenex-nova-embeddings \
+  --description='Atenex Nova EmbeddingGemma CUDA' \
+  --working-directory=/mnt/ssd/Atenex/Atenex_nova \
+  --property=Restart=on-failure --property=RestartSec=5s \
+  /mnt/ssd/Atenex/Atenex_nova/backend/scripts/serve_embeddinggemma_gpu.sh
+
 systemd-run --user --unit=atenex-nova-worker \
   --description='Atenex Nova Worker' \
   --working-directory=/mnt/ssd/Atenex/Atenex_nova/backend \
@@ -274,7 +304,7 @@ systemd-run --user --unit=atenex-nova-frontend \
 Verificación y logs:
 
 ```bash
-systemctl --user is-active atenex-nova-api atenex-nova-worker atenex-nova-frontend
+systemctl --user is-active atenex-nova-api atenex-nova-embeddings atenex-nova-worker atenex-nova-frontend
 journalctl --user -u atenex-nova-worker -f
 curl --fail --silent --show-error http://127.0.0.1:8000/health
 ```
@@ -282,7 +312,7 @@ curl --fail --silent --show-error http://127.0.0.1:8000/health
 Detener solo estas unidades, sin tocar Ollama, Qdrant ni datos:
 
 ```bash
-systemctl --user stop atenex-nova-frontend atenex-nova-worker atenex-nova-api
+systemctl --user stop atenex-nova-frontend atenex-nova-worker atenex-nova-api atenex-nova-embeddings
 ```
 
 ## Sincronización de la fuente Jesús G. Maestro

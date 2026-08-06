@@ -9,7 +9,7 @@ import re
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 from uuid import NAMESPACE_URL, uuid5
 
@@ -177,7 +177,7 @@ def split_sentences(text: str) -> list[str]:
 def _chunk_order_key(chunk: Chunk) -> tuple[int, int, str]:
     raw_index = chunk.metadata.get("chunk_index", 1_000_000)
     try:
-        chunk_index = int(raw_index)
+        chunk_index = int(cast(Any, raw_index))
     except (TypeError, ValueError):
         chunk_index = 1_000_000
 
@@ -561,7 +561,9 @@ class EmbedPropositionsJobHandler(BaseJobHandler):
                 )
 
                 sparse_encoder = StableSparseEncoder()
-                sparse_encodings = [sparse_encoder.encode_document(prop.text) for prop in propositions]
+                sparse_encodings = sparse_encoder.encode_documents(
+                    [prop.text for prop in propositions]
+                )
                 qdrant = None
                 try:
                     qdrant = QdrantAdapter(
@@ -831,7 +833,9 @@ class EmbedSummariesJobHandler(BaseJobHandler):
                 )
 
                 sparse_encoder = StableSparseEncoder()
-                sparse_encodings = [sparse_encoder.encode_document(summary.text) for summary in summaries]
+                sparse_encodings = sparse_encoder.encode_documents(
+                    [summary.text for summary in summaries]
+                )
                 qdrant_unavailable = False
 
                 try:

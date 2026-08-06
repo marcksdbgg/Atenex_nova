@@ -548,6 +548,12 @@ class _FakeSparseEncoder:
     def encode_document(self, _text: str) -> tuple[list[int], list[float]]:
         return [1], [1.0]
 
+    def encode_documents(
+        self,
+        texts: list[str],
+    ) -> list[tuple[list[int], list[float]]]:
+        return [self.encode_document(text) for text in texts]
+
 
 class _NoOpIngestionOrchestrator:
     def __init__(self, _session: AsyncSession) -> None:

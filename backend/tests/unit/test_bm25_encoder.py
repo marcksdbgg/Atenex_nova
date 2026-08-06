@@ -49,6 +49,10 @@ def test_stable_sparse_fallback_initialization_is_attempted_once(
         assert first.encode_document("libertad y realidad") == second.encode_document(
             "libertad y realidad"
         )
+        assert first.encode_documents(["libertad y realidad", "poesía y razón"]) == [
+            first.encode_document("libertad y realidad"),
+            first.encode_document("poesía y razón"),
+        ]
         assert first.uses_fallback is True
         assert torch_imports == 1
     finally:
@@ -62,3 +66,10 @@ def test_cached_token_hash_preserves_the_existing_stable_value() -> None:
     assert hash_token("libertad") == expected
     assert hash_token("libertad") == expected
     assert hash_token.cache_info().hits == 1
+
+
+def test_sparse_batch_size_must_be_positive() -> None:
+    encoder = StableSparseEncoder.__new__(StableSparseEncoder)
+
+    with pytest.raises(ValueError, match="positive"):
+        encoder.encode_documents(["texto"], batch_size=0)
